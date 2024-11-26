@@ -13,6 +13,10 @@ start() {
             echo 1 > $fan/cur_state
         done
     fi
+
+    if [ -d /sys/devices/platform/vcoreiii-pwm-fan.0 ]; then
+        echo 100 > /sys/devices/platform/vcoreiii-pwm-fan.0/hwmon/hwmon1/duty
+    fi
 }
 
 stop() {
