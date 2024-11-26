@@ -20,4 +20,4 @@ docker-image:
 docker-build-dbg:
 	docker run -it --rm -v $(current_dir)/src:/src --entrypoint=/bin/bash ubuntu1804-buildroot
 
-all: docker-image docker-build
+all: docker-image docker-build-dbg
