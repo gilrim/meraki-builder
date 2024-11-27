@@ -2,6 +2,11 @@
 #
 # Start the fans; we don't want to cook ourselves
 #
+NAME=fanauto
+DAEMON=/bin/fanauto
+PIDFILE=/var/run/$NAME.pid
+SCRIPTNAME=/etc/init.d/S02fans
+CHUID=root
 
 start() {
     # avoid the output from ls during boot that the directory doesn't exist
@@ -17,9 +22,17 @@ start() {
     if [ -d /sys/devices/platform/vcoreiii-pwm-fan.0 ]; then
         echo 100 > /sys/devices/platform/vcoreiii-pwm-fan.0/hwmon/hwmon1/duty
     fi
+
+    if [ -x "$DAEMON" ]; then
+        start-stop-daemon -S -b -m -p $PIDFILE -x $DAEMON > /dev/null
+    fi
 }
 
 stop() {
+    if [ -x "$DAEMON" ]; then
+        start-stop-daemon -K -p $PIDFILE -x $DAEMON > /dev/null
+    fi
+
     if [ -d /sys/class/thermal/cooling_device0 ]; then
         FANS=$(ls -1 -d /sys/class/thermal/cooling_device*)
         for fan in $FANS; do
@@ -29,23 +42,23 @@ stop() {
 }
 
 restart() {
-	stop
-	start
+    stop
+    start
 }
 
 case "$1" in
   start)
-  	start
-	;;
+      start
+    ;;
   stop)
-  	stop
-	;;
+      stop
+    ;;
   restart|reload)
-  	restart
-	;;
+      restart
+    ;;
   *)
-	echo "Usage: $0 {start|stop|restart}"
-	exit 1
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
 esac
 
 exit $?
