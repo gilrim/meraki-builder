@@ -2,11 +2,7 @@
 #
 # Start the fans; we don't want to cook ourselves
 #
-NAME=fanauto
 DAEMON=/bin/fanauto
-PIDFILE=/var/run/$NAME.pid
-SCRIPTNAME=/etc/init.d/S02fans
-CHUID=root
 
 start() {
     # avoid the output from ls during boot that the directory doesn't exist
@@ -24,13 +20,13 @@ start() {
     fi
 
     if [ -x "$DAEMON" ]; then
-        start-stop-daemon -S -b -m -p $PIDFILE -x $DAEMON > /dev/null
+        $DAEMON 
     fi
 }
 
 stop() {
     if [ -x "$DAEMON" ]; then
-        start-stop-daemon -K -p $PIDFILE -x $DAEMON > /dev/null
+        killall fanauto
     fi
 
     if [ -d /sys/class/thermal/cooling_device0 ]; then
@@ -62,3 +58,4 @@ case "$1" in
 esac
 
 exit $?
+

@@ -1,8 +1,10 @@
 #!/bin/sh
-pidfile="/var/run/fanauto.pid"
-progname=$(basename "$0")
-if [[ -f "$pidfile" ]] ; then
-    die "$progname: $pidfile exists!"
+PATH=$PATH:/bin:/usr/bin
+
+# -f for foreground
+if [[ "$1" != "-f" ]]; then
+    nohup "$0" -f >/dev/null 2>&1 &
+    exit $?
 fi
 
 temp_min=29000
@@ -18,7 +20,7 @@ echo $temp_range
 while true; do
 
     temp_current=$(cat /sys/class/hwmon/hwmon0/temp1_input)
-    echo $temp_current
+    echo "Current temp: $temp_current"
     pwm_current=0 # 0 when below min
 
     if [ $temp_current \> $temp_max ]; then
@@ -27,9 +29,9 @@ while true; do
         temp_val=$(expr $(expr $temp_current - $temp_min) \* $pwm_range / $temp_range)
         pwm_current=$(expr $pwm_min + $temp_val)
     fi
-
+    
+    echo "Setting PWM to $pwm_current / $pwm_max"
     echo $pwm_current > /sys/devices/platform/vcoreiii-pwm-fan.0/hwmon/hwmon1/duty
 
-    sleep 1000
+    sleep 1
 done
-
