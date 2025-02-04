@@ -23,6 +23,7 @@ Download the binary from [here](https://github.com/halmartin/MS42-GPL-sources-3-
 ### Kernel
 
 Clone [switch-11-22-ms220](https://github.com/halmartin/switch-11-22-ms220) and follow the instructions in the README to build the kernel
+Create linux source tarball `tar -cvjSf linux-3.18.123.tar.bz2 linux-3.18/`
 
 ### Rootfs
 

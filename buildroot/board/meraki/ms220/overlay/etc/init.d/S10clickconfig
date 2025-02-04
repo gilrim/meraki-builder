@@ -208,6 +208,9 @@ start() {
     TRIES=0
     echo -n "Waiting for IP address"
     while [ "$MY_IP" == "" ]; do
+      if [ -d /click/sw0_ctrl ]; then
+        echo $(cat /click/sw0_ctrl/power_led_orange | tr 01 10) > /click/sw0_ctrl/power_led_orange
+      fi
       echo -n "."
       sleep 1
       MY_IP=$(cat /click/uplinkstate/dhcpc_state_for_brain | grep ip= | awk -F'=' '{print $2}')

@@ -7,6 +7,7 @@ nor/*.bin
 
 # ignore docker build directories
 docker/*/src
+docker/*/*.tar.xz
 
 # ignore shared libraries
 *.so
