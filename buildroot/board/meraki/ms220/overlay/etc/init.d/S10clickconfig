@@ -136,7 +136,7 @@ start() {
           # load port configuration from /etc/default/switch_vlans
           # ignore comments
           # if there are duplicate definitions only use the LAST occurrence
-          grep -E "^PORT $i" /etc/default/switch_vlans | tail -1 | sed 's/"/\\"/g' > /click/switch_port_table/set_vlan_allports_conf
+          grep -E "^PORT $i" /etc/default/switch_vlans | tail -1 > /click/switch_port_table/set_vlan_allports_conf
         fi
       else
         echo -e "PORT $i, ALLOWED_VLANS \"\", ALLOW_TAGGED_IN true, ALLOW_UNTAGGED_IN true, INGRESS_FILTER true, RADIUS_CAN_ASSIGN_VLAN true, PVID 1, UNTAGGED_VID 1" > /click/switch_port_table/set_vlan_allports_conf
