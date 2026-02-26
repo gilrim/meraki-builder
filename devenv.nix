@@ -74,7 +74,7 @@ in
 
   scripts = {
     build.exec = ''
-      [ ! -z "$1" ] && ARGS="$1-build"
+      [ ! -z "$1" ] && ARGS="$1-rebuild"
       make -C build/buildroot -j$(nproc) $ARGS
     '';
     # TODO: this lib should eventually be embedded in newer firmware versions
