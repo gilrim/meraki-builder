@@ -1,7 +1,7 @@
 CC=gcc
 
 all: *.c
-	$(CC) -I$(PWD)/package/pd690xx -I$(PWD)/package/postmerkos -Os -o configd -ljson-c '$<' \
+	$(CC) -I$(PWD)/package/pd690xx -I$(PWD)/package/postmerkos -Os -o configd -ljson-c -lwebsockets '$<' \
 	$(PWD)/package/pd690xx/libpd690xx.c \
 	$(PWD)/package/postmerkos/libpostmerkos.c
 clean:
