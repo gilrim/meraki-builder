@@ -1,8 +1,13 @@
-#ifndef configd
-#define configd
+#ifndef CONFIGD_H
+#define CONFIGD_H
 
-struct json_object *get_status(void);
-struct json_object *read_config();
-int write_config(struct json_object *json);
+#include <libpd690xx.h>
+#include <stdbool.h>
+
+// shared global state
+extern bool poe_capable;
+extern bool dry_run;
+extern struct pd690xx_cfg pd690xx;
+extern char *config_file;
 
 #endif
