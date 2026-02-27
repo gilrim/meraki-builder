@@ -100,6 +100,31 @@ void write_switch_port_table(char* filename, char* str) {
     fclose(file);
 }
 
+// write str to an arbitrary click path
+void click_write(const char *path, const char *str) {
+    FILE *file = fopen(path, "w");
+    if (file == NULL) {
+      printf("error: cannot open file: %s\n", path);
+      return;
+    }
+    fprintf(file, "%s", str);
+    fclose(file);
+}
+
+// read first line from an arbitrary click path; returns buf or NULL
+char *click_read(const char *path, char *buf, int bufsize) {
+    FILE *file = fopen(path, "r");
+    if (file == NULL) {
+      return NULL;
+    }
+    if (!fgets(buf, bufsize, file)) {
+      fclose(file);
+      return NULL;
+    }
+    fclose(file);
+    return buf;
+}
+
 // read port line from filename under /click/switch_port_table
 char* read_switch_port_table(char* filename, int port) {
     char* dir = "/click/switch_port_table/";

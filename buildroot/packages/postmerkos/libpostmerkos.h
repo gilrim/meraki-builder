@@ -13,4 +13,7 @@ const char *get_field(char*, int);
 void write_switch_port_table(char* filename, char* str);
 char* read_switch_port_table(char* filename, int port);
 
+void click_write(const char *path, const char *str);
+char *click_read(const char *path, char *buf, int bufsize);
+
 #endif // postmerkos

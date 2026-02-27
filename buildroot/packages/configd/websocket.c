@@ -1,8 +1,12 @@
 #include "websocket.h"
 #include "configd.h"
 #include "status.h"
-#include "config.h"
+#include "click_port.h"
+#include "click_global.h"
+#include "json_util.h"
+#include "config_file.h"
 
+#include <libpostmerkos.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -100,9 +104,10 @@ static void config_poll_cb(struct lws_sorted_usec_list *sul) {
   struct stat st;
   if (stat(config_file, &st) == 0 && difftime(st.st_mtime, config_mtime) > 0) {
     config_mtime = st.st_mtime;
-    struct json_object *modified = json_object_from_file(config_file);
+    struct json_object *modified = load_config_file();
     if (modified) {
-      write_config(modified);
+      click_apply_ports(modified);
+      click_apply_globals(modified);
 
       char *msg = wrap_message("config", modified);
       free(cached_config_json);
@@ -163,19 +168,20 @@ configd_ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
     if (strcmp(type, "config") == 0) {
       struct json_object *data_obj;
       if (json_object_object_get_ex(msg, "data", &data_obj)) {
-        // write config to disk
-        if (!dry_run) {
-          const char *json_str = json_object_to_json_string_ext(
-              data_obj, JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY);
-          FILE *f = fopen(config_file, "w");
-          if (f) {
-            fprintf(f, "%s", json_str);
-            fclose(f);
-          }
-        }
+        printf("%s config: received delta: %s\n", get_time(),
+               json_object_to_json_string(data_obj));
 
-        // apply config to /click
-        write_config(data_obj);
+        // read current config and merge delta into it
+        struct json_object *current = load_config_file();
+        if (!current) current = json_object_new_object();
+        json_deep_merge(current, data_obj);
+
+        // write merged config to disk
+        save_config_file(current);
+
+        // apply merged config to /click
+        click_apply_ports(current);
+        click_apply_globals(current);
 
         // update mtime tracking
         struct stat st;
@@ -183,12 +189,23 @@ configd_ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
           config_mtime = st.st_mtime;
         }
 
-        // broadcast config to all clients
-        char *broadcast = wrap_message("config", data_obj);
+        // broadcast full merged config to all clients
+        char *broadcast = wrap_message("config", current);
         free(cached_config_json);
         cached_config_json = broadcast;
         config_pending = true;
+
+        // immediately refresh status so clients see the effect of config changes
+        struct json_object *new_status = get_status();
+        char *status_msg = wrap_message("status", new_status);
+        free(cached_status_json);
+        cached_status_json = status_msg;
+        status_pending = true;
+        json_object_put(new_status);
+
         request_writable_all();
+
+        json_object_put(current);
       }
     }
 
@@ -207,7 +224,7 @@ configd_ws_callback(struct lws *wsi, enum lws_callback_reasons reason,
     }
     // send initial config on connect
     if (pss->send_initial_config) {
-      struct json_object *cfg = json_object_from_file(config_file);
+      struct json_object *cfg = load_config_file();
       if (cfg) {
         char *msg = wrap_message("config", cfg);
         ws_send(wsi, msg);
