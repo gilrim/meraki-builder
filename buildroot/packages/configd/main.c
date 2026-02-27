@@ -1,6 +1,9 @@
 #include "configd.h"
 #include "status.h"
-#include "config.h"
+#include "click_port.h"
+#include "click_global.h"
+#include "json_util.h"
+#include "config_file.h"
 #include "websocket.h"
 
 #include <libpostmerkos.h>
@@ -18,6 +21,7 @@
 bool poe_capable = false;
 bool dry_run = false;
 char *config_file = "/etc/switch.json";
+char meraki_mac[18] = "";
 
 struct pd690xx_cfg pd690xx = {
     // i2c_fds
@@ -63,6 +67,15 @@ int main(int argc, char **argv) {
     poe_capable = true;
   }
 
+  // read MAC address for STP port format
+  FILE *macf = fopen("/tmp/MERAKI_MAC", "r");
+  if (macf) {
+    if (fgets(meraki_mac, sizeof(meraki_mac), macf)) {
+      meraki_mac[strcspn(meraki_mac, "\n")] = 0;
+    }
+    fclose(macf);
+  }
+
   if (dry_run) {
     printf("configd: dry-run mode enabled, no changes will be made\n");
   }
@@ -73,11 +86,12 @@ int main(int argc, char **argv) {
       printf("[dry-run] would create config file at %s\n", config_file);
     } else {
       printf("new config file created at %s\n", config_file);
-      FILE *file = fopen(config_file, "w");
-      const char *json = json_object_to_json_string_ext(
-          read_config(), JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY);
-      fprintf(file, "%s", json);
-      fclose(file);
+      struct json_object *initial = click_read_ports();
+      struct json_object *globals = click_read_globals();
+      json_deep_merge(initial, globals);
+      json_object_put(globals);
+      save_config_file(initial);
+      json_object_put(initial);
     }
   }
 

@@ -1,3 +1,4 @@
+# NOTE: this is currently hardcoded to the ms220 device
 { pkgs, ... }:
 let
   buildroot = pkgs.applyPatches {
@@ -26,7 +27,6 @@ in
     (pkgs.buildFHSEnv {
       name = "buildroot-fhs";
       targetPkgs = p: (with p; [
-        # Use GCC 13 - micropython patched to remove -Werror
         gcc13Stdenv.cc
         libxcrypt
 
@@ -77,11 +77,6 @@ in
       [ ! -z "$1" ] && ARGS="$1-rebuild"
       make -C build/buildroot -j$(nproc) $ARGS
     '';
-    # TODO: this lib should eventually be embedded in newer firmware versions
-    # scp -O build/buildroot/output/target/usr/lib/libwebsockets.so* switch:/tmp/
-    #
-    # scp -O build/buildroot/output/target/bin/$1 switch:/tmp/
-    # ssh switch LD_LIBRARY_PATH=/tmp /tmp/configd -d
     clean.exec = ''
       rm -rf build
       devenv shell
