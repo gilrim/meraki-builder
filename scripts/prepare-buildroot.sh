@@ -55,6 +55,7 @@ legacy = {
     'source "package/find_hdr/Config.in"',
     'source "package/findhdr/Config.in"',
     'source "package/pd690xx/Config.in"',
+    'source "package/fwupdate/Config.in"',
     'source "package/Config.in.ms42p"',
 }
 s = '\n'.join(line for line in s.splitlines() if line.strip() not in legacy) + '\n'
@@ -150,7 +151,12 @@ set_string('BR2_ROOTFS_OVERLAY', f'{generated} board/meraki/ms220/overlay')
 set_string('BR2_ROOTFS_POST_BUILD_SCRIPT', 'board/meraki/ms220/post-build.sh')
 set_string('BR2_ROOTFS_POST_FAKEROOT_SCRIPT', '')
 set_string('BR2_ROOTFS_POST_IMAGE_SCRIPT', 'board/meraki/ms220/post-image.sh')
+set_bool('BR2_STATIC_LIBS', False)
+set_bool('BR2_SHARED_LIBS', False)
+set_bool('BR2_SHARED_STATIC_LIBS', True)
 set_bool('BR2_PACKAGE_PD690XX', True)
+set_bool('BR2_PACKAGE_FWUPDATE', True)
+set_bool('BR2_PACKAGE_FWUPDATE_CURL', True)
 set_bool('BR2_PACKAGE_CONFIGD', include_ui)
 set_bool('BR2_PACKAGE_UHTTPD', include_ui)
 set_bool('BR2_PACKAGE_STATUS', include_status)
@@ -162,7 +168,10 @@ PY
   make olddefconfig
 )
 
+grep -q '^BR2_SHARED_STATIC_LIBS=y$' "$CONFIG" || die "Buildroot did not retain shared/static library support"
 grep -q '^BR2_PACKAGE_PD690XX=y$' "$CONFIG" || die "Buildroot did not retain PD690XX"
+grep -q '^BR2_PACKAGE_FWUPDATE=y$' "$CONFIG" || die "Buildroot did not retain FWUPDATE"
+grep -q '^BR2_PACKAGE_FWUPDATE_CURL=y$' "$CONFIG" || die "Buildroot did not retain FWUPDATE_CURL"
 if (( INCLUDE_UI_VALUE )); then
   grep -q '^BR2_PACKAGE_CONFIGD=y$' "$CONFIG" || die "Buildroot did not retain CONFIGD"
   grep -q '^BR2_PACKAGE_UHTTPD=y$' "$CONFIG" || die "Buildroot did not retain UHTTPD"

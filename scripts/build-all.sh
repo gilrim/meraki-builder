@@ -2,7 +2,7 @@
 source "$(dirname "$0")/common.sh"
 
 missing=()
-for cmd in git make tar xz rsync python3 sha256sum readelf unsquashfs mkfs.jffs2; do
+for cmd in git make tar xz rsync python3 sha256sum readelf unsquashfs mkfs.jffs2 file; do
   command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
 done
 if (( ${#missing[@]} )); then

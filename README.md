@@ -732,3 +732,40 @@ The automated image target does not flash hardware. It only builds and validates
 # Other board targets
 
 The historical Docker and board files for MX80, MX84, and other switch experiments remain in the repository. They have not been integrated into the MS42P top-level Makefile and should be treated as separate workflows.
+
+## Integrated firmware updater
+
+The MS42/MS42P firmware updater is a normal, always-enabled Buildroot package.
+Its repository source is stored under:
+
+```text
+buildroot/packages/fwupdate/
+```
+
+`make prepare` copies it into the extracted Buildroot `package/` tree and the
+shared custom Kconfig menu registers it automatically. The board configuration
+enables both `BR2_PACKAGE_FWUPDATE` and `BR2_PACKAGE_FWUPDATE_CURL`, along with
+shared-plus-static C libraries so the RAM-resident `fwflash` helper can be
+statically linked. No separate stage-15 integration script is required.
+
+The installed commands are:
+
+```text
+fw_update
+fw_update_http
+fw_update_tftp
+fw_update_sftp
+fw_update_status
+```
+
+Host-side syntax, static-link, checksum-sidecar, and repository-index tests can
+be run with:
+
+```bash
+make test-fwupdate
+```
+
+See [`docs/FIRMWARE-UPDATER.md`](docs/FIRMWARE-UPDATER.md) for operation,
+publication, and first-hardware-test procedures. Firmware checksum sidecars are
+generated from the artifact directory so they contain only the image basename,
+which is required by the updater's strict sidecar parser.
