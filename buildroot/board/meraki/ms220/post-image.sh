@@ -1,157 +1,70 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-BR2_IMAGES_DIR=$1
+: "${BINARIES_DIR:?Buildroot BINARIES_DIR is not set}"
+: "${HOST_DIR:?Buildroot HOST_DIR is not set}"
+: "${MS42P_KERNEL_ELF:?MS42P_KERNEL_ELF is not set}"
+: "${MS42P_KERNEL_BIN:?MS42P_KERNEL_BIN is not set}"
+: "${MS42P_LOADER:?MS42P_LOADER is not set}"
 
-#echo IMAGES_DIR: $BR2_IMAGES_DIR
-#echo BASE_DIR: $BASE_DIR
-#echo BUILD_DIR: $BUILD_DIR
-#echo TARGET_DIR: $TARGET_DIR
-#echo STAGING_DIR: $STAGING_DIR
-#echo BINARIES_DIR: $BINARIES_DIR
-#echo HOST_DIR: $HOST_DIR
+ROOTFS="$BINARIES_DIR/rootfs.squashfs"
+OUTPUT="$BINARIES_DIR/ms42p-firmware.bin"
+WORK="$BINARIES_DIR/ms42p-image-parts"
+MKFS_JFFS2="$HOST_DIR/sbin/mkfs.jffs2"
 
-download_redboot() {
-    if [ ! -f ${BINARIES_DIR}/redboot.bin ]; then
-        wget -qcO ${BINARIES_DIR}/redboot.bin "https://github.com/halmartin/MS42-GPL-sources-3-18-122/raw/master/redboot/redboot-nocrc-sz.bin"
-    fi
+LOADER_REGION=$((0x040000))
+KERNEL_REGION=$((0x2c0000))
+ROOTFS_REGION=$((0x800000))
+JFFS2_REGION=$((0x500000))
+TOTAL_SIZE=$((0x1000000))
+LOAD_ADDRESS=$((0x81000000))
+
+for input in "$MS42P_KERNEL_ELF" "$MS42P_KERNEL_BIN" "$MS42P_LOADER" "$ROOTFS"; do
+    [[ -f "$input" ]] || { echo "Missing image input: $input" >&2; exit 1; }
+done
+[[ -x "$MKFS_JFFS2" ]] || { echo "Missing Buildroot host mkfs.jffs2: $MKFS_JFFS2" >&2; exit 1; }
+
+loader_size="$(stat -c %s "$MS42P_LOADER")"
+kernel_size="$(stat -c %s "$MS42P_KERNEL_BIN")"
+rootfs_size="$(stat -c %s "$ROOTFS")"
+entry="$(readelf -h "$MS42P_KERNEL_ELF" | awk '/Entry point address/ {print $4}')"
+
+[[ "$loader_size" -eq "$LOADER_REGION" ]] || { echo "Loader must be exactly 256 KiB" >&2; exit 1; }
+(( kernel_size + 32 <= KERNEL_REGION )) || { echo "Kernel exceeds the 2816 KiB region" >&2; exit 1; }
+(( rootfs_size > 0 && rootfs_size <= ROOTFS_REGION )) || { echo "SquashFS exceeds the 8 MiB region" >&2; exit 1; }
+[[ "$entry" == 0x81000000 ]] || { echo "Unexpected kernel entry point: $entry" >&2; exit 1; }
+
+rm -rf "$WORK"
+mkdir -p "$WORK/jffs2-root/.upper/etc" "$WORK/jffs2-root/.work/etc" \
+    "$WORK/jffs2-root/.upper/root" "$WORK/jffs2-root/.work/root"
+
+python3 - "$WORK/boot1-header.bin" "$kernel_size" <<'PY'
+import struct
+import sys
+path, length = sys.argv[1], int(sys.argv[2])
+with open(path, 'wb') as stream:
+    stream.write(b'SPIM')
+    stream.write(struct.pack('<I', 0x81000000))
+    stream.write(struct.pack('<I', length))
+    stream.write(struct.pack('<I', 0x81000000))
+    stream.write(b'\0' * 16)
+PY
+
+cat "$WORK/boot1-header.bin" "$MS42P_KERNEL_BIN" > "$WORK/kernel.region"
+truncate -s "$KERNEL_REGION" "$WORK/kernel.region"
+cp "$ROOTFS" "$WORK/rootfs.region"
+truncate -s "$ROOTFS_REGION" "$WORK/rootfs.region"
+"$MKFS_JFFS2" --pad="$JFFS2_REGION" -l -n -X lzo -x zlib -y 40:lzo \
+    -r "$WORK/jffs2-root" -o "$WORK/overlay.region"
+
+cat "$MS42P_LOADER" "$WORK/kernel.region" "$WORK/rootfs.region" \
+    "$WORK/overlay.region" > "$OUTPUT"
+[[ "$(stat -c %s "$OUTPUT")" -eq "$TOTAL_SIZE" ]] || {
+    echo "Generated firmware is not exactly 16 MiB" >&2
+    exit 1
 }
 
-create_redboot_header() {
-    # create boot1-header
-    HEADER_PATH=${BINARIES_DIR}/redboot-header.bin
-    # MIPS magic
-    printf '\x53\x50\x49\x4d' > $HEADER_PATH
-    # load address: 0x80100000
-    echo 00000000 00 00 00 81 | xxd -r >> $HEADER_PATH
-    LENGTH_HEX=$(printf '%08x' ${BUILD_DIR}/linux-custom/vmlinuz.bin)
-
-    echo 00000000 $(echo $LENGTH_HEX | cut -b7-8) $(echo $LENGTH_HEX | cut -b5-6) $(echo $LENGTH_HEX | cut -b3-4) $(echo $LENGTH_HEX | cut -b0-2) | xxd -r >> $HEADER_PATH
-    # get the entry point of the kernel
-    if [ ! -f ${BUILD_DIR}/linux-custom/vmlinuz ]; then
-        echo "${BUILD_DIR}/linux-custom/vmlinuz is missing"
-        exit 1
-    fi
-    ENTRY=$(${HOST_DIR}/bin/mipsel-linux-readelf -h ${BUILD_DIR}/linux-custom/vmlinuz | grep "Entry point" | awk '{print $4}' | cut -b3-10)
-    echo "Got entry point 0x$ENTRY from vmlinuz ELF header"
-    echo 00000000 $(echo $ENTRY | cut -b7-8) $(echo $ENTRY | cut -b5-6) $(echo $ENTRY | cut -b3-4) $(echo $ENTRY | cut -b0-2) | xxd -r >> $HEADER_PATH
-    # fill the remaining 16 bytes of the header with 0s
-    dd if=/dev/zero of=$HEADER_PATH bs=16 seek=1 count=1 conv=notrunc
-}
-
-create_uboot() {
-    U_BOOT_REGION=0x100000
-    U_BOOT_ENV_OFFSET=0xc0000
-    U_BOOT_OUTPUT=${BINARIES_DIR}/u-boot.region
-    if [ -f ${BINARIES_DIR}/u-boot-dtb.bin ] && [ -f ${BINARIES_DIR}/uboot-env.bin ]; then
-        U_BOOT_SIZE=$(stat --format "%s" ${BINARIES_DIR}/u-boot-dtb.bin)
-        U_BOOT_ENV_SIZE=$(stat --format "%s" ${BINARIES_DIR}/uboot-env.bin)
-        dd if=/dev/zero of=$U_BOOT_OUTPUT bs=$(($U_BOOT_REGION)) count=1
-        # copy u-boot-dtb.bin into the output region
-        dd if=${BINARIES_DIR}/u-boot-dtb.bin of=$U_BOOT_OUTPUT bs=$(($U_BOOT_SIZE)) count=1 conv=notrunc
-        # copy u-boot.env into the output region
-        dd if=${BINARIES_DIR}/uboot-env.bin of=$U_BOOT_OUTPUT bs=$(($U_BOOT_ENV_SIZE)) seek=$(($U_BOOT_ENV_OFFSET/$U_BOOT_ENV_SIZE)) count=1 conv=notrunc
-        # copy u-boot.env into the backup region
-        dd if=${BINARIES_DIR}/uboot-env.bin of=$U_BOOT_OUTPUT bs=$(($U_BOOT_ENV_SIZE)) seek=$(($(($U_BOOT_ENV_OFFSET/$U_BOOT_ENV_SIZE))+1)) count=1 conv=notrunc
-        # confirm that u-boot is the correct size
-        U_BOOT_REGION_SIZE=$(stat --format "%s" $U_BOOT_OUTPUT)
-        if [ $(($U_BOOT_REGION)) -ne $U_BOOT_REGION_SIZE ]; then
-            echo "Generated u-boot region is ${U_BOOT_REGION_SIZE} but should be $(($U_BOOT_REGION))"
-            return
-        fi
-        echo "u-boot.region: $(stat --format \"%s\" $U_BOOT_OUTPUT)"
-    else
-        echo "${BINARIES_DIR}/u-boot-dtb.bin or ${BINARIES_DIR}/uboot-env.bin not found"
-        return
-    fi
-}
-
-create_jffs2() {
-    JFFS2_OUTPUT=${BINARIES_DIR}/jffs2.region
-    JFFS2_SIZE=0x500000
-    if [ $(grep -c BR2_PACKAGE_HOST_MTD=y ${BASE_DIR}/../.config) -ne 1 ]; then
-        echo "Enable BR2_PACKAGE_HOST_MTD=y"
-        return
-    fi
-    if [ ! -f ${HOST_DIR}/sbin/mkfs.jffs2 ]; then
-        echo "${HOST_DIR}/sbin/mkfs.jffs2 does not exist"
-        return
-    fi
-    TMPDIR=$(mktemp -d)
-    mkdir -p $TMPDIR/jffs2-root/.upper/etc $TMPDIR/jffs2-root/.work/etc
-    mkdir -p $TMPDIR/jffs2-root/.upper/root $TMPDIR/jffs2-root/.work/root
-    echo "Generating JFFS2..."
-    $HOST_DIR/sbin/mkfs.jffs2 --pad=${JFFS2_SIZE} -l -n -X lzo -x zlib -y 40:lzo -r $TMPDIR/jffs2-root/ -o ${JFFS2_OUTPUT}
-    rm -r $TMPDIR
-    echo "jffs2.region: $(stat --format \"%s\" $JFFS2_OUTPUT)"
-}
-
-create_kernel() {
-    #KERNEL_REGION=0x240000
-    KERNEL_REGION=0x200000
-    KERNEL_OUTPUT=${BINARIES_DIR}/kernel.region
-
-    if [ ! -f ${BUILD_DIR}/linux-custom/vmlinuz.bin ]; then
-        echo "${BUILD_DIR}/linux-custom/vmlinuz.bin does not exist"
-        echo "Replacing kernel with zero image, you must netboot!"
-	dd if=/dev/zero of=$KERNEL_OUTPUT bs=$(($KERNEL_REGION)) count=1
-        return
-    fi
-
-    KERNEL_SIZE=$(stat --format "%s" ${BUILD_DIR}/linux-custom/vmlinuz.bin)
-    dd if=/dev/zero of=/tmp/kernel.pad bs=$(($KERNEL_REGION-$KERNEL_SIZE)) count=1 > /dev/null 2>&1
-    cat ${BUILD_DIR}/linux-custom/vmlinuz.bin /tmp/kernel.pad > $KERNEL_OUTPUT
-    rm /tmp/kernel.pad
-    echo "kernel.region: $(stat --format \"%s\" $KERNEL_OUTPUT)"
-}
-
-create_squashfs() {
-    SQUASHFS_REGION=0x800000
-    SQUASHFS_OUTPUT=${BINARIES_DIR}/squashfs.region
-    if [ ! -f ${BINARIES_DIR}/rootfs.squashfs ]; then
-        echo "${BINARIES_DIR}/rootfs.squashfs does not exist"
-        return
-    fi
-    SQUASHFS_SIZE=$(stat --format "%s" ${BINARIES_DIR}/rootfs.squashfs)
-    if [ $SQUASHFS_SIZE -gt $(($SQUASHFS_REGION)) ]; then
-        echo "Squashfs exceeds maximum size ($SQUASHFS_REGION); cannot create image"
-        return
-    fi
-    dd if=/dev/zero of=/tmp/squashfs.pad bs=$(($SQUASHFS_REGION-$SQUASHFS_SIZE)) count=1 > /dev/null 2>&1
-    cat ${BINARIES_DIR}/rootfs.squashfs /tmp/squashfs.pad > ${SQUASHFS_OUTPUT}
-    rm /tmp/squashfs.pad
-    echo "squashfs.region: $(stat --format \"%s\" ${SQUASHFS_OUTPUT})"
-}
-
-create_uboot_flashable_image() {
-    create_uboot
-    create_kernel
-    create_squashfs
-    create_jffs2
-    if [ ! -f ${BINARIES_DIR}/u-boot.region ] || [ ! -f ${BINARIES_DIR}/kernel.region ] || [ ! -f ${BINARIES_DIR}/squashfs.region ] || [ ! -f ${BINARIES_DIR}/jffs2.region ]; then
-        echo "Image generation failed"
-        return
-    fi
-    cat ${BINARIES_DIR}/u-boot.region ${BINARIES_DIR}/kernel.region ${BINARIES_DIR}/squashfs.region ${BINARIES_DIR}/jffs2.region > ${BINARIES_DIR}/switch-image.rom
-    IMAGE_SIZE=$(stat --format "%s" ${BINARIES_DIR}/switch-image.rom)
-    if [ ${IMAGE_SIZE} -ne 16777216 ]; then
-        echo "Image generation failed"
-    else
-        echo "Flashable image: ${BINARIES_DIR}/switch-image.rom"
-    fi
-}
-
-create_redboot_flashable_image() {
-    download_redboot
-    create_redboot_header
-    create_squashfs
-    create_jffs2
-}
-
-# create image with u-boot bootloader
-create_uboot_flashable_image
-
-# WIP:
-# create image with redboot bootloader
-# note that kernels compiled for RedBoot **must** have the boot commandline
-# compiled into the kernel
-#create_redboot_flashable_image
+cp -f "$WORK/boot1-header.bin" "$WORK/kernel.region" "$WORK/rootfs.region" \
+    "$WORK/overlay.region" "$BINARIES_DIR/"
+sha256sum "$OUTPUT" > "$OUTPUT.sha256"
+printf 'Generated %s\n' "$OUTPUT"

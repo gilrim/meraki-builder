@@ -1,10 +1,17 @@
-CC=gcc
-PWD=$(shell pwd)
+CC ?= gcc
+CFLAGS ?= -Os
 
-all: *.c
-	$(CC) -c -Wall -Werror -fpic libpd690xx.c
-	$(CC) -shared -o libpd690xx.so libpd690xx.o
-	$(CC) -L$(PWD) -Wall -o pd690xx pd690xx.c -lpd690xx '$<'
+.PHONY: all clean
+all: libpd690xx.so pd690xx
+
+libpd690xx.o: libpd690xx.c libpd690xx.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -c -o $@ $<
+
+libpd690xx.so: libpd690xx.o
+	$(CC) -shared $(LDFLAGS) -o $@ $^
+
+pd690xx: pd690xx.c pd690xx_meraki.h libpd690xx.so
+	$(CC) $(CPPFLAGS) $(CFLAGS) -L. -o $@ pd690xx.c $(LDFLAGS) -lpd690xx
+
 clean:
-	rm -rf a.out pd690xx libpd690xx.0 libpd690xx.so
-	rm -f *.o
+	rm -f pd690xx libpd690xx.so *.o

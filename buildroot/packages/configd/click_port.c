@@ -1,3 +1,4 @@
+#include <unistd.h>
 #include "click_port.h"
 #include "configd.h"
 
@@ -133,9 +134,22 @@ static int apply_phy(int port, struct json_object *port_config) {
 // --- storm_control field ---
 
 static struct json_object *read_storm_control(int port) {
+  const char *handler = "/click/switch_port_table/dump_port_storm_control";
+
+  /* OLDER_POSTMERKOS_CLICK_COMPAT:
+   * Released PostmerkOS Click graphs expose set_port_storm_control but not
+   * dump_port_storm_control. Keep configd alive and default the unreadable
+   * initial state to enabled. */
+  if (access(handler, R_OK) != 0) {
+    fprintf(stderr,
+            "warning: %s is unavailable; defaulting storm control to enabled\n",
+            handler);
+    return json_object_new_boolean(true);
+  }
+
   char *line = read_switch_port_table("dump_port_storm_control", port);
-  if (!line) return json_object_new_boolean(true);
-  // field 2 is ENABLED (true/false)
+  if (!line)
+    return json_object_new_boolean(true);
   const char *val = get_field(line, 2);
   bool enabled = !val || strcmp(val, "true") == 0;
   free(line);

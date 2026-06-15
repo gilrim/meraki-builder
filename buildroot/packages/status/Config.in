@@ -1,0 +1,7 @@
+config BR2_PACKAGE_STATUS
+	bool "clickswstatus"
+	select BR2_PACKAGE_JSON_C
+	select BR2_PACKAGE_PD690XX
+	help
+	  Read switch status directly from the Click filesystem. This utility is
+	  optional because configd has its own status implementation for the web UI.
