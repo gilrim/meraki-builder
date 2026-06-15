@@ -1,3 +1,10 @@
+## Distrobox Buildroot hotfix
+
+- Route the complete Arch/CachyOS build through Ubuntu 22.04 Distrobox instead of containerizing only the kernel stage.
+- Protect direct `make rootfs` runs with the same Distrobox routing.
+- Record the Buildroot host environment and clean output automatically when the distribution or host compiler changes.
+- Document the GCC 16 versus binutils 2.38 failure and recovery procedure.
+
 # MS42P build workflow changes
 
 - Added a top-level Makefile and staged Bash build interface.
