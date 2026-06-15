@@ -309,13 +309,13 @@ than producing an oversized image.
 The shell scripts pass POSIX-shell syntax checks, and the RAM flasher builds
 cleanly as a static executable with `-Wall -Wextra -Werror`. The publisher and
 strict sidecar parser were also exercised against generated test artifacts.
-The updater has **not yet been run on the physical MS42P NOR device**, so the
-serial-attached validation sequence below remains mandatory before treating it
-as production-safe.
+The updater has **has been successfully tested on the physical MS42P NOR device
+through TFTP + hardware serial**, so the serial-attached validation sequence 
+below only remains as a reference for validating future updates.
 
-## First hardware validation sequence
+## Hardware validation sequence
 
-Use the existing CH341A backup/recovery setup and start with `preserve`:
+Prepare a CH341A backup/recovery setup and start with `preserve`:
 
 1. Flash an updater-enabled image externally.
 2. Boot and save `/proc/mtd`, `mount`, and `fw_update --verify-only` output.
