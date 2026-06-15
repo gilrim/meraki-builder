@@ -1,276 +1,102 @@
-#include <unistd.h>
 #include "click_port.h"
 #include "configd.h"
+#include "json_util.h"
 
 #include <libpostmerkos.h>
 #include <libpd690xx.h>
-#include "pd690xx_meraki.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// print a structured change log entry to stdout
-static void log_change(int port, const char *field,
-                       const char *old_val, const char *new_val) {
-  printf("%s port=%d field=%s old=%s new=%s%s\n",
-         get_time(), port, field, old_val, new_val,
-         dry_run ? " dry_run=true" : "");
-}
-
-// --- speed mapping ---
-
 struct speed_map {
-  const char *ui;    // JSON value: "auto", "10half", etc.
-  const char *click; // Click MODE: "aneg", "10hdx", etc.
+  const char *json;
+  const char *click;
 };
 
 static const struct speed_map speed_table[] = {
-  { "auto",     "aneg"    },
-  { "10half",   "10hdx"   },
-  { "10full",   "10fdx"   },
-  { "100half",  "100hdx"  },
-  { "100full",  "100fdx"  },
-  { "1000full", "1000fdx" },
+  {"auto", "aneg"}, {"10half", "10hdx"}, {"10full", "10fdx"},
+  {"100half", "100hdx"}, {"100full", "100fdx"},
+  {"1000full", "1000fdx"},
 };
 
-static const int speed_table_count =
-    sizeof(speed_table) / sizeof(speed_table[0]);
+static void log_change(unsigned int port, const char *field,
+                       const char *value) {
+  printf("%s port=%u field=%s value=%s%s\n", get_time(), port, field,
+         value ? value : "", dry_run ? " dry_run=true" : "");
+}
 
-static const char *speed_click_to_ui(const char *click_mode) {
-  for (int i = 0; i < speed_table_count; i++) {
-    if (strcmp(speed_table[i].click, click_mode) == 0)
-      return speed_table[i].ui;
-  }
+static const char *speed_click_to_json(const char *click_mode) {
+  for (size_t i = 0; i < sizeof(speed_table) / sizeof(speed_table[0]); i++)
+    if (!strcmp(speed_table[i].click, click_mode)) return speed_table[i].json;
   return "auto";
 }
 
-static const char *speed_ui_to_click(const char *ui_speed) {
-  for (int i = 0; i < speed_table_count; i++) {
-    if (strcmp(speed_table[i].ui, ui_speed) == 0)
-      return speed_table[i].click;
-  }
+static const char *speed_json_to_click(const char *json_speed) {
+  for (size_t i = 0; i < sizeof(speed_table) / sizeof(speed_table[0]); i++)
+    if (!strcmp(speed_table[i].json, json_speed)) return speed_table[i].click;
   return "aneg";
 }
 
-// --- enabled field ---
-
-static struct json_object *read_port_enabled(int port) {
-  char *line = read_switch_port_table("dump_port_phy_cfgs", port);
-  const char *mode = get_field(line, 2);
-  bool enabled = mode && strcmp(mode, "off") != 0;
-  free(line);
-  return json_object_new_boolean(enabled);
-}
-
-// --- speed field ---
-
-static struct json_object *read_port_speed(int port) {
-  char *line = read_switch_port_table("dump_port_phy_cfgs", port);
-  const char *mode = get_field(line, 2);
-  const char *ui = "auto";
-  if (mode && strcmp(mode, "off") != 0) {
-    ui = speed_click_to_ui(mode);
+static struct json_object *read_phy(unsigned int port,
+                                    struct apply_result *result) {
+  struct json_object *phy = json_object_new_object();
+  char line[512];
+  char mode[32];
+  int rc = read_switch_port_table("dump_port_phy_cfgs", port,
+                                  line, sizeof(line));
+  if (rc != 0 || get_field_copy(line, 2, mode, sizeof(mode)) != 0) {
+    apply_result_warn(result, "port %u PHY state unavailable; defaults used", port);
+    snprintf(mode, sizeof(mode), "aneg");
   }
-  free(line);
-  return json_object_new_string(ui);
+  bool enabled = strcmp(mode, "off") != 0;
+  json_object_object_add(phy, "enabled", json_object_new_boolean(enabled));
+  json_object_object_add(phy, "speed",
+      json_object_new_string(enabled ? speed_click_to_json(mode) : "auto"));
+  /* These values are write-only in the available binary Click graph. */
+  json_object_object_add(phy, "flow_control", json_object_new_boolean(false));
+  json_object_object_add(phy, "eee", json_object_new_boolean(true));
+  return phy;
 }
 
-// --- flow_control field ---
-
-static struct json_object *read_port_fc(int port) {
-  (void)port;
-  // default: flow control off (FC_OBEY field not reliably readable from dump)
-  return json_object_new_boolean(false);
-}
-
-// --- eee field ---
-
-static struct json_object *read_port_eee(int port) {
-  (void)port;
-  // default: EEE enabled
-  return json_object_new_boolean(true);
-}
-
-// --- apply_phy: compound apply for enabled + speed + flow_control + eee ---
-
-static int apply_phy(int port, struct json_object *port_config) {
-  struct json_object *obj;
-
-  // read enabled (required)
-  bool enabled = true;
-  if (json_object_object_get_ex(port_config, "enabled", &obj))
-    enabled = json_object_get_boolean(obj);
-
-  // read speed
-  const char *speed = "auto";
-  if (json_object_object_get_ex(port_config, "speed", &obj))
-    speed = json_object_get_string(obj);
-
-  // read flow_control
-  bool fc = false;
-  if (json_object_object_get_ex(port_config, "flow_control", &obj))
-    fc = json_object_get_boolean(obj);
-
-  // read eee
-  bool eee = true;
-  if (json_object_object_get_ex(port_config, "eee", &obj))
-    eee = json_object_get_boolean(obj);
-
-  const char *mode = enabled ? speed_ui_to_click(speed) : "off";
-
-  char command[128];
-  snprintf(command, sizeof(command),
-           "PORT %d, FC_OBEY %s, EEE_ADV_ENABLED %s, MODE %s",
-           port, fc ? "true" : "false", eee ? "true" : "false", mode);
-
-  log_change(port, "phy", "", command);
-  if (!dry_run) {
-    write_switch_port_table("set_port_phy_cfgs", command);
-  }
-  return 0;
-}
-
-// --- storm_control field ---
-
-static struct json_object *read_storm_control(int port) {
-  const char *handler = "/click/switch_port_table/dump_port_storm_control";
-
-  /* OLDER_POSTMERKOS_CLICK_COMPAT:
-   * Released PostmerkOS Click graphs expose set_port_storm_control but not
-   * dump_port_storm_control. Keep configd alive and default the unreadable
-   * initial state to enabled. */
-  if (access(handler, R_OK) != 0) {
-    fprintf(stderr,
-            "warning: %s is unavailable; defaulting storm control to enabled\n",
-            handler);
-    return json_object_new_boolean(true);
-  }
-
-  char *line = read_switch_port_table("dump_port_storm_control", port);
-  if (!line)
-    return json_object_new_boolean(true);
-  const char *val = get_field(line, 2);
-  bool enabled = !val || strcmp(val, "true") == 0;
-  free(line);
-  return json_object_new_boolean(enabled);
-}
-
-static int apply_storm_control(int port, struct json_object *port_config) {
-  struct json_object *obj;
-  if (!json_object_object_get_ex(port_config, "storm_control", &obj)) return 0;
-  bool enabled = json_object_get_boolean(obj);
-
-  char command[64];
-  snprintf(command, sizeof(command), "PORT %d, ENABLED %s",
-           port, enabled ? "true" : "false");
-
-  log_change(port, "storm_control", "", enabled ? "true" : "false");
-  if (!dry_run) {
-    write_switch_port_table("set_port_storm_control", command);
-  }
-  return 0;
-}
-
-// --- vlan field ---
-
-static struct json_object *read_port_vlan(int port) {
+static struct json_object *read_vlan(unsigned int port,
+                                     struct apply_result *result) {
   struct json_object *vlan = json_object_new_object();
-  char *line = read_switch_port_table("dump_pport_vlans", port);
-  if (!line) {
-    // defaults
-    json_object_object_add(vlan, "mode", json_object_new_string("access"));
-    json_object_object_add(vlan, "pvid", json_object_new_int(1));
-    json_object_object_add(vlan, "allowed", json_object_new_string(""));
-    json_object_object_add(vlan, "untagged_vid", json_object_new_int(1));
-    json_object_object_add(vlan, "ingress_filter", json_object_new_boolean(true));
-    return vlan;
+  char line[512];
+  char tagged[32] = "0";
+  char pvid[32] = "1";
+  char untagged_vid[32] = "1";
+  char allowed[256] = "";
+  int rc = read_switch_port_table("dump_pport_vlans", port,
+                                  line, sizeof(line));
+  if (rc == 0) {
+    get_field_copy(line, 2, tagged, sizeof(tagged));
+    get_field_copy(line, 6, pvid, sizeof(pvid));
+    get_field_copy(line, 7, untagged_vid, sizeof(untagged_vid));
+    get_field_copy(line, 11, allowed, sizeof(allowed));
+  } else {
+    apply_result_warn(result, "port %u VLAN state unavailable; defaults used", port);
   }
 
-  // dump_pport_vlans fields: 1=port, 2=tag_in, 3=untag_in, ... 6=pvid, 7=untagged_vid, ... 11=allowed
-  const char *tag_in_str = get_field(line, 2);
-  const char *untag_in_str = get_field(line, 3);
-  const char *pvid_str = get_field(line, 6);
-  const char *untag_vid_str = get_field(line, 7);
-  const char *allowed_str = get_field(line, 11);
-
-  bool tag_in = tag_in_str && strcmp(tag_in_str, "1") == 0;
-  bool untag_in = !untag_in_str || strcmp(untag_in_str, "1") == 0;
-
-  // derive mode
-  const char *mode = "access";
-  if (tag_in) mode = "trunk";
-
+  bool is_tagged = !strcmp(tagged, "1") || !strcmp(tagged, "true");
+  int pvid_number = atoi(pvid);
+  int untagged_number = atoi(untagged_vid);
+  const char *mode = is_tagged ?
+      (untagged_number > 0 ? "hybrid" : "trunk") : "access";
   json_object_object_add(vlan, "mode", json_object_new_string(mode));
   json_object_object_add(vlan, "pvid",
-                         json_object_new_int(pvid_str ? atoi(pvid_str) : 1));
+      json_object_new_int(pvid_number > 0 ? pvid_number : 1));
   json_object_object_add(vlan, "allowed",
-                         json_object_new_string(allowed_str ? allowed_str : ""));
+      json_object_new_string(is_tagged ? allowed : ""));
   json_object_object_add(vlan, "untagged_vid",
-                         json_object_new_int(untag_vid_str ? atoi(untag_vid_str) : 1));
+      json_object_new_int(untagged_number >= 0 ? untagged_number : 1));
   json_object_object_add(vlan, "ingress_filter", json_object_new_boolean(true));
-
-  (void)untag_in;
-  free(line);
   return vlan;
 }
 
-static int apply_port_vlan(int port, struct json_object *port_config) {
-  struct json_object *vlan;
-  if (!json_object_object_get_ex(port_config, "vlan", &vlan)) return 0;
-
-  struct json_object *obj;
-  const char *mode = "access";
-  if (json_object_object_get_ex(vlan, "mode", &obj))
-    mode = json_object_get_string(obj);
-
-  int pvid = 1;
-  if (json_object_object_get_ex(vlan, "pvid", &obj))
-    pvid = json_object_get_int(obj);
-
-  const char *allowed = "";
-  if (json_object_object_get_ex(vlan, "allowed", &obj))
-    allowed = json_object_get_string(obj);
-
-  int untagged_vid = 1;
-  if (json_object_object_get_ex(vlan, "untagged_vid", &obj))
-    untagged_vid = json_object_get_int(obj);
-
-  bool ingress_filter = true;
-  if (json_object_object_get_ex(vlan, "ingress_filter", &obj))
-    ingress_filter = json_object_get_boolean(obj);
-
-  // derive click booleans from mode
-  bool tag_in = strcmp(mode, "access") != 0;   // trunk/hybrid allow tagged
-  bool untag_in = true;                        // all modes allow untagged
-
-  // access mode: allowed = pvid only
-  char allowed_buf[32];
-  if (strcmp(mode, "access") == 0) {
-    snprintf(allowed_buf, sizeof(allowed_buf), "%d", pvid);
-    allowed = allowed_buf;
-  }
-
-  char command[256];
-  snprintf(command, sizeof(command),
-           "PORT %d, ALLOWED_VLANS %s, ALLOW_TAGGED_IN %s, ALLOW_UNTAGGED_IN %s, "
-           "INGRESS_FILTER %s, RADIUS_CAN_ASSIGN_VLAN false, PVID %d, UNTAGGED_VID %d",
-           port, allowed, tag_in ? "true" : "false", untag_in ? "true" : "false",
-           ingress_filter ? "true" : "false", pvid, untagged_vid);
-
-  log_change(port, "vlan", "", command);
-  if (!dry_run) {
-    write_switch_port_table("set_vlan_allports_conf", command);
-  }
-  return 0;
-}
-
-// --- stp per-port field ---
-
-static struct json_object *read_port_stp(int port) {
-  (void)port;
+static struct json_object *default_stp(void) {
   struct json_object *stp = json_object_new_object();
-  // S10clickconfig defaults
   json_object_object_add(stp, "enabled", json_object_new_boolean(true));
   json_object_object_add(stp, "priority", json_object_new_int(128));
   json_object_object_add(stp, "cost", json_object_new_int(0));
@@ -279,149 +105,265 @@ static struct json_object *read_port_stp(int port) {
   return stp;
 }
 
-static int apply_port_stp(int port, struct json_object *port_config) {
-  struct json_object *stp;
-  if (!json_object_object_get_ex(port_config, "stp", &stp)) return 0;
-
-  if (meraki_mac[0] == '\0') {
-    fprintf(stderr, "warning: meraki_mac not set, skipping STP port apply\n");
-    return -1;
-  }
-
-  struct json_object *obj;
-
-  bool enabled = true;
-  if (json_object_object_get_ex(stp, "enabled", &obj))
-    enabled = json_object_get_boolean(obj);
-
-  int priority = 128;
-  if (json_object_object_get_ex(stp, "priority", &obj))
-    priority = json_object_get_int(obj);
-
-  int cost = 0;
-  if (json_object_object_get_ex(stp, "cost", &obj))
-    cost = json_object_get_int(obj);
-
-  bool edge = false;
-  if (json_object_object_get_ex(stp, "edge", &obj))
-    edge = json_object_get_boolean(obj);
-
-  bool auto_edge = true;
-  if (json_object_object_get_ex(stp, "auto_edge", &obj))
-    auto_edge = json_object_get_boolean(obj);
-
-  char command[256];
-  snprintf(command, sizeof(command),
-           "PORT %s/%d, ENABLED %s, AUTOEDGE %s, EDGE %s, "
-           "AUTOPTP true, PTP false, PRI %d, COST %d",
-           meraki_mac, port,
-           enabled ? "true" : "false",
-           auto_edge ? "true" : "false",
-           edge ? "true" : "false",
-           priority, cost);
-
-  log_change(port, "stp", "", command);
-  if (!dry_run) {
-    click_write("/click/stp/set_many_port_cfgs", command);
-  }
-  return 0;
-}
-
-// --- poe field ---
-
-static struct json_object *read_port_poe(int port) {
+static struct json_object *read_poe(unsigned int port,
+                                    struct apply_result *result) {
   struct json_object *poe = json_object_new_object();
-  json_object_object_add(poe, "enabled",
-                         json_object_new_boolean(port_state(&pd690xx, port)));
-  json_object_object_add(poe, "mode",
-                         json_object_new_string(port_type_str(&pd690xx, port)));
+  bool enabled = false;
+  const char *mode = "af";
+  if (hardware.poe_available) {
+    int state = port_state(&pd690xx, (int)port);
+    int type = port_type(&pd690xx, (int)port);
+    if (state >= 0) enabled = state != PORT_DISABLED;
+    else apply_result_warn(result, "port %u PoE state unavailable; default used", port);
+    if (type == PORT_MODE_AF) mode = "af";
+    else if (type == PORT_MODE_AT) mode = "at";
+    else apply_result_warn(result, "port %u PoE mode unavailable; default used", port);
+  } else {
+    apply_result_warn(result,
+        "PoE controllers are unavailable; desired defaults retained for port %u",
+        port);
+  }
+  json_object_object_add(poe, "enabled", json_object_new_boolean(enabled));
+  json_object_object_add(poe, "mode", json_object_new_string(mode));
   return poe;
 }
 
-static int apply_port_poe(int port, struct json_object *port_config) {
-  struct json_object *value;
-  if (!json_object_object_get_ex(port_config, "poe", &value)) return 0;
-  struct json_object *enabled_obj;
-  if (json_object_object_get_ex(value, "enabled", &enabled_obj)) {
-    bool enabled = json_object_get_boolean(enabled_obj);
-    bool state = port_state(&pd690xx, port);
+struct json_object *click_read_ports(struct apply_result *result) {
+  struct json_object *root = json_object_new_object();
+  struct json_object *ports = json_object_new_object();
+  json_object_object_add(root, "ports", ports);
 
-    if (enabled && state == PORT_DISABLED) {
-      log_change(port, "poe.enabled", "false", "true");
-      if (!dry_run) {
-        port_enable(&pd690xx, port);
+  unsigned int count = hardware.port_count;
+  if (!count) {
+    FILE *file = fopen(PORTS_FILE, "r");
+    if (file) {
+      char line[512];
+      bool first = true;
+      while (fgets(line, sizeof(line), file)) {
+        if (first) first = false;
+        else count++;
       }
-    } else if (!enabled && state == PORT_ENABLED) {
-      log_change(port, "poe.enabled", "true", "false");
-      if (!dry_run) {
-        port_disable(&pd690xx, port);
-      }
+      fclose(file);
     }
   }
+
+  for (unsigned int port = 1; port <= count; port++) {
+    char key[16];
+    snprintf(key, sizeof(key), "%u", port);
+    struct json_object *port_config = read_phy(port, result);
+    json_object_object_add(port_config, "name", json_object_new_string(""));
+    /* Storm control has a setter but no readable handler in the binary
+     * SwitchPortTable. It is persistent desired state and is replayed at boot. */
+    json_object_object_add(port_config, "storm_control",
+                           json_object_new_boolean(true));
+    json_object_object_add(port_config, "vlan", read_vlan(port, result));
+    json_object_object_add(port_config, "stp", default_stp());
+    if (hardware_port_supports_poe(&hardware, port))
+      json_object_object_add(port_config, "poe", read_poe(port, result));
+    json_object_object_add(ports, key, port_config);
+  }
+  return root;
+}
+
+static int write_handler(unsigned int port, const char *handler,
+                         const char *field, const char *command,
+                         struct apply_result *result) {
+  log_change(port, field, command);
+  if (dry_run) {
+    apply_result_applied(result);
+    return 0;
+  }
+  int rc = write_switch_port_table(handler, command);
+  if (rc != 0) {
+    apply_result_warn(result, "port %u %s failed: %s", port, field,
+                      strerror(-rc));
+    return rc;
+  }
+  apply_result_applied(result);
   return 0;
 }
 
-// --- field table ---
+static int apply_phy(unsigned int port, struct json_object *port_config,
+                     struct apply_result *result) {
+  bool enabled = json_object_get_boolean(
+      json_object_object_get(port_config, "enabled"));
+  const char *speed = json_object_get_string(
+      json_object_object_get(port_config, "speed"));
+  bool flow_control = json_object_get_boolean(
+      json_object_object_get(port_config, "flow_control"));
+  bool eee = json_object_get_boolean(json_object_object_get(port_config, "eee"));
+  const char *mode = enabled ? speed_json_to_click(speed) : "off";
+  char command[160];
+  snprintf(command, sizeof(command),
+           "PORT %u, FC_OBEY %s, EEE_ADV_ENABLED %s, MODE %s",
+           port, flow_control ? "true" : "false",
+           eee ? "true" : "false", mode);
+  return write_handler(port, "set_port_phy_cfgs", "phy", command, result);
+}
 
-const struct port_field port_fields[] = {
-  { "enabled",       read_port_enabled,   apply_phy,           false },
-  { "speed",         read_port_speed,     NULL,                false },
-  { "flow_control",  read_port_fc,        NULL,                false },
-  { "eee",           read_port_eee,       NULL,                false },
-  { "storm_control", read_storm_control,  apply_storm_control, false },
-  { "vlan",          read_port_vlan,      apply_port_vlan,     false },
-  { "stp",           read_port_stp,       apply_port_stp,      false },
-  { "poe",           read_port_poe,       apply_port_poe,      true  },
+static int apply_storm(unsigned int port, struct json_object *port_config,
+                       struct apply_result *result) {
+  bool enabled = json_object_get_boolean(
+      json_object_object_get(port_config, "storm_control"));
+  char command[64];
+  snprintf(command, sizeof(command), "PORT %u, ENABLED %s", port,
+           enabled ? "true" : "false");
+  return write_handler(port, "set_port_storm_control", "storm_control",
+                       command, result);
+}
+
+static int apply_vlan(unsigned int port, struct json_object *port_config,
+                      struct apply_result *result) {
+  struct json_object *vlan = json_object_object_get(port_config, "vlan");
+  const char *mode = json_object_get_string(json_object_object_get(vlan, "mode"));
+  int pvid = json_object_get_int(json_object_object_get(vlan, "pvid"));
+  const char *allowed = json_object_get_string(
+      json_object_object_get(vlan, "allowed"));
+  int untagged = json_object_get_int(
+      json_object_object_get(vlan, "untagged_vid"));
+  bool ingress = json_object_get_boolean(
+      json_object_object_get(vlan, "ingress_filter"));
+  bool tagged = strcmp(mode, "access") != 0;
+  char access_allowed[16];
+  if (!tagged) {
+    snprintf(access_allowed, sizeof(access_allowed), "%d", pvid);
+    allowed = access_allowed;
+    untagged = pvid;
+  }
+  char command[512];
+  snprintf(command, sizeof(command),
+      "PORT %u, ALLOWED_VLANS %s, ALLOW_TAGGED_IN %s, "
+      "ALLOW_UNTAGGED_IN true, INGRESS_FILTER %s, "
+      "RADIUS_CAN_ASSIGN_VLAN false, PVID %d, UNTAGGED_VID %d",
+      port, allowed, tagged ? "true" : "false",
+      ingress ? "true" : "false", pvid, untagged);
+  return write_handler(port, "set_vlan_allports_conf", "vlan", command,
+                       result);
+}
+
+static int apply_stp(unsigned int port, struct json_object *port_config,
+                     struct apply_result *result) {
+  if (!meraki_mac[0]) {
+    apply_result_warn(result, "port %u STP skipped: switch MAC unavailable", port);
+    return -ENOENT;
+  }
+  struct json_object *stp = json_object_object_get(port_config, "stp");
+  bool enabled = json_object_get_boolean(json_object_object_get(stp, "enabled"));
+  bool auto_edge = json_object_get_boolean(
+      json_object_object_get(stp, "auto_edge"));
+  bool edge = json_object_get_boolean(json_object_object_get(stp, "edge"));
+  int priority = json_object_get_int(json_object_object_get(stp, "priority"));
+  int cost = json_object_get_int(json_object_object_get(stp, "cost"));
+  char command[256];
+  snprintf(command, sizeof(command),
+      "PORT %s/%u, ENABLED %s, AUTOEDGE %s, EDGE %s, "
+      "AUTOPTP true, PTP false, PRI %d, COST %d",
+      meraki_mac, port, enabled ? "true" : "false",
+      auto_edge ? "true" : "false", edge ? "true" : "false",
+      priority, cost);
+  log_change(port, "stp", command);
+  int rc = dry_run ? 0 : click_write("/click/stp/set_many_port_cfgs", command);
+  if (rc != 0) apply_result_warn(result, "port %u STP failed: %s", port,
+                                 strerror(-rc));
+  else apply_result_applied(result);
+  return rc;
+}
+
+static int apply_poe(unsigned int port, struct json_object *port_config,
+                     struct apply_result *result) {
+  if (!hardware_port_supports_poe(&hardware, port)) return 0;
+  if (!hardware.poe_available) {
+    apply_result_warn(result,
+        "port %u PoE desired state retained; controller unavailable", port);
+    return -ENODEV;
+  }
+  struct json_object *poe = json_object_object_get(port_config, "poe");
+  bool enabled = json_object_get_boolean(json_object_object_get(poe, "enabled"));
+  const char *mode = json_object_get_string(json_object_object_get(poe, "mode"));
+  int desired_mode = !strcmp(mode, "af") ? PORT_MODE_AF : PORT_MODE_AT;
+
+  log_change(port, "poe.mode", mode);
+  int rc = dry_run ? 0 : port_set_type(&pd690xx, (int)port, desired_mode);
+  if (rc != 0) {
+    apply_result_warn(result, "port %u PoE mode %s failed", port, mode);
+  } else {
+    apply_result_applied(result);
+  }
+
+  log_change(port, "poe.enabled", enabled ? "true" : "false");
+  int enabled_rc = dry_run ? 0 :
+      (enabled ? port_enable(&pd690xx, (int)port)
+               : port_disable(&pd690xx, (int)port));
+  if (enabled_rc != 0)
+    apply_result_warn(result, "port %u PoE %s failed", port,
+                      enabled ? "enable" : "disable");
+  else
+    apply_result_applied(result);
+  return rc != 0 ? rc : enabled_rc;
+}
+
+typedef int (*apply_fn)(unsigned int, struct json_object *,
+                        struct apply_result *);
+
+struct field_apply {
+  const char *key;
+  apply_fn apply;
 };
 
-const int port_field_count = sizeof(port_fields) / sizeof(port_fields[0]);
+static const struct field_apply fields[] = {
+  {"enabled", apply_phy}, {"speed", apply_phy},
+  {"flow_control", apply_phy}, {"eee", apply_phy},
+  {"storm_control", apply_storm}, {"vlan", apply_vlan},
+  {"stp", apply_stp}, {"poe", apply_poe},
+};
 
-// --- generic read/apply loops ---
-
-struct json_object *click_read_ports(void) {
-  struct json_object *jobj = json_object_new_object();
-  struct json_object *jports = json_object_new_object();
-  json_object_object_add(jobj, "ports", jports);
-
-  FILE *pports = fopen(PORTS_FILE, "r");
-  if (!pports) return jobj;
-
-  char line[256];
-  char buffer[256];
-  int p = -1;
-  while (fgets(line, sizeof(line), pports)) {
-    p++;
-    if (p == 0) continue; // skip header
-
-    struct json_object *jport = json_object_new_object();
-    json_object_object_add(jports, itoa(p, buffer, 10), jport);
-
-    for (int i = 0; i < port_field_count; i++) {
-      if (port_fields[i].requires_poe && !poe_capable) continue;
-      if (!port_fields[i].read) continue;
-      json_object_object_add(jport, port_fields[i].key,
-                             port_fields[i].read(p));
-    }
-  }
-
-  fclose(pports);
-  return jobj;
-}
-
-int click_apply_ports(struct json_object *config) {
-  struct json_object *ports;
-  if (!json_object_object_get_ex(config, "ports", &ports)) return 0;
-
-  json_object_object_foreach(ports, port_str, port_config) {
-    int port = atoi(port_str);
-    for (int i = 0; i < port_field_count; i++) {
-      if (port_fields[i].requires_poe && !poe_capable) continue;
-      if (!port_fields[i].apply) continue;
-      struct json_object *val;
-      if (!json_object_object_get_ex(port_config, port_fields[i].key, &val))
-        continue;
-      port_fields[i].apply(port, port_config);
-    }
+static int apply_port_fields(unsigned int port,
+                             struct json_object *full_port,
+                             struct json_object *changed_port,
+                             struct apply_result *result) {
+  apply_fn applied[8] = {0};
+  size_t applied_count = 0;
+  for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+    struct json_object *changed;
+    if (changed_port &&
+        !json_object_object_get_ex(changed_port, fields[i].key, &changed))
+      continue;
+    bool duplicate = false;
+    for (size_t j = 0; j < applied_count; j++)
+      if (applied[j] == fields[i].apply) duplicate = true;
+    if (duplicate) continue;
+    fields[i].apply(port, full_port, result);
+    applied[applied_count++] = fields[i].apply;
   }
   return 0;
+}
+
+static int apply_ports(struct json_object *full_config,
+                       struct json_object *delta,
+                       struct apply_result *result) {
+  struct json_object *full_ports = NULL;
+  if (!json_object_object_get_ex(full_config, "ports", &full_ports)) return 0;
+  struct json_object *changed_ports = NULL;
+  if (delta && !json_object_object_get_ex(delta, "ports", &changed_ports))
+    return 0;
+
+  struct json_object *iterate = delta ? changed_ports : full_ports;
+  json_object_object_foreach(iterate, key, changed_port) {
+    struct json_object *full_port = NULL;
+    if (!json_object_object_get_ex(full_ports, key, &full_port)) continue;
+    unsigned int port = (unsigned int)strtoul(key, NULL, 10);
+    apply_port_fields(port, full_port, delta ? changed_port : NULL, result);
+  }
+  return 0;
+}
+
+int click_apply_ports_full(struct json_object *config,
+                           struct apply_result *result) {
+  return apply_ports(config, NULL, result);
+}
+
+int click_apply_ports_delta(struct json_object *full_config,
+                            struct json_object *delta,
+                            struct apply_result *result) {
+  return apply_ports(full_config, delta, result);
 }

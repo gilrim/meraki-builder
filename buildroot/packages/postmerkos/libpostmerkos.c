@@ -1,154 +1,150 @@
 #include "libpostmerkos.h"
 
-#include <stdbool.h>
-#include <stdio.h>
+#include <errno.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-
-// get_time returns the current time in ISO 8601 format
-char* get_time() {
+const char *get_time(void) {
   time_t now = time(NULL);
-  struct tm *time_info = localtime(&now);
-  static char timeString[256];
-  strftime(timeString, sizeof(timeString), "%FT%TZ", time_info);
-  return timeString;
-}
+  struct tm tm_now;
+  static char buffer[32];
 
-
-// starts_with returns true if STR starts with PREFIX
-bool starts_with(const char *str, const char *prefix) {
-  if (!str || !prefix)
-    return 0;
-  size_t lenstr = strlen(str);
-  size_t lenprefix = strlen(prefix);
-  if (lenprefix > lenstr)
-    return 0;
-  return strncmp(prefix, str, lenprefix) == 0;
-}
-
-// ends_with returns true-ish if STR ends with SUFFIX
-bool ends_with(const char *str, const char *suffix) {
-  if (!str || !suffix)
-    return 0;
-  size_t lenstr = strlen(str);
-  size_t lensuffix = strlen(suffix);
-  if (lensuffix > lenstr)
-    return 0;
-  return strncmp(str + lenstr - lensuffix, suffix, lensuffix) == 0;
-}
-
-// itoa converts NUM, in BASE, of max size BUFFER to string
-char* itoa(int num, char *buffer, int base) {
-  int current = 0;
-  if (num == 0) {
-    buffer[current++] = '0';
-    buffer[current] = '\0';
+  if (!gmtime_r(&now, &tm_now)) {
+    snprintf(buffer, sizeof(buffer), "1970-01-01T00:00:00Z");
     return buffer;
   }
-  int num_digits = 0;
-  if (num < 0) {
-    if (base == 10) {
-      num_digits++;
-      buffer[current] = '-';
-      current++;
-      num *= -1;
-    } else
-      return NULL;
-  }
-  num_digits += (int)floor(log(num) / log(base)) + 1;
-  while (current < num_digits) {
-    int base_val = (int)pow(base, num_digits - 1 - current);
-    int num_val = num / base_val;
-    char value = num_val + '0';
-    buffer[current] = value;
-    current++;
-    num -= base_val * num_val;
-  }
-  buffer[current] = '\0';
+  strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &tm_now);
   return buffer;
 }
 
-// get_field gets field NUM from space-delimited LINE
-const char* get_field(char *line, int num) {
-  const char *tok;
-  char linecopy[256];
-  strcpy(linecopy, line);
-  for (tok = strtok(linecopy, " "); tok && *tok; tok = strtok(NULL, " \n")) {
-    if (!--num)
-      return tok;
+bool starts_with(const char *str, const char *prefix) {
+  if (!str || !prefix) return false;
+  size_t prefix_len = strlen(prefix);
+  return strlen(str) >= prefix_len && strncmp(str, prefix, prefix_len) == 0;
+}
+
+bool ends_with(const char *str, const char *suffix) {
+  if (!str || !suffix) return false;
+  size_t str_len = strlen(str);
+  size_t suffix_len = strlen(suffix);
+  return str_len >= suffix_len &&
+         strcmp(str + str_len - suffix_len, suffix) == 0;
+}
+
+char *itoa(int num, char *buffer, int base) {
+  if (!buffer || base < 2 || base > 10) return NULL;
+  if (base == 10) {
+    snprintf(buffer, 32, "%d", num);
+    return buffer;
   }
-  return NULL;
+
+  unsigned int value = num < 0 ? (unsigned int)(-num) : (unsigned int)num;
+  char tmp[34];
+  size_t pos = 0;
+  do {
+    tmp[pos++] = (char)('0' + value % (unsigned int)base);
+    value /= (unsigned int)base;
+  } while (value && pos < sizeof(tmp) - 1);
+  if (num < 0) tmp[pos++] = '-';
+
+  for (size_t i = 0; i < pos; i++) buffer[i] = tmp[pos - i - 1];
+  buffer[pos] = '\0';
+  return buffer;
 }
 
-// write str to filename under /click/switch_port_table
-void write_switch_port_table(char* filename, char* str) {
-    char* dir = "/click/switch_port_table/";
-    char* path = malloc(strlen(dir)+strlen(filename));
-    strcpy(path, dir);
-    strcat(path, filename);
-    FILE *file = fopen(path, "w");
-    if (file == NULL) {
-      printf("error: cannot open file: %s\n", path);
-      exit(1);
-    }
-    free(path);
+int get_field_copy(const char *line, unsigned int field,
+                   char *output, size_t output_size) {
+  if (!line || !field || !output || output_size == 0) return -EINVAL;
 
-    fprintf(file, str);
+  const char *cursor = line;
+  unsigned int current = 0;
+  while (*cursor) {
+    while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' ||
+           *cursor == '\n') cursor++;
+    if (!*cursor) break;
+
+    const char *start = cursor;
+    while (*cursor && *cursor != ' ' && *cursor != '\t' &&
+           *cursor != '\r' && *cursor != '\n') cursor++;
+    current++;
+    if (current == field) {
+      size_t len = (size_t)(cursor - start);
+      if (len + 1 > output_size) return -ENOSPC;
+      memcpy(output, start, len);
+      output[len] = '\0';
+      return 0;
+    }
+  }
+  return -ENOENT;
+}
+
+int click_write(const char *path, const char *value) {
+  if (!path || !value) return -EINVAL;
+  FILE *file = fopen(path, "w");
+  if (!file) return -errno;
+
+  int rc = 0;
+  if (fprintf(file, "%s", value) < 0 || fflush(file) != 0) rc = -EIO;
+  if (fclose(file) != 0 && rc == 0) rc = -EIO;
+  return rc;
+}
+
+int click_read(const char *path, char *buffer, size_t buffer_size) {
+  if (!path || !buffer || buffer_size == 0) return -EINVAL;
+  FILE *file = fopen(path, "r");
+  if (!file) return -errno;
+
+  if (!fgets(buffer, (int)buffer_size, file)) {
+    int rc = ferror(file) ? -EIO : -ENODATA;
     fclose(file);
+    return rc;
+  }
+  fclose(file);
+  buffer[strcspn(buffer, "\r\n")] = '\0';
+  return 0;
 }
 
-// write str to an arbitrary click path
-void click_write(const char *path, const char *str) {
-    FILE *file = fopen(path, "w");
-    if (file == NULL) {
-      printf("error: cannot open file: %s\n", path);
-      return;
-    }
-    fprintf(file, "%s", str);
-    fclose(file);
+static int switch_port_path(const char *handler, char *path, size_t path_size) {
+  if (!handler || !path || path_size == 0) return -EINVAL;
+  int len = snprintf(path, path_size, "/click/switch_port_table/%s", handler);
+  if (len < 0 || (size_t)len >= path_size) return -ENAMETOOLONG;
+  return 0;
 }
 
-// read first line from an arbitrary click path; returns buf or NULL
-char *click_read(const char *path, char *buf, int bufsize) {
-    FILE *file = fopen(path, "r");
-    if (file == NULL) {
-      return NULL;
-    }
-    if (!fgets(buf, bufsize, file)) {
-      fclose(file);
-      return NULL;
-    }
-    fclose(file);
-    return buf;
+int write_switch_port_table(const char *handler, const char *value) {
+  char path[256];
+  int rc = switch_port_path(handler, path, sizeof(path));
+  return rc == 0 ? click_write(path, value) : rc;
 }
 
-// read port line from filename under /click/switch_port_table
-char* read_switch_port_table(char* filename, int port) {
-    char* dir = "/click/switch_port_table/";
-    char* path = malloc(strlen(dir)+strlen(filename));
-    strcpy(path, dir);
-    strcat(path, filename);
-    FILE *file = fopen(path, "r");
-    if (file == NULL) {
-      printf("error: cannot open file: %s\n", path);
-      exit(1);
-    }
-    free(path);
+int read_switch_port_table(const char *handler, unsigned int port,
+                           char *buffer, size_t buffer_size) {
+  char path[256];
+  int rc = switch_port_path(handler, path, sizeof(path));
+  if (rc != 0) return rc;
 
-    char* line = malloc (sizeof(char) * 256);
+  FILE *file = fopen(path, "r");
+  if (!file) return -errno;
 
-    int p = -1;
-    while (fgets(line, 256, file)) {
-      p++;
-
-      if (p == port) {
-        break;
+  char line[512];
+  unsigned int row = 0;
+  bool found = false;
+  while (fgets(line, sizeof(line), file)) {
+    if (row++ == port) {
+      size_t len = strcspn(line, "\r\n");
+      if (len + 1 > buffer_size) {
+        fclose(file);
+        return -ENOSPC;
       }
+      memcpy(buffer, line, len);
+      buffer[len] = '\0';
+      found = true;
+      break;
     }
-
-    fclose(file);
-    return line;
+  }
+  fclose(file);
+  return found ? 0 : -ENOENT;
 }

@@ -204,38 +204,59 @@ start() {
     # consider removing mtun
     echo -e "gateway_check 0" > /click/mtun_client_state/update_node_state
     echo -e "gateway_good 0" > /click/mtun_client_state/update_node_state
-    MY_IP=$(cat /click/uplinkstate/dhcpc_state_for_brain | grep ip= | awk -F'=' '{print $2}')
-    TRIES=0
-    echo -n "Waiting for IP address"
-    while [ "$MY_IP" == "" ]; do
-      echo -n "."
-      sleep 1
-      MY_IP=$(cat /click/uplinkstate/dhcpc_state_for_brain | grep ip= | awk -F'=' '{print $2}')
-      SUBNET=$(cat /click/uplinkstate/dhcpc_state_for_brain | grep subnet= | awk -F'=' '{print $2}')
-      GATEWAY=$(cat /click/uplinkstate/dhcpc_state_for_brain | grep router= | awk -F'=' '{print $2}')
-      BROADCAST=$(cat /click/uplinkstate/dhcpc_state_for_brain | grep broadcast= | awk -F'=' '{print $2}')
-      TRIES=$((TRIES+1))
-      if [ $TRIES -gt 60 ]; then
-        # we failed to DHCP after 60 seconds, set some sane defaults
-        MY_IP=169.254.0.10
-	SUBNET=169.254.0.0
-	GATEWAY=169.254.0.1
-	BROADCAST=169.254.255.255
-        break
+    # configd is the authoritative management-IP owner when installed. Its
+    # bootstrap mode restores a persistent static address immediately, or
+    # applies the current DHCP lease/fallback address without blocking boot.
+    CONFIGD_OWNS_NETWORK=0
+    if [ -x /bin/configd ]; then
+      if /bin/configd -N -c /etc/switch.json; then
+        CONFIGD_OWNS_NETWORK=1
+      else
+        echo "configd network bootstrap failed; using legacy DHCP bootstrap"
       fi
-    done
-    echo
-    echo "Using IP address: $MY_IP"
-    echo -e "$MY_IP $SUBNET $GATEWAY 1500 $BROADCAST 1" > /click/set_host_ip/run
+    fi
+
+    if [ "$CONFIGD_OWNS_NETWORK" -eq 0 ]; then
+      MY_IP=$(awk -F= '/^ip=/{print $2; exit}' /click/uplinkstate/dhcpc_state_for_brain 2>/dev/null)
+      PREFIX=$(awk -F= '/^subnet=/{print $2; exit}' /click/uplinkstate/dhcpc_state_for_brain 2>/dev/null)
+      GATEWAY=$(awk -F= '/^router=/{print $2; exit}' /click/uplinkstate/dhcpc_state_for_brain 2>/dev/null)
+      BROADCAST=$(awk -F= '/^broadcast=/{print $2; exit}' /click/uplinkstate/dhcpc_state_for_brain 2>/dev/null)
+      TRIES=0
+      echo -n "Waiting for IP address"
+      while [ -z "$MY_IP" ]; do
+        echo -n "."
+        sleep 1
+        MY_IP=$(awk -F= '/^ip=/{print $2; exit}' /click/uplinkstate/dhcpc_state_for_brain 2>/dev/null)
+        PREFIX=$(awk -F= '/^subnet=/{print $2; exit}' /click/uplinkstate/dhcpc_state_for_brain 2>/dev/null)
+        GATEWAY=$(awk -F= '/^router=/{print $2; exit}' /click/uplinkstate/dhcpc_state_for_brain 2>/dev/null)
+        BROADCAST=$(awk -F= '/^broadcast=/{print $2; exit}' /click/uplinkstate/dhcpc_state_for_brain 2>/dev/null)
+        TRIES=$((TRIES+1))
+        if [ "$TRIES" -gt 60 ]; then
+          MY_IP=169.254.0.10
+          PREFIX=16
+          GATEWAY=169.254.0.1
+          BROADCAST=169.254.255.255
+          break
+        fi
+      done
+      [ -n "$PREFIX" ] || PREFIX=24
+      [ -n "$GATEWAY" ] || GATEWAY=0.0.0.0
+      [ -n "$BROADCAST" ] || BROADCAST=255.255.255.255
+      echo
+      echo "Using IP address: $MY_IP/$PREFIX"
+      echo -e "$MY_IP $PREFIX $GATEWAY 1500 $BROADCAST 1" > /click/set_host_ip/run
+    fi
     echo -e "fe80::8a15:44ff:fe23:1115 :: 0 :: 1500 0" > /click/set_host_ip6/run
     # consider removing mtun
     echo -e "0" > /click/mtun_client_state/static_ip_failover
     echo -e "0" > /click/mtun_client_state/dhcp_vlan_failover
-    echo -e "true" > /click/switch_port_table/have_network_connection
+    if [ "$CONFIGD_OWNS_NETWORK" -eq 0 ]; then
+      echo -e "true" > /click/switch_port_table/have_network_connection
+      echo -e "$MY_IP" > /click/syslog_event_log/src_ip
+      echo -e "$GATEWAY" > /click/wan0_resolver/dst
+    fi
     echo -e "route_ip 1.1.2.2" > /click/set_alt_conf/set
     echo -e "0" > /click/syslog_mgmt_vid_check/switch
-    echo -e "$MY_IP" > /click/syslog_event_log/src_ip
-    echo -e "$GATEWAY" > /click/wan0_resolver/dst
     # change to true to enable WAN pinger
     echo -e "false" > /click/wan0_pinger/active
     echo -e "true" > /click/wan0_pinger/reset

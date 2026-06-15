@@ -1,5 +1,5 @@
-#ifndef STATUS_H
-#define STATUS_H
+#ifndef CONFIGD_STATUS_H
+#define CONFIGD_STATUS_H
 
 #include <json-c/json.h>
 

@@ -156,15 +156,12 @@ int i2c_read(int i2c_fd, unsigned char slave_addr, unsigned int reg, unsigned in
 }
 
 unsigned char get_pd690xx_addr(struct pd690xx_cfg *pd690xx, int port) {
-    // check the port number AND verify that the pd690xx is present
-    // on the bus before returning the address
-    if (port > 0) {
-        port = port-1;
+    // Ports are one-based. Reject non-existent controllers before indexing.
+    if (!pd690xx || port < 1 || port > MAX_PD690XX_COUNT * 12) {
+        return 0;
     }
-    int select = abs(port/12);
-    // shouldn't have more than 4 (MAX_PD690XX_COUNT) pd690xx in the switch
-    // port number is too high
-    if (select > MAX_PD690XX_COUNT) {
+    int select = (port - 1) / 12;
+    if (select < 0 || select >= MAX_PD690XX_COUNT) {
         return 0;
     }
     switch(pd690xx->pd690xx_pres[select]) {
@@ -373,7 +370,10 @@ int port_type(struct pd690xx_cfg *pd690xx, int port) {
         return -1;
     }
     int i2c_fd = pd690xx_fd(pd690xx, port);
-    i2c_read(i2c_fd, pd_addr, port_base_addr(PORT_CONFIG, port), &res);
+    if (i2c_fd < 0 ||
+        i2c_read(i2c_fd, pd_addr, port_base_addr(PORT_CONFIG, port), &res) != 0) {
+        return -1;
+    }
     port_mode = (res & 0x30) >> 4;
     if (DEBUG) {
         switch(port_mode) {
@@ -388,6 +388,29 @@ int port_type(struct pd690xx_cfg *pd690xx, int port) {
         }
     }
     return port_mode;
+}
+
+
+int port_set_type(struct pd690xx_cfg *pd690xx, int port, int mode) {
+    if (mode != PORT_MODE_AF && mode != PORT_MODE_AT) {
+        return -1;
+    }
+    unsigned char pd_addr = get_pd690xx_addr(pd690xx, port);
+    if (pd_addr == 0) {
+        return -1;
+    }
+    unsigned int reg = 0;
+    unsigned int port_addr = port_base_addr(PORT_CONFIG, port);
+    int i2c_fd = pd690xx_fd(pd690xx, port);
+    if (i2c_read(i2c_fd, pd_addr, port_addr, &reg) != 0) {
+        return -1;
+    }
+    unsigned int updated = (reg & ~0x30U) | ((unsigned int)mode << 4);
+    if (i2c_write(i2c_fd, pd_addr, port_addr, updated) != 0) {
+        return -1;
+    }
+    usleep(100000);
+    return port_type(pd690xx, port) == mode ? 0 : -1;
 }
 
 const char *port_type_str(struct pd690xx_cfg *pd690xx, int port) {

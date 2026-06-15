@@ -769,3 +769,15 @@ publication, and first-hardware-test procedures. Firmware checksum sidecars are
 generated from the artifact directory so they contain only the image basename,
 which is required by the updater's strict sidecar parser.
 
+
+---
+
+# Switch configuration and Click documentation
+
+The current `configd` implementation, CLI/WebSocket protocol, DHCP/static management networking, hardware capability model, PoE handling, and per-module notes are documented at:
+
+- [`buildroot/packages/configd/README.md`](buildroot/packages/configd/README.md)
+- [`buildroot/packages/configd/docs/modules/README.md`](buildroot/packages/configd/docs/modules/README.md)
+- [`docs/CLICK-GRAPH.md`](docs/CLICK-GRAPH.md)
+- [`buildroot/packages/pd690xx/README.md`](buildroot/packages/pd690xx/README.md)
+- [`buildroot/packages/postmerkos/README.md`](buildroot/packages/postmerkos/README.md)

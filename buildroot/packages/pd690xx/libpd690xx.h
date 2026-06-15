@@ -87,6 +87,7 @@ int port_force(struct pd690xx_cfg *pd690xx, int);
 int port_state(struct pd690xx_cfg *pd690xx, int);
 char* port_state_str(struct pd690xx_cfg *pd690xx, int);
 int port_type(struct pd690xx_cfg *pd690xx, int);
+int port_set_type(struct pd690xx_cfg *pd690xx, int, int);
 const char *port_type_str(struct pd690xx_cfg *pd690xx, int);
 int get_power(struct pd690xx_cfg *pd690xx, int);
 int get_voltage(struct pd690xx_cfg *pd690xx);
