@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/common.sh"
 
-required=(bash git make tar xz rsync python3 sha256sum readelf unsquashfs mkfs.jffs2)
+required=(bash git make tar xz rsync python3 sha256sum readelf unsquashfs mkfs.jffs2 file)
 optional=(curl wget distrobox podman node npm)
 failed=0
 

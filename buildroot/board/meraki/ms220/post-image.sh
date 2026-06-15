@@ -66,5 +66,5 @@ cat "$MS42P_LOADER" "$WORK/kernel.region" "$WORK/rootfs.region" \
 
 cp -f "$WORK/boot1-header.bin" "$WORK/kernel.region" "$WORK/rootfs.region" \
     "$WORK/overlay.region" "$BINARIES_DIR/"
-sha256sum "$OUTPUT" > "$OUTPUT.sha256"
+(cd "$BINARIES_DIR" && sha256sum "$(basename "$OUTPUT")" > "$(basename "$OUTPUT").sha256")
 printf 'Generated %s\n' "$OUTPUT"

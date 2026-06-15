@@ -2,16 +2,69 @@
 source "$(dirname "$0")/common.sh"
 load_build_state
 
+# Keep Buildroot host tools in the same supported Ubuntu environment as the
+# legacy kernel toolchain.  This also protects direct `make rootfs` invocations
+# that do not pass through build-all.sh.
+if [[ "${MS42P_IN_DISTROBOX:-0}" != 1 ]] && ! bool_enabled "${ALLOW_UNSUPPORTED_HOST_BUILD:-0}"; then
+  if bool_enabled "${USE_DISTROBOX:-0}"; then
+    exec "$SCRIPT_DIR/distrobox-run.sh" env \
+      INCLUDE_UI="${INCLUDE_UI:-0}" \
+      CLEAN_BUILDROOT="${CLEAN_BUILDROOT:-0}" \
+      ./scripts/build-rootfs.sh
+  elif command -v pacman >/dev/null 2>&1 && command -v distrobox >/dev/null 2>&1; then
+    if ask_yes_no "Build the root filesystem in Ubuntu 22.04 Distrobox?" yes; then
+      exec "$SCRIPT_DIR/distrobox-run.sh" env \
+        INCLUDE_UI="${INCLUDE_UI:-0}" \
+        CLEAN_BUILDROOT="${CLEAN_BUILDROOT:-0}" \
+        ./scripts/build-rootfs.sh
+    fi
+    warn "Continuing with the unsupported Arch/CachyOS host compiler."
+  fi
+fi
+
 [[ -f "$BUILDROOT_DIR/.config" ]] || die "Buildroot is not prepared. Run make prepare first."
 [[ -f "$KERNEL_ARTIFACT_DIR/vmlinuz" ]] || die "Missing kernel ELF"
 [[ -f "$KERNEL_ARTIFACT_DIR/vmlinuz.bin" ]] || die "Missing compressed kernel binary"
 [[ -f "$LOADER_ARTIFACT" ]] || die "Missing RedBoot loader"
 
 cd "$BUILDROOT_DIR"
-if bool_enabled "${CLEAN_BUILDROOT:-0}"; then
+
+# Buildroot compiles a substantial set of host utilities.  Reusing output made
+# by another distribution/compiler is unsafe.  Track the environment and clean
+# automatically when it changes.  An existing untracked output tree is cleaned
+# once, which also recovers from the GCC 16 host-binutils failure.
+env_stamp="$BUILDROOT_DIR/.ms42p-build-environment"
+os_id="unknown"
+os_version="unknown"
+if [[ -r /etc/os-release ]]; then
+  # shellcheck disable=SC1091
+  source /etc/os-release
+  os_id="${ID:-unknown}"
+  os_version="${VERSION_ID:-unknown}"
+fi
+host_cc="$(gcc -dumpfullversion -dumpversion 2>/dev/null || printf unknown)"
+if [[ "${MS42P_IN_DISTROBOX:-0}" == 1 ]]; then
+  current_env="distrobox:${DISTROBOX_IMAGE}:${os_id}:${os_version}:gcc-${host_cc}"
+else
+  current_env="host:${os_id}:${os_version}:gcc-${host_cc}"
+fi
+
+need_environment_clean=0
+if [[ -d output/build ]]; then
+  if [[ ! -f "$env_stamp" ]]; then
+    warn "Existing Buildroot output has no build-environment stamp; cleaning it before reuse."
+    need_environment_clean=1
+  elif [[ "$(cat "$env_stamp")" != "$current_env" ]]; then
+    warn "Buildroot environment changed from '$(cat "$env_stamp")' to '$current_env'; cleaning output."
+    need_environment_clean=1
+  fi
+fi
+
+if bool_enabled "${CLEAN_BUILDROOT:-0}" || (( need_environment_clean )); then
   log "Cleaning Buildroot output while preserving the download cache"
   make clean
 fi
+printf '%s\n' "$current_env" > "$env_stamp"
 
 log "Prefetching Buildroot sources"
 run_logged buildroot-download \
@@ -40,8 +93,8 @@ if bool_enabled "${INCLUDE_UI:-0}"; then
 fi
 cp -f "$IMAGE" "$ARTIFACTS_DIR/$name"
 cp -f "$ROOTFS" "$ARTIFACTS_DIR/rootfs.squashfs"
-sha256sum "$ARTIFACTS_DIR/$name" > "$ARTIFACTS_DIR/$name.sha256"
-sha256sum "$ARTIFACTS_DIR/rootfs.squashfs" > "$ARTIFACTS_DIR/rootfs.squashfs.sha256"
+write_sha256_sidecar "$ARTIFACTS_DIR/$name"
+write_sha256_sidecar "$ARTIFACTS_DIR/rootfs.squashfs"
 printf '%s\n' "$ARTIFACTS_DIR/$name" > "$ARTIFACTS_DIR/latest-image.txt"
 touch "$STAMP_DIR/rootfs-built"
 log "Created $ARTIFACTS_DIR/$name"
