@@ -1,0 +1,48 @@
+#!/bin/sh
+
+DAEMON=/bin/configd
+PIDFILE=/var/run/configd.pid
+LOGFILE=/tmp/configd.log
+CONFIG=/etc/switch.json
+
+start() {
+    printf 'Starting configd: '
+    [ -x "$DAEMON" ] || { echo 'FAIL (missing /bin/configd)'; return 1; }
+    [ -d /click ] || { echo 'FAIL (/click is unavailable)'; return 1; }
+    [ -e "$CONFIG" ] && [ ! -s "$CONFIG" ] && rm -f "$CONFIG"
+    : >"$LOGFILE"
+    rm -f "$PIDFILE"
+    start-stop-daemon -S -q -b -m -p "$PIDFILE" -x "$DAEMON" -- \
+        -c "$CONFIG" -w 4001 -p 3 >>"$LOGFILE" 2>&1
+    rc=$?
+    [ "$rc" -eq 0 ] || { echo FAIL; cat "$LOGFILE"; return "$rc"; }
+    sleep 2
+    if [ ! -s "$PIDFILE" ] || ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo 'FAIL (configd exited during startup)'
+        cat "$LOGFILE"
+        rm -f "$PIDFILE"
+        return 1
+    fi
+    echo OK
+}
+
+stop() {
+    printf 'Stopping configd: '
+    if [ ! -s "$PIDFILE" ]; then
+        echo 'not running'
+        return 0
+    fi
+    start-stop-daemon -K -q -p "$PIDFILE" -x "$DAEMON"
+    rc=$?
+    rm -f "$PIDFILE"
+    [ "$rc" -eq 0 ] && echo OK || echo FAIL
+    return "$rc"
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart|reload) stop; sleep 1; start ;;
+    status) [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null ;;
+    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac

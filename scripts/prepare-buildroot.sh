@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+source "$(dirname "$0")/common.sh"
+load_build_state
+for cmd in tar rsync python3 patch make; do need "$cmd"; done
+
+[[ -f "$KERNEL_HEADERS_TARBALL" ]] || die "Kernel headers are missing. Run make kernel first."
+[[ -d "$SWITCH_DIR/.git" ]] || die "Kernel/OpenWrt source checkout is missing. Run make sources first."
+[[ -d "$DONOR_ROOT/lib/modules" ]] || die "Donor modules are missing. Run make donor first."
+[[ -f "$LOADER_ARTIFACT" ]] || die "RedBoot loader is missing. Run make donor first."
+
+"$SCRIPT_DIR/verify-inputs.sh"
+
+if [[ ! -f "$BUILDROOT_ARCHIVE" ]]; then
+  if bool_enabled "${AUTO_DOWNLOAD_BUILDROOT:-0}" || ask_yes_no "Buildroot $BUILDROOT_VERSION is missing. Download it now?" yes; then
+    download_file "https://buildroot.org/downloads/buildroot-$BUILDROOT_VERSION.tar.xz" "$BUILDROOT_ARCHIVE"
+  else
+    die "Buildroot archive is required."
+  fi
+fi
+
+if [[ ! -d "$BUILDROOT_DIR" ]]; then
+  log "Extracting Buildroot $BUILDROOT_VERSION"
+  mkdir -p "$BUILD_DIR"
+  tar -C "$BUILD_DIR" -xJf "$BUILDROOT_ARCHIVE"
+fi
+
+log "Synchronizing this repository's MS42P board integration"
+rm -rf "$BUILDROOT_DIR/board/meraki"
+mkdir -p "$BUILDROOT_DIR/board"
+rsync -a "$REPO_ROOT/buildroot/board/meraki/" "$BUILDROOT_DIR/board/meraki/"
+
+log "Synchronizing custom Buildroot packages"
+# Remove package names used by earlier versions of this workflow so an existing
+# Buildroot work tree cannot retain stale recipes after a rename.
+rm -rf "$BUILDROOT_DIR/package/clickswstatus" "$BUILDROOT_DIR/package/find_hdr"
+for src in "$REPO_ROOT"/buildroot/packages/*; do
+  [[ -d "$src" ]] || continue
+  name="$(basename "$src")"
+  rm -rf "$BUILDROOT_DIR/package/$name"
+  rsync -a "$src/" "$BUILDROOT_DIR/package/$name/"
+done
+cp -f "$REPO_ROOT/buildroot/packages/Config.in" "$BUILDROOT_DIR/package/Config.in.ms42p"
+
+python3 - "$BUILDROOT_DIR/package/Config.in" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+s = p.read_text()
+# Remove direct source entries installed by historical line-number patches.
+legacy = {
+    'source "package/click/Config.in"',
+    'source "package/clickswstatus/Config.in"',
+    'source "package/status/Config.in"',
+    'source "package/configd/Config.in"',
+    'source "package/find_hdr/Config.in"',
+    'source "package/findhdr/Config.in"',
+    'source "package/pd690xx/Config.in"',
+    'source "package/Config.in.ms42p"',
+}
+s = '\n'.join(line for line in s.splitlines() if line.strip() not in legacy) + '\n'
+start = '# BEGIN MS42P CUSTOM PACKAGES'
+end = '# END MS42P CUSTOM PACKAGES'
+block = f'{start}\nsource "package/Config.in.ms42p"\n{end}\n'
+if start in s:
+    before, rest = s.split(start, 1)
+    _, after = rest.split(end, 1)
+    s = before + block + after.lstrip('\n')
+else:
+    pos = s.rfind('endmenu')
+    if pos < 0:
+        raise SystemExit('Could not locate final endmenu in package/Config.in')
+    s = s[:pos] + block + s[pos:]
+p.write_text(s)
+PY
+
+# Apply repository-maintained Buildroot patches without depending on line numbers
+# in package/Config.in. The package registration patches were intentionally removed.
+for patch_file in "$REPO_ROOT"/buildroot/patches/*.patch; do
+  [[ -f "$patch_file" ]] || continue
+  if patch --dry-run -N -p0 -d "$BUILDROOT_DIR" < "$patch_file" >/dev/null 2>&1; then
+    patch -N -p0 -d "$BUILDROOT_DIR" < "$patch_file"
+  elif patch --dry-run -R -p0 -d "$BUILDROOT_DIR" < "$patch_file" >/dev/null 2>&1; then
+    log "Patch already applied: $(basename "$patch_file")"
+  else
+    die "Patch does not apply cleanly: $patch_file"
+  fi
+done
+
+log "Constructing generated binary overlay"
+rm -rf "$GENERATED_OVERLAY"
+mkdir -p "$GENERATED_OVERLAY/lib/modules"
+rsync -a --delete "$DONOR_ROOT/lib/modules/" "$GENERATED_OVERLAY/lib/modules/"
+
+case "${DONOR_ETC_POLICY:-modules}" in
+  modules|none)
+    ;;
+  missing|fallback)
+    [[ -d "$DONOR_ROOT/etc" ]] || die "Donor /etc is unavailable"
+    mkdir -p "$GENERATED_OVERLAY/etc"
+    rsync -a --no-links "$DONOR_ROOT/etc/" "$GENERATED_OVERLAY/etc/"
+    ;;
+  *) die "DONOR_ETC_POLICY must be modules or missing" ;;
+esac
+
+INCLUDE_UI_VALUE=0
+if bool_enabled "${INCLUDE_UI:-0}"; then
+  INCLUDE_UI_VALUE=1
+  [[ -f "$BUILD_DIR/postmerkos-ui/index.html" ]] || die "UI output is missing. Run make ui first."
+  mkdir -p "$GENERATED_OVERLAY/www"
+  rsync -a --delete "$BUILD_DIR/postmerkos-ui/" "$GENERATED_OVERLAY/www/"
+  rsync -a "$REPO_ROOT/buildroot/features/web-overlay/" "$GENERATED_OVERLAY/"
+  find "$GENERATED_OVERLAY/www" -type d -exec chmod 0755 {} +
+  find "$GENERATED_OVERLAY/www" -type f -exec chmod 0644 {} +
+fi
+
+CONFIG="$BUILDROOT_DIR/.config"
+cp -f "$BUILDROOT_DIR/board/meraki/ms220/buildroot-config" "$CONFIG"
+python3 - "$CONFIG" "$KERNEL_HEADERS_TARBALL" "$GENERATED_OVERLAY" \
+  "$INCLUDE_UI_VALUE" "${INCLUDE_CLICKSWSTATUS:-0}" <<'PY'
+from pathlib import Path
+import re, sys
+p = Path(sys.argv[1])
+headers = Path(sys.argv[2]).resolve()
+generated = Path(sys.argv[3]).resolve()
+include_ui = sys.argv[4] == '1'
+include_status = sys.argv[5].lower() in {'1','y','yes','true','on','enabled'}
+s = p.read_text()
+
+def set_string(key, value):
+    global s
+    line = f'{key}="{value}"'
+    pat = rf'^(?:{re.escape(key)}=.*|# {re.escape(key)} is not set)$'
+    if re.search(pat, s, flags=re.M):
+        s = re.sub(pat, line, s, flags=re.M)
+    else:
+        s = s.rstrip() + '\n' + line + '\n'
+
+def set_bool(key, enabled):
+    global s
+    line = f'{key}=y' if enabled else f'# {key} is not set'
+    pat = rf'^(?:{re.escape(key)}=.*|# {re.escape(key)} is not set)$'
+    if re.search(pat, s, flags=re.M):
+        s = re.sub(pat, line, s, flags=re.M)
+    else:
+        s = s.rstrip() + '\n' + line + '\n'
+
+set_string('BR2_KERNEL_HEADERS_CUSTOM_TARBALL_LOCATION', f'file://{headers}')
+set_string('BR2_PRIMARY_SITE', 'https://sources.buildroot.net')
+set_string('BR2_ROOTFS_OVERLAY', f'{generated} board/meraki/ms220/overlay')
+set_string('BR2_ROOTFS_POST_BUILD_SCRIPT', 'board/meraki/ms220/post-build.sh')
+set_string('BR2_ROOTFS_POST_FAKEROOT_SCRIPT', '')
+set_string('BR2_ROOTFS_POST_IMAGE_SCRIPT', 'board/meraki/ms220/post-image.sh')
+set_bool('BR2_PACKAGE_PD690XX', True)
+set_bool('BR2_PACKAGE_CONFIGD', include_ui)
+set_bool('BR2_PACKAGE_UHTTPD', include_ui)
+set_bool('BR2_PACKAGE_STATUS', include_status)
+p.write_text(s)
+PY
+
+(
+  cd "$BUILDROOT_DIR"
+  make olddefconfig
+)
+
+grep -q '^BR2_PACKAGE_PD690XX=y$' "$CONFIG" || die "Buildroot did not retain PD690XX"
+if (( INCLUDE_UI_VALUE )); then
+  grep -q '^BR2_PACKAGE_CONFIGD=y$' "$CONFIG" || die "Buildroot did not retain CONFIGD"
+  grep -q '^BR2_PACKAGE_UHTTPD=y$' "$CONFIG" || die "Buildroot did not retain UHTTPD"
+fi
+
+cat > "$STATE_FILE" <<EOF_STATE
+INCLUDE_UI=$INCLUDE_UI_VALUE
+INCLUDE_CLICKSWSTATUS=${INCLUDE_CLICKSWSTATUS:-0}
+DONOR_ETC_POLICY=${DONOR_ETC_POLICY:-modules}
+EOF_STATE
+
+cat > "$ARTIFACTS_DIR/build-configuration.txt" <<EOF_CONFIG
+repository: $(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'working-tree')
+buildroot: $BUILDROOT_VERSION
+kernel source: $(git -C "$SWITCH_DIR" rev-parse HEAD)
+include UI: $INCLUDE_UI_VALUE
+UI repository: $UI_REPO_URL
+UI ref: $UI_REF
+donor /etc policy: ${DONOR_ETC_POLICY:-modules}
+standalone clickswstatus: ${INCLUDE_CLICKSWSTATUS:-0}
+EOF_CONFIG
+
+touch "$STAMP_DIR/buildroot-prepared"
+log "Buildroot is configured in $BUILDROOT_DIR"

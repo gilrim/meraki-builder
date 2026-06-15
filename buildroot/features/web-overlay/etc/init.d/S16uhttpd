@@ -1,0 +1,39 @@
+#!/bin/sh
+
+DAEMON=/usr/bin/uhttpd
+PIDFILE=/var/run/uhttpd.pid
+WEBROOT=/www
+LOGFILE=/tmp/uhttpd.log
+
+start() {
+    printf 'Starting postmerkOS web interface: '
+    [ -x "$DAEMON" ] || { echo 'FAIL (missing /usr/bin/uhttpd)'; return 1; }
+    [ -f "$WEBROOT/index.html" ] || { echo 'FAIL (missing /www/index.html)'; return 1; }
+    : >"$LOGFILE"
+    rm -f "$PIDFILE"
+    start-stop-daemon -S -q -b -m -p "$PIDFILE" -x "$DAEMON" -- \
+        -f -p 0.0.0.0:80 -h "$WEBROOT" >>"$LOGFILE" 2>&1
+    rc=$?
+    [ "$rc" -eq 0 ] && echo OK || { echo FAIL; cat "$LOGFILE"; }
+    return "$rc"
+}
+
+stop() {
+    printf 'Stopping postmerkOS web interface: '
+    if [ ! -s "$PIDFILE" ]; then
+        echo 'not running'
+        return 0
+    fi
+    start-stop-daemon -K -q -p "$PIDFILE" -x "$DAEMON"
+    rc=$?
+    rm -f "$PIDFILE"
+    [ "$rc" -eq 0 ] && echo OK || echo FAIL
+    return "$rc"
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart|reload) stop; sleep 1; start ;;
+    *) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac
