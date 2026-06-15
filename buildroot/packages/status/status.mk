@@ -1,16 +1,16 @@
 ################################################################################
 #
-# configd
+# status (clickswstatus)
 #
 ################################################################################
 
-CONFIGD_VERSION = 0.1
-CONFIGD_SITE = package/configd
-CONFIGD_SITE_METHOD = local
-CONFIGD_INSTALL_TARGET = YES
-CONFIGD_DEPENDENCIES = json-c libwebsockets pd690xx
+STATUS_VERSION = 0.1
+STATUS_SITE = package/status
+STATUS_SITE_METHOD = local
+STATUS_INSTALL_TARGET = YES
+STATUS_DEPENDENCIES = json-c pd690xx
 
-define CONFIGD_BUILD_CMDS
+define STATUS_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) \
 		CC="$(TARGET_CC)" \
 		CPPFLAGS="$(TARGET_CPPFLAGS)" \
@@ -20,8 +20,8 @@ define CONFIGD_BUILD_CMDS
 		POSTMERKOS_DIR="$(TOPDIR)/package/postmerkos"
 endef
 
-define CONFIGD_INSTALL_TARGET_CMDS
-	$(INSTALL) -D -m 0755 $(@D)/configd $(TARGET_DIR)/bin/configd
+define STATUS_INSTALL_TARGET_CMDS
+	$(INSTALL) -D -m 0755 $(@D)/clickswstatus $(TARGET_DIR)/bin/clickswstatus
 endef
 
 $(eval $(generic-package))
