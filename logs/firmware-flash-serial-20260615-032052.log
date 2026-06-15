@@ -1,0 +1,19 @@
+[serial] opened /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A50285BI-if00-port0 at 115200 baud, 8N1, XON/XOFF
+[serial] press Ctrl+C to stop monitoring
+
+~ # printf '__MFW_SHELL_READY__\n'
+__MFW_SHELL_READY__
+~ # 
+[serial] launching: fw_update_tftp --server 192.168.1.189 --port 1069 --file ms42p-postmerkos-webui-20260615-052954.bin --overlay reset --yes 
+
+fw_update_tftp --server 192.168.1.189 --port 1069 --file ms42p-postmerkos-we
+bui-20260615-052954.bin --overlay reset --yes ; rc=$?; echo __MFW_RC__:$rc
+FWUPDATE|downloading|firmware|8|Downloading ms42p-postmerkos-webui-20260615-052954.bin by TFTP
+FWUPDATE|downloading|checksum|12|Downloading ms42p-postmerkos-webui-20260615-052954.bin.sha256 by TFTP
+FWUPDATE|validating|checksum|5|Validating checksum
+FWUPDATE|validating|platform|10|Checking board and MTD layout
+FWUPDATE|validating|image|15|Validating firmware structure
+FWUPDATE|error|error|100|the SquashFS content already matches the installed firmware; use --force to reinstall
+error: the SquashFS content already matches the installed firmware; use --force to reinstall
+__MFW_RC__:1
+~ # 
