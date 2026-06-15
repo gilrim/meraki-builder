@@ -413,6 +413,7 @@ select_operation() {
     printf '  1) Verify TFTP download, checksum, board, and layout only\n'
     printf '  2) Dry run; prepare the update but do not stop services or write flash\n'
     printf '  3) Flash firmware and reboot\n'
+    printf '  4) Flash firmware and reboot (Force)\n'
     while :; do
         read -r -p 'Select operation [1]: ' choice
         choice=${choice:-1}
@@ -420,6 +421,7 @@ select_operation() {
             1) OPERATION=verify; OPERATION_ARGS=(--verify-only --yes); return ;;
             2) OPERATION=dry-run; OPERATION_ARGS=(--dry-run --yes); return ;;
             3) OPERATION=flash; OPERATION_ARGS=(--yes); return ;;
+            4) OPERATION=flash; OPERATION_ARGS=(--force --yes); return ;;
             *) warn "invalid selection" ;;
         esac
     done
