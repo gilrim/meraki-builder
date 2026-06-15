@@ -1,0 +1,2 @@
+# Store the random seed in the persistent writable JFFS2 partition.
+SEEDRNG_ARGS="--seed-dir=/overlay/seedrng"

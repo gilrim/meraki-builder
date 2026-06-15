@@ -123,7 +123,7 @@ Install orchestration tools with:
 make deps
 ```
 
-The old OpenWrt toolchain and Linux 3.18 build are most reliable inside an Ubuntu 22.04 distrobox. The kernel stage detects Arch/CachyOS and offers to create and use:
+The old OpenWrt toolchain, Linux 3.18 build, and Buildroot 2023.02.4 host tools are most reliable inside an Ubuntu 22.04 distrobox. The complete build detects Arch/CachyOS and offers to create and use:
 
 ```text
 name:  meraki-build
@@ -191,7 +191,7 @@ The build asks whether to include the web interface. It also offers to:
 
 - install missing dependencies;
 - clone the pinned kernel/OpenWrt source;
-- use Ubuntu 22.04 distrobox for the kernel build on CachyOS/Arch;
+- run the complete kernel and Buildroot workflow in Ubuntu 22.04 distrobox on CachyOS/Arch;
 - build missing kernel artifacts;
 - download the known donor firmware when no local donor is present;
 - download Buildroot 2023.02.4 when it is not already cached.
@@ -671,19 +671,18 @@ A full 16 MiB image produced by this build contains an empty JFFS2 filesystem. F
 
 # Troubleshooting
 
-## The old OpenWrt toolchain fails on CachyOS
+## OpenWrt or Buildroot host tools fail on CachyOS
 
-Use:
-
-```bash
-USE_DISTROBOX=1 make kernel
-```
-
-or run the entire workflow with:
+Run the entire workflow in Ubuntu 22.04 Distrobox:
 
 ```bash
-make distrobox
+make clean
+INCLUDE_UI=1 make distrobox
 ```
+
+`make all`, `make base`, and `make web` now offer to enter Distrobox before any build stage on Arch/CachyOS. This is important for Buildroot as well as the legacy kernel: Buildroot 2023.02.4 bundles binutils 2.38, which does not compile cleanly with GCC 16 because `static_assert` is treated as a C keyword.
+
+When changing between host and container builds, the rootfs script records the build environment and automatically cleans incompatible Buildroot output before rebuilding.
 
 ## Buildroot reports missing custom Kconfig symbols
 
@@ -732,3 +731,41 @@ The automated image target does not flash hardware. It only builds and validates
 # Other board targets
 
 The historical Docker and board files for MX80, MX84, and other switch experiments remain in the repository. They have not been integrated into the MS42P top-level Makefile and should be treated as separate workflows.
+
+## Integrated firmware updater
+
+The MS42/MS42P firmware updater is a normal, always-enabled Buildroot package.
+Its repository source is stored under:
+
+```text
+buildroot/packages/fwupdate/
+```
+
+`make prepare` copies it into the extracted Buildroot `package/` tree and the
+shared custom Kconfig menu registers it automatically. The board configuration
+enables both `BR2_PACKAGE_FWUPDATE` and `BR2_PACKAGE_FWUPDATE_CURL`, along with
+shared-plus-static C libraries so the RAM-resident `fwflash` helper can be
+statically linked. No separate stage-15 integration script is required.
+
+The installed commands are:
+
+```text
+fw_update
+fw_update_http
+fw_update_tftp
+fw_update_sftp
+fw_update_status
+```
+
+Host-side syntax, static-link, checksum-sidecar, and repository-index tests can
+be run with:
+
+```bash
+make test-fwupdate
+```
+
+See [`docs/FIRMWARE-UPDATER.md`](docs/FIRMWARE-UPDATER.md) for operation,
+publication, and first-hardware-test procedures. Firmware checksum sidecars are
+generated from the artifact directory so they contain only the image basename,
+which is required by the updater's strict sidecar parser.
+

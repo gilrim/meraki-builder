@@ -5,7 +5,7 @@ JOBS ?= $(shell nproc 2>/dev/null || echo 1)
 export JOBS
 
 .PHONY: help all base web doctor deps sources kernel donor ui prepare rootfs image \
-        validate verify-inputs menuconfig distrobox clean distclean print-config
+        validate verify-inputs test-fwupdate menuconfig distrobox clean distclean print-config
 
 help:
 	@printf '%s\n' \
@@ -24,6 +24,7 @@ help:
 	  '  make prepare      Download/configure Buildroot and generated overlays' \
 	  '  make rootfs       Build SquashFS and the complete 16 MiB NOR image' \
 	  '  make validate     Validate the most recent image and rootfs contents' \
+	  '  make test-fwupdate Run host-side updater syntax and packaging tests' \
 	  '  make menuconfig   Open Buildroot menuconfig after preparation' \
 	  '  make distrobox    Run the complete build in Ubuntu 22.04 distrobox' \
 	  '  make clean        Remove generated Buildroot output, keep downloads' \
@@ -75,6 +76,9 @@ image:
 
 validate:
 	@./scripts/validate-image.sh
+
+test-fwupdate:
+	@./tools/fwupdate-host/host-smoke-test.sh
 
 menuconfig: prepare
 	@bash -c 'source ./scripts/common.sh; $(MAKE) -C "$$BUILDROOT_DIR" menuconfig'
