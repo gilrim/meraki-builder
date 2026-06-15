@@ -1,20 +1,32 @@
-# ignore local binaries
+# Integrated MS42P build workspace and artifacts
+/.work/
+/artifacts/
+
+# Local donor and bootloader inputs
+/inputs/*.bin
+/inputs/*.rom
+/inputs/*.img
+/inputs/*.squashfs
+/inputs/*.ko
+/inputs/SHA256SUMS
+
+# Legacy local binaries
 nor/bin/*
 nor/vmlinux*
 nor/vmlinuz*
 nor/*.bin
 *.ko
 
-# ignore docker build directories
-docker/*/src
-
-# ignore shared libraries
+# Build products
 *.so
 *.o
+
+# Docker build directories
+docker/*/src
 
 # devenv
 .devenv/
 .devenv.flake.nix
 
-# nix build directory
+# Nix build output
 /build/

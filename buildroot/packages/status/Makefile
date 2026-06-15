@@ -3,16 +3,16 @@ PD690XX_DIR ?= ../pd690xx
 POSTMERKOS_DIR ?= ../postmerkos
 INCLUDES = -I$(PD690XX_DIR) -I$(POSTMERKOS_DIR)
 CFLAGS ?= -Os
-LDLIBS += -ljson-c -lwebsockets
+LDLIBS += -ljson-c
 
-SRCS = main.c click_port.c click_global.c status.c websocket.c json_util.c config_file.c
+SRCS = clickswstatus.c
 SUPPORT_SRCS = $(PD690XX_DIR)/libpd690xx.c $(POSTMERKOS_DIR)/libpostmerkos.c
 
 .PHONY: all clean
-all: configd
+all: clickswstatus
 
-configd: $(SRCS) $(SUPPORT_SRCS)
+clickswstatus: $(SRCS) $(SUPPORT_SRCS)
 	$(CC) $(CPPFLAGS) $(INCLUDES) $(CFLAGS) -o $@ $(SRCS) $(SUPPORT_SRCS) $(LDFLAGS) $(LDLIBS)
 
 clean:
-	rm -f configd *.o
+	rm -f clickswstatus *.o

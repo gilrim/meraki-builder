@@ -1,0 +1,4 @@
+config BR2_PACKAGE_FINDHDR
+	bool "find_hdr"
+	help
+	  Locate the embedded ramdisk offset in supported Meraki firmware images.

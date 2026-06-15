@@ -1,3 +1,4 @@
+#include <time.h>
 #include "websocket.h"
 #include "configd.h"
 #include "status.h"
