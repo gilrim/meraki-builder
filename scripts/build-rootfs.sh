@@ -40,8 +40,8 @@ if bool_enabled "${INCLUDE_UI:-0}"; then
 fi
 cp -f "$IMAGE" "$ARTIFACTS_DIR/$name"
 cp -f "$ROOTFS" "$ARTIFACTS_DIR/rootfs.squashfs"
-sha256sum "$ARTIFACTS_DIR/$name" > "$ARTIFACTS_DIR/$name.sha256"
-sha256sum "$ARTIFACTS_DIR/rootfs.squashfs" > "$ARTIFACTS_DIR/rootfs.squashfs.sha256"
+write_sha256_sidecar "$ARTIFACTS_DIR/$name"
+write_sha256_sidecar "$ARTIFACTS_DIR/rootfs.squashfs"
 printf '%s\n' "$ARTIFACTS_DIR/$name" > "$ARTIFACTS_DIR/latest-image.txt"
 touch "$STAMP_DIR/rootfs-built"
 log "Created $ARTIFACTS_DIR/$name"

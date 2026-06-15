@@ -3,6 +3,7 @@ source "$(dirname "$0")/common.sh"
 load_build_state
 need python3
 need unsquashfs
+need file
 
 IMAGE="${1:-}"
 if [[ -z "$IMAGE" && -f "$ARTIFACTS_DIR/latest-image.txt" ]]; then
@@ -44,12 +45,36 @@ required=(
   lib/modules/jaguar_dual/vc_click.ko
   lib/modules/jaguar_dual/vtss_core.ko
   bin/pd690xx
+  bin/fw_update
+  bin/fw_update_http
+  bin/fw_update_tftp
+  bin/fw_update_sftp
+  bin/fw_update_status
+  usr/lib/fwupdate/common.sh
+  usr/libexec/fwupdate/fwflash
+  etc/fwupdate/sources.conf
+  etc/fwupdate/preserve.list
 )
 if bool_enabled "${INCLUDE_UI:-0}"; then
   required+=(www/index.html bin/configd usr/bin/uhttpd etc/init.d/S15configd etc/init.d/S16uhttpd)
 fi
 for path in "${required[@]}"; do
   [[ -e "$VERIFY_DIR/$path" ]] || die "Rootfs verification failed: missing /$path"
+done
+
+file "$VERIFY_DIR/usr/libexec/fwupdate/fwflash" | grep -qi 'statically linked' || \
+  die "Firmware updater helper is not statically linked"
+
+rootfs_has_command() {
+  local command="$1" dir
+  for dir in bin sbin usr/bin usr/sbin; do
+    [[ -x "$VERIFY_DIR/$dir/$command" ]] && return 0
+  done
+  return 1
+}
+
+for command in curl mkfs.jffs2 hexdump sha256sum fuser mountpoint head dd awk sed killall umount; do
+  rootfs_has_command "$command" || die "Firmware updater dependency is missing: $command"
 done
 
 if ! bool_enabled "${INCLUDE_UI:-0}"; then
@@ -61,6 +86,6 @@ find "$VERIFY_DIR/etc/init.d" -maxdepth 1 -type f -printf '%f\n' | sort \
   > "$ARTIFACTS_DIR/effective-init-scripts.txt"
 find "$VERIFY_DIR/lib/modules" -type f -printf '%P\n' | sort \
   > "$ARTIFACTS_DIR/effective-module-files.txt"
-sha256sum "$IMAGE" > "$IMAGE.sha256"
+write_sha256_sidecar "$IMAGE"
 touch "$STAMP_DIR/image-validated"
 log "Validated $IMAGE"

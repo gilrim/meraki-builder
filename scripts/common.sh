@@ -137,6 +137,13 @@ sha256_record() {
   sha256sum "$@" > "$output"
 }
 
+write_sha256_sidecar() {
+  local file="$1" dir base
+  dir="$(dirname "$file")"
+  base="$(basename "$file")"
+  (cd "$dir" && sha256sum "$base" > "$base.sha256")
+}
+
 file_size() { stat -c %s "$1"; }
 
 load_build_state() {
