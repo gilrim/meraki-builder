@@ -2,13 +2,11 @@
 #include "configd.h"
 
 #include <libpostmerkos.h>
+#include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
-// --- STP global ---
-
-static struct json_object *read_stp_global(void) {
+static struct json_object *read_stp(void) {
   struct json_object *stp = json_object_new_object();
   json_object_object_add(stp, "priority", json_object_new_int(32768));
   json_object_object_add(stp, "hello_time", json_object_new_int(2));
@@ -18,163 +16,130 @@ static struct json_object *read_stp_global(void) {
   return stp;
 }
 
-static int apply_stp_global(struct json_object *value) {
-  struct json_object *obj;
-
-  int priority = 32768;
-  if (json_object_object_get_ex(value, "priority", &obj))
-    priority = json_object_get_int(obj);
-
-  int hello_time = 2;
-  if (json_object_object_get_ex(value, "hello_time", &obj))
-    hello_time = json_object_get_int(obj);
-
-  int forward_delay = 15;
-  if (json_object_object_get_ex(value, "forward_delay", &obj))
-    forward_delay = json_object_get_int(obj);
-
-  int max_age = 20;
-  if (json_object_object_get_ex(value, "max_age", &obj))
-    max_age = json_object_get_int(obj);
-
-  int hold_count = 6;
-  if (json_object_object_get_ex(value, "hold_count", &obj))
-    hold_count = json_object_get_int(obj);
-
-  char command[256];
-  snprintf(command, sizeof(command),
-           "PRIORITY %d, HELLO_TIME %d, FORWARD_DELAY %d, MAX_AGE %d, HOLDCOUNT %d",
-           priority, hello_time, forward_delay, max_age, hold_count);
-
-  printf("%s global field=stp value=%s%s\n",
-         get_time(), command, dry_run ? " dry_run=true" : "");
-  if (!dry_run) {
-    click_write("/click/stp/set_params", command);
-  }
-  return 0;
-}
-
-// --- LACP ---
-
-static struct json_object *read_lacp(void) {
+static struct json_object *read_lacp(struct apply_result *result) {
   struct json_object *lacp = json_object_new_object();
-  char buf[16];
-  if (click_read("/click/switch_port_table/enable_lacp_on_single_ports",
-                 buf, sizeof(buf))) {
-    buf[strcspn(buf, "\n")] = 0;
-    json_object_object_add(lacp, "enabled",
-                           json_object_new_boolean(strcmp(buf, "true") == 0));
-  } else {
-    json_object_object_add(lacp, "enabled", json_object_new_boolean(true));
+  char buffer[32];
+  int rc = click_read("/click/switch_port_table/enable_lacp_on_single_ports",
+                      buffer, sizeof(buffer));
+  if (rc != 0) {
+    apply_result_warn(result, "LACP state unavailable; default used");
+    snprintf(buffer, sizeof(buffer), "true");
   }
+  json_object_object_add(lacp, "enabled",
+      json_object_new_boolean(!strcmp(buffer, "true") || !strcmp(buffer, "1")));
   return lacp;
 }
 
-static int apply_lacp(struct json_object *value) {
-  struct json_object *obj;
-  if (!json_object_object_get_ex(value, "enabled", &obj)) return 0;
-  bool enabled = json_object_get_boolean(obj);
-
-  printf("%s global field=lacp enabled=%s%s\n",
-         get_time(), enabled ? "true" : "false",
-         dry_run ? " dry_run=true" : "");
-  if (!dry_run) {
-    write_switch_port_table("enable_lacp_on_single_ports",
-                            enabled ? "true" : "false");
-  }
-  return 0;
-}
-
-// --- multicast (IGMP/MLD snooping) ---
-
 static struct json_object *read_multicast(void) {
-  struct json_object *mc = json_object_new_object();
-  json_object_object_add(mc, "igmp_snooping", json_object_new_boolean(true));
-  json_object_object_add(mc, "igmp_querier_interval", json_object_new_int(125));
-  json_object_object_add(mc, "mld_snooping", json_object_new_boolean(true));
-  json_object_object_add(mc, "mld_querier_interval", json_object_new_int(125));
-  return mc;
+  struct json_object *multicast = json_object_new_object();
+  json_object_object_add(multicast, "igmp_snooping", json_object_new_boolean(true));
+  json_object_object_add(multicast, "igmp_querier_interval", json_object_new_int(125));
+  json_object_object_add(multicast, "mld_snooping", json_object_new_boolean(true));
+  json_object_object_add(multicast, "mld_querier_interval", json_object_new_int(125));
+  return multicast;
 }
 
-static int apply_multicast(struct json_object *value) {
-  struct json_object *obj;
+struct json_object *click_read_globals(struct apply_result *result) {
+  struct json_object *globals = json_object_new_object();
+  json_object_object_add(globals, "stp", read_stp());
+  json_object_object_add(globals, "lacp", read_lacp(result));
+  json_object_object_add(globals, "multicast", read_multicast());
+  return globals;
+}
 
-  bool igmp_snoop = true;
-  if (json_object_object_get_ex(value, "igmp_snooping", &obj))
-    igmp_snoop = json_object_get_boolean(obj);
-
-  int igmp_interval = 125;
-  if (json_object_object_get_ex(value, "igmp_querier_interval", &obj))
-    igmp_interval = json_object_get_int(obj);
-
-  bool mld_snoop = true;
-  if (json_object_object_get_ex(value, "mld_snooping", &obj))
-    mld_snoop = json_object_get_boolean(obj);
-
-  int mld_interval = 125;
-  if (json_object_object_get_ex(value, "mld_querier_interval", &obj))
-    mld_interval = json_object_get_int(obj);
-
-  printf("%s global field=multicast igmp=%s/%d mld=%s/%d%s\n",
-         get_time(),
-         igmp_snoop ? "true" : "false", igmp_interval,
-         mld_snoop ? "true" : "false", mld_interval,
+static int checked_write(const char *field, const char *path,
+                         const char *value, struct apply_result *result) {
+  printf("%s global field=%s value=%s%s\n", get_time(), field, value,
          dry_run ? " dry_run=true" : "");
+  int rc = dry_run ? 0 : click_write(path, value);
+  if (rc != 0)
+    apply_result_warn(result, "global %s failed: %s", field, strerror(-rc));
+  else
+    apply_result_applied(result);
+  return rc;
+}
 
-  if (!dry_run) {
-    click_write("/click/configure_igmp_snoop/run",
-                igmp_snoop ? "true" : "false");
+static int apply_stp(struct json_object *value, struct apply_result *result) {
+  char command[256];
+  snprintf(command, sizeof(command),
+      "PRIORITY %d, HELLO_TIME %d, FORWARD_DELAY %d, MAX_AGE %d, HOLDCOUNT %d",
+      json_object_get_int(json_object_object_get(value, "priority")),
+      json_object_get_int(json_object_object_get(value, "hello_time")),
+      json_object_get_int(json_object_object_get(value, "forward_delay")),
+      json_object_get_int(json_object_object_get(value, "max_age")),
+      json_object_get_int(json_object_object_get(value, "hold_count")));
+  return checked_write("stp", "/click/stp/set_params", command, result);
+}
 
-    char buf[32];
-    // querier interval in milliseconds
-    snprintf(buf, sizeof(buf), "%d", igmp_interval * 1000);
-    click_write("/click/igmp_snoop/default_querier_interval_msec", buf);
+static int apply_lacp(struct json_object *value, struct apply_result *result) {
+  bool enabled = json_object_get_boolean(json_object_object_get(value, "enabled"));
+  return checked_write("lacp", "/click/switch_port_table/enable_lacp_on_single_ports",
+                       enabled ? "true" : "false", result);
+}
 
-    snprintf(buf, sizeof(buf), "%d", igmp_interval);
-    click_write("/click/igmp_querier/query_interval", buf);
+static int apply_multicast(struct json_object *value,
+                           struct apply_result *result) {
+  bool igmp = json_object_get_boolean(
+      json_object_object_get(value, "igmp_snooping"));
+  bool mld = json_object_get_boolean(
+      json_object_object_get(value, "mld_snooping"));
+  int igmp_interval = json_object_get_int(
+      json_object_object_get(value, "igmp_querier_interval"));
+  int mld_interval = json_object_get_int(
+      json_object_object_get(value, "mld_querier_interval"));
+  int rc = 0;
+  char buffer[32];
 
-    click_write("/click/configure_mld_snoop/run",
-                mld_snoop ? "true" : "false");
+  if (checked_write("multicast.igmp_snooping",
+                    "/click/configure_igmp_snoop/run",
+                    igmp ? "true" : "false", result) != 0) rc = -EIO;
+  snprintf(buffer, sizeof(buffer), "%d", igmp_interval * 1000);
+  if (checked_write("multicast.igmp_querier_interval",
+                    "/click/igmp_snoop/default_querier_interval_msec",
+                    buffer, result) != 0) rc = -EIO;
+  snprintf(buffer, sizeof(buffer), "%d", igmp_interval);
+  if (checked_write("multicast.igmp_query_interval",
+                    "/click/igmp_querier/query_interval",
+                    buffer, result) != 0) rc = -EIO;
 
-    snprintf(buf, sizeof(buf), "%d", mld_interval * 1000);
-    click_write("/click/mld_snoop/default_querier_interval_msec", buf);
+  if (checked_write("multicast.mld_snooping",
+                    "/click/configure_mld_snoop/run",
+                    mld ? "true" : "false", result) != 0) rc = -EIO;
+  snprintf(buffer, sizeof(buffer), "%d", mld_interval * 1000);
+  if (checked_write("multicast.mld_querier_interval",
+                    "/click/mld_snoop/default_querier_interval_msec",
+                    buffer, result) != 0) rc = -EIO;
+  snprintf(buffer, sizeof(buffer), "%d", mld_interval);
+  if (checked_write("multicast.mld_query_interval",
+                    "/click/mld_querier/query_interval",
+                    buffer, result) != 0) rc = -EIO;
+  return rc;
+}
 
-    snprintf(buf, sizeof(buf), "%d", mld_interval);
-    click_write("/click/mld_querier/query_interval", buf);
-  }
+static int apply_globals(struct json_object *full_config,
+                         struct json_object *delta,
+                         struct apply_result *result) {
+  struct json_object *value = NULL;
+  struct json_object *changed = NULL;
+  if ((!delta || json_object_object_get_ex(delta, "stp", &changed)) &&
+      json_object_object_get_ex(full_config, "stp", &value))
+    apply_stp(value, result);
+  if ((!delta || json_object_object_get_ex(delta, "lacp", &changed)) &&
+      json_object_object_get_ex(full_config, "lacp", &value))
+    apply_lacp(value, result);
+  if ((!delta || json_object_object_get_ex(delta, "multicast", &changed)) &&
+      json_object_object_get_ex(full_config, "multicast", &value))
+    apply_multicast(value, result);
   return 0;
 }
 
-// --- global field table ---
-
-const struct global_field global_fields[] = {
-  { "stp",       read_stp_global,  apply_stp_global },
-  { "lacp",      read_lacp,        apply_lacp       },
-  { "multicast", read_multicast,   apply_multicast  },
-};
-
-const int global_field_count =
-    sizeof(global_fields) / sizeof(global_fields[0]);
-
-// --- generic read/apply loops ---
-
-struct json_object *click_read_globals(void) {
-  struct json_object *jobj = json_object_new_object();
-  for (int i = 0; i < global_field_count; i++) {
-    if (!global_fields[i].read) continue;
-    json_object_object_add(jobj, global_fields[i].key,
-                           global_fields[i].read());
-  }
-  return jobj;
+int click_apply_globals_full(struct json_object *config,
+                             struct apply_result *result) {
+  return apply_globals(config, NULL, result);
 }
 
-int click_apply_globals(struct json_object *config) {
-  for (int i = 0; i < global_field_count; i++) {
-    if (!global_fields[i].apply) continue;
-    struct json_object *val;
-    if (!json_object_object_get_ex(config, global_fields[i].key, &val))
-      continue;
-    global_fields[i].apply(val);
-  }
-  return 0;
+int click_apply_globals_delta(struct json_object *full_config,
+                              struct json_object *delta,
+                              struct apply_result *result) {
+  return apply_globals(full_config, delta, result);
 }

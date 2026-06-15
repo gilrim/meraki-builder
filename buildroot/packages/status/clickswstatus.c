@@ -7,112 +7,128 @@
 #include <json-c/json.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <time.h>
 
-bool poe_capable;
-struct pd690xx_cfg pd690xx = {
-    // i2c_fds
+static bool poe_capable;
+static struct pd690xx_cfg pd690xx = {
     {-1, -1},
-    // pd690xx_addrs
-    {PD690XX0_I2C_ADDR, PD690XX1_I2C_ADDR, PD690XX2_I2C_ADDR, PD690XX3_I2C_ADDR},
-    // pd690xx_pres
-    {0, 0, 0 ,0}
+    {PD690XX0_I2C_ADDR, PD690XX1_I2C_ADDR,
+     PD690XX2_I2C_ADDR, PD690XX3_I2C_ADDR},
+    {0, 0, 0, 0}
 };
 
-int main(int argc, char **argv) {
-  i2c_init(&pd690xx);
-  if (pd690xx_pres_count(&pd690xx)) {
-    poe_capable = true;
-  }
+static void add_cpu_temperatures(struct json_object *temperatures) {
+  struct json_object *cpu = json_object_new_array();
+  json_object_object_add(temperatures, "cpu", cpu);
 
-  struct json_object *jobj = json_object_new_object();
-  json_object_object_add(jobj, "datetime", json_object_new_string(get_time()));
+  const char *directory = "/sys/class/thermal";
+  DIR *dir = opendir(directory);
+  if (!dir) return;
 
-  struct json_object *jtemp = json_object_new_object();
-  json_object_object_add(jobj, "temperature", jtemp);
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (!starts_with(entry->d_name, "thermal_")) continue;
 
-  struct json_object *jtempsys = json_object_new_array();
-  json_object_object_add(jtemp, "cpu", jtempsys);
+    char path[256];
+    int length = snprintf(path, sizeof(path), "%s/%s/temp",
+                          directory, entry->d_name);
+    if (length < 0 || (size_t)length >= sizeof(path)) continue;
 
-  struct dirent *dp;
-  DIR *dfd;
-  char *dir = "/sys/class/thermal";
-  if ((dfd = opendir(dir)) == NULL) {
-    fprintf(stderr, "Can't open %s\n", dir);
-    return 0;
-  }
+    FILE *file = fopen(path, "r");
+    if (!file) continue;
 
-  char filename[100];
-  while ((dp = readdir(dfd)) != NULL) {
-    struct stat stbuf;
-    sprintf(filename, "%s/%s", dir, dp->d_name);
-    if (stat(filename, &stbuf) == -1) {
-      printf("Unable to stat file: %s\n", filename);
-      continue;
+    long millidegrees = 0;
+    if (fscanf(file, "%ld", &millidegrees) == 1) {
+      json_object_array_add(cpu,
+                            json_object_new_double(millidegrees / 1000.0));
     }
-
-    if (!starts_with(filename + strlen(dir) + 1, "thermal_")) {
-      continue;
-    }
-    strcat(filename, "/temp");
-    FILE *file = fopen(filename, "r");
-
-    static char line[100];
-    fgets(line, sizeof(line), file);
-    // remove trailing newline
-    line[strcspn(line, "\n")] = 0;
-    json_object_array_add(jtempsys, json_object_new_int(atoi(line) / 1000));
     fclose(file);
   }
+  closedir(dir);
+}
 
-  if (poe_capable) {
-    struct json_object *jtemppoe = json_object_new_array();
-    json_object_object_add(jtemp, "poe", jtemppoe);
-    float* temps = get_temp(&pd690xx);
-    for (int i = 0; i < sizeof(temps); i++) {
-    json_object_array_add(jtemppoe, json_object_new_double(temps[i]));
-    }
+static void add_poe_temperatures(struct json_object *temperatures) {
+  if (!poe_capable) return;
+
+  struct json_object *poe = json_object_new_array();
+  json_object_object_add(temperatures, "poe", poe);
+
+  int controller_count = pd690xx_pres_count(&pd690xx);
+  float *values = get_temp(&pd690xx);
+  if (!values) return;
+
+  for (int i = 0; i < controller_count; i++) {
+    json_object_array_add(poe, json_object_new_double(values[i]));
   }
+  free(values);
+}
 
-  struct json_object *jports = json_object_new_object();
-  json_object_object_add(jobj, "ports", jports);
+static void add_ports(struct json_object *root) {
+  struct json_object *ports = json_object_new_object();
+  json_object_object_add(root, "ports", ports);
 
   FILE *file = fopen(PORTS_FILE, "r");
+  if (!file) return;
+
   char line[256];
-
-  int p = -1;
-  char buffer[256];
+  unsigned int port = 0;
   while (fgets(line, sizeof(line), file)) {
-    p++;
-    if (p == 0) {
-      // skip file header
-      continue;
-    }
+    if (port++ == 0) continue; /* header */
 
-    struct json_object *jport = json_object_new_object();
-    json_object_object_add(jports, itoa(p, buffer, 10), jport);
+    char port_name[16];
+    snprintf(port_name, sizeof(port_name), "%u", port - 1);
+    struct json_object *entry = json_object_new_object();
+    json_object_object_add(ports, port_name, entry);
 
-    struct json_object *jportlink = json_object_new_object();
-    json_object_object_add(jport, "link", jportlink);
+    struct json_object *link = json_object_new_object();
+    json_object_object_add(entry, "link", link);
 
-    json_object_object_add(jportlink, "established",
-                           json_object_new_boolean(atoi(get_field(line, 2))));
-    json_object_object_add(jportlink, "speed",
-                           json_object_new_int(atoi(get_field(line, 3))));
+    char field[32];
+    int established = 0;
+    int speed = 0;
+    if (get_field_copy(line, 2, field, sizeof(field)) == 0)
+      established = atoi(field);
+    if (get_field_copy(line, 3, field, sizeof(field)) == 0)
+      speed = atoi(field);
+    json_object_object_add(link, "established",
+                           json_object_new_boolean(established));
+    json_object_object_add(link, "speed", json_object_new_int(speed));
 
-    if (poe_capable) {
-      struct json_object *jportpoe = json_object_new_object();
-      json_object_object_add(jport, "poe", jportpoe);
-      json_object_object_add(jportpoe, "power",
-                             json_object_new_double(port_power(&pd690xx, p)));
+    int physical_port = (int)port - 1;
+    if (poe_capable && physical_port > 0 &&
+        physical_port <= 12 * pd690xx_pres_count(&pd690xx)) {
+      struct json_object *poe = json_object_new_object();
+      json_object_object_add(entry, "poe", poe);
+      double power = port_power(&pd690xx, physical_port);
+      if (power >= 0.0)
+        json_object_object_add(poe, "power", json_object_new_double(power));
     }
   }
-
   fclose(file);
-  printf("%s", json_object_to_json_string_ext(
-                   jobj, JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY));
-  json_object_put(jobj); // Delete the json object
+}
+
+int main(int argc, char **argv) {
+  (void)argc;
+  (void)argv;
+
+  i2c_init(&pd690xx);
+  poe_capable = pd690xx_pres_count(&pd690xx) > 0;
+
+  struct json_object *root = json_object_new_object();
+  json_object_object_add(root, "datetime", json_object_new_string(get_time()));
+
+  struct json_object *temperatures = json_object_new_object();
+  json_object_object_add(root, "temperature", temperatures);
+  add_cpu_temperatures(temperatures);
+  add_poe_temperatures(temperatures);
+  add_ports(root);
+
+  puts(json_object_to_json_string_ext(
+      root, JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY));
+  json_object_put(root);
+  i2c_close(&pd690xx);
+  return 0;
 }

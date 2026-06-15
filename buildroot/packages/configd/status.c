@@ -1,117 +1,148 @@
 #include "status.h"
+#include "config_file.h"
 #include "configd.h"
+#include "network.h"
 
 #include <libpostmerkos.h>
 #include <libpd690xx.h>
-#include "pd690xx_meraki.h"
 
 #include <dirent.h>
-#include <stdlib.h>
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
-// read device name from /etc/boardinfo
-static const char *get_device_name(void) {
-  static char name[64];
-  FILE *f = fopen(DEVICE_FILE, "r");
-  if (!f) return NULL;
-  if (fgets(name, sizeof(name), f)) {
-    name[strcspn(name, "\n")] = 0;
-  }
-  fclose(f);
-  return name[0] ? name : NULL;
+static void add_error(struct json_object *errors, const char *source,
+                      const char *message) {
+  struct json_object *error = json_object_new_object();
+  json_object_object_add(error, "source", json_object_new_string(source));
+  json_object_object_add(error, "message", json_object_new_string(message));
+  json_object_array_add(errors, error);
 }
 
-static void add_device_name(struct json_object *jobj) {
-  const char *device = get_device_name();
-  if (device) {
-    json_object_object_add(jobj, "device", json_object_new_string(device));
-  }
-}
+static void add_temperatures(struct json_object *root,
+                             struct json_object *errors) {
+  struct json_object *temperature = json_object_new_object();
+  struct json_object *cpu = json_object_new_array();
+  json_object_object_add(temperature, "cpu", cpu);
+  json_object_object_add(root, "temperature", temperature);
 
-static void add_temperatures(struct json_object *jobj) {
-  struct json_object *jtemp = json_object_new_object();
-  json_object_object_add(jobj, "temperature", jtemp);
-
-  struct json_object *jtempsys = json_object_new_array();
-  json_object_object_add(jtemp, "cpu", jtempsys);
-
-  struct dirent *dp;
-  DIR *dfd;
-  char *dir = "/sys/class/thermal";
-  if ((dfd = opendir(dir)) != NULL) {
-    char filename[100];
-    while ((dp = readdir(dfd)) != NULL) {
-      struct stat stbuf;
-      sprintf(filename, "%s/%s", dir, dp->d_name);
-      if (stat(filename, &stbuf) == -1)
-        continue;
-      if (!starts_with(filename + strlen(dir) + 1, "thermal_"))
-        continue;
-      strcat(filename, "/temp");
-      FILE *file = fopen(filename, "r");
+  const char *thermal_path = getenv("CONFIGD_THERMAL_PATH");
+  if (!thermal_path || !*thermal_path) thermal_path = "/sys/class/thermal";
+  DIR *directory = opendir(thermal_path);
+  if (!directory) {
+    add_error(errors, "temperature", "thermal subsystem unavailable");
+  } else {
+    struct dirent *entry;
+    while ((entry = readdir(directory)) != NULL) {
+      if (!starts_with(entry->d_name, "thermal_zone")) continue;
+      char path[256];
+      int length = snprintf(path, sizeof(path), "%s/%s/temp",
+                            thermal_path, entry->d_name);
+      if (length < 0 || (size_t)length >= sizeof(path)) continue;
+      FILE *file = fopen(path, "r");
       if (!file) continue;
-      static char line[100];
-      fgets(line, sizeof(line), file);
-      line[strcspn(line, "\n")] = 0;
-      json_object_array_add(jtempsys, json_object_new_int(atoi(line) / 1000));
+      long millidegrees = 0;
+      if (fscanf(file, "%ld", &millidegrees) == 1)
+        json_object_array_add(cpu,
+            json_object_new_double((double)millidegrees / 1000.0));
       fclose(file);
     }
-    closedir(dfd);
+    closedir(directory);
   }
 
-  if (poe_capable) {
-    struct json_object *jtemppoe = json_object_new_array();
-    json_object_object_add(jtemp, "poe", jtemppoe);
-    float *temps = get_temp(&pd690xx);
-    for (int i = 0; i < pd690xx_pres_count(&pd690xx); i++) {
-      json_object_array_add(jtemppoe, json_object_new_double(temps[i]));
+  if (hardware.poe_available) {
+    struct json_object *poe = json_object_new_array();
+    json_object_object_add(temperature, "poe", poe);
+    float *values = get_temp(&pd690xx);
+    if (!values) {
+      add_error(errors, "poe", "PoE temperature read failed");
+    } else {
+      for (unsigned int i = 0; i < hardware.poe_controller_count; i++)
+        json_object_array_add(poe, json_object_new_double(values[i]));
+      free(values);
     }
-    free(temps);
   }
 }
 
-static void add_port_status(struct json_object *jobj) {
-  struct json_object *jports = json_object_new_object();
-  json_object_object_add(jobj, "ports", jports);
+static void add_port_status(struct json_object *root,
+                            struct json_object *errors) {
+  struct json_object *ports = json_object_new_object();
+  json_object_object_add(root, "ports", ports);
 
-  FILE *file = fopen(PORTS_FILE, "r");
-  if (!file) return;
+  const char *ports_path = getenv("CONFIGD_PORTS_FILE");
+  if (!ports_path || !*ports_path) ports_path = PORTS_FILE;
+  FILE *file = fopen(ports_path, "r");
+  if (!file) {
+    add_error(errors, "ports", "Click port status handler unavailable");
+    return;
+  }
 
-  char line[256];
-  int p = -1;
-  char buffer[256];
+  char line[512];
+  unsigned int port = 0;
+  bool header = true;
   while (fgets(line, sizeof(line), file)) {
-    p++;
-    if (p == 0) continue; // skip header
-
-    struct json_object *jport = json_object_new_object();
-    json_object_object_add(jports, itoa(p, buffer, 10), jport);
-
-    struct json_object *jportlink = json_object_new_object();
-    json_object_object_add(jport, "link", jportlink);
-
-    json_object_object_add(jportlink, "established",
-                           json_object_new_boolean(atoi(get_field(line, 2))));
-    json_object_object_add(jportlink, "speed",
-                           json_object_new_int(atoi(get_field(line, 3))));
-
-    if (poe_capable) {
-      struct json_object *jportpoe = json_object_new_object();
-      json_object_object_add(jport, "poe", jportpoe);
-      json_object_object_add(jportpoe, "power",
-                             json_object_new_double(port_power(&pd690xx, p)));
+    if (header) { header = false; continue; }
+    port++;
+    char established[32] = "0";
+    char speed[32] = "0";
+    if (get_field_copy(line, 2, established, sizeof(established)) != 0 ||
+        get_field_copy(line, 3, speed, sizeof(speed)) != 0) {
+      char message[96];
+      snprintf(message, sizeof(message), "port %u status row is malformed", port);
+      add_error(errors, "ports", message);
+      continue;
     }
+
+    char key[16];
+    snprintf(key, sizeof(key), "%u", port);
+    struct json_object *port_status = json_object_new_object();
+    struct json_object *link = json_object_new_object();
+    json_object_object_add(link, "established",
+        json_object_new_boolean(atoi(established) != 0));
+    json_object_object_add(link, "speed", json_object_new_int(atoi(speed)));
+    json_object_object_add(port_status, "link", link);
+
+    struct json_object *capabilities = json_object_new_object();
+    bool poe_supported = hardware_port_supports_poe(&hardware, port);
+    json_object_object_add(capabilities, "poe",
+                           json_object_new_boolean(poe_supported));
+    json_object_object_add(port_status, "capabilities", capabilities);
+
+    if (poe_supported) {
+      struct json_object *poe = json_object_new_object();
+      json_object_object_add(poe, "available",
+                             json_object_new_boolean(hardware.poe_available));
+      if (hardware.poe_available) {
+        float power = port_power(&pd690xx, (int)port);
+        if (power >= 0)
+          json_object_object_add(poe, "power", json_object_new_double(power));
+        else
+          json_object_object_add(poe, "power", json_object_new_null());
+      }
+      json_object_object_add(port_status, "poe", poe);
+    }
+    json_object_object_add(ports, key, port_status);
   }
   fclose(file);
 }
 
 struct json_object *get_status(void) {
-  struct json_object *jobj = json_object_new_object();
-  json_object_object_add(jobj, "datetime", json_object_new_string(get_time()));
-  add_device_name(jobj);
-  add_temperatures(jobj);
-  add_port_status(jobj);
-  return jobj;
+  struct json_object *root = json_object_new_object();
+  struct json_object *errors = json_object_new_array();
+  json_object_object_add(root, "datetime", json_object_new_string(get_time()));
+  json_object_object_add(root, "device", json_object_new_string(hardware.model));
+  json_object_object_add(root, "capabilities",
+                         hardware_capabilities_json(&hardware));
+  json_object_object_add(root, "network", network_manager_status_json());
+  add_temperatures(root, errors);
+  add_port_status(root, errors);
+
+  const char *config_error = config_file_runtime_error();
+  if (config_error) add_error(errors, "configuration", config_error);
+  const struct network_runtime *network = network_manager_runtime();
+  if (network->last_error[0]) add_error(errors, "network", network->last_error);
+  json_object_object_add(root, "errors", errors);
+  return root;
 }

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
+#include <errno.h>
 
 // getopt
 #include <ctype.h>
@@ -168,11 +169,20 @@ int main (int argc, char **argv) {
         get_voltage(&pd690xx);
     }
     if (temp) {
-        float* temps = get_temp(&pd690xx);
-        for (int i=0; i<sizeof(temps); i++) {
-          printf("%.1f C\n", temps[i]);
+        int controller_count = pd690xx_pres_count(&pd690xx);
+        float *temps = get_temp(&pd690xx);
+        if (!temps) {
+            fprintf(stderr, "Unable to read PoE controller temperatures: %s\n",
+                    strerror(errno));
+            i2c_close(&pd690xx);
+            return 1;
         }
+        for (int i = 0; i < controller_count; i++) {
+            printf("%.1f C\n", temps[i]);
+        }
+        free(temps);
     }
 
     i2c_close(&pd690xx);
+    return 0;
 }
