@@ -635,6 +635,27 @@ The preparation stage copies each package directory into upstream Buildroot's `p
 
 ---
 
+# Primary SSH/TTL console
+
+Every build installs `postmerkos-console` as the primary local management UI.
+Interactive root logins over Dropbear SSH or the hardware TTL serial console
+open a hierarchical menu automatically. The menu provides status, chassis-aware
+port groups, per-port switching/PoE/VLAN/STP controls, global configuration,
+firmware update, plain JSON backup/restore, user and service management, power
+control, and a raw-shell escape. Non-interactive SSH commands and file transfers
+are not intercepted.
+
+MS42/MS42P copper ports are grouped as 1-12, 13-24, 25-36, and 37-48, with
+ports 49-52 shown separately as SFP/SFP+. The console is a small BusyBox shell
+package and delegates configuration to the same `configd` core used by the web
+UI. `postmerkos-cli` remains as a compatibility symlink.
+
+The browser stack remains optional. `INCLUDE_UI=0` omits libwebsockets, uhttpd,
+and browser assets; `INCLUDE_UI=1` enables the existing WebSocket protocol and
+web services without changing console behavior.
+
+---
+
 # Optional web stack
 
 When `INCLUDE_UI=1`, the generated rootfs contains:
@@ -652,7 +673,7 @@ At runtime:
 
 - uhttpd serves the frontend on TCP port 80;
 - configd listens for authenticated WebSocket clients on TCP port 4001;
-- interactive SSH and TTL serial logins launch the postmerkOS management CLI;
+- interactive SSH and TTL serial logins launch the hierarchical postmerkOS console;
 - configd logs to `/tmp/configd.log`;
 - uhttpd logs to `/tmp/uhttpd.log`;
 - management-address changes are logged to `/tmp/network-rebind.log`;
@@ -803,10 +824,10 @@ which is required by the updater's strict sidecar parser.
 
 # Switch configuration and Click documentation
 
-The current `configd` implementation, CLI/WebSocket protocol, DHCP/static management networking, hardware capability model, PoE handling, and per-module notes are documented at:
+The current `configd` implementation, console/WebSocket protocol, DHCP/static management networking, hardware capability model, PoE handling, and per-module notes are documented at:
 
 - [`buildroot/packages/configd/README.md`](buildroot/packages/configd/README.md)
-- [`buildroot/packages/postmerkos-cli/README.md`](buildroot/packages/postmerkos-cli/README.md)
+- [`buildroot/packages/postmerkos-console/README.md`](buildroot/packages/postmerkos-console/README.md)
 - [`buildroot/packages/configd/docs/modules/README.md`](buildroot/packages/configd/docs/modules/README.md)
 - [`docs/CLICK-GRAPH.md`](docs/CLICK-GRAPH.md)
 - [`buildroot/packages/pd690xx/README.md`](buildroot/packages/pd690xx/README.md)

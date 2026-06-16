@@ -3,6 +3,7 @@
 #include "config_apply.h"
 #include "config_file.h"
 #include "configd.h"
+#include "console_cli.h"
 #include "network.h"
 #include "result.h"
 #include "status.h"
@@ -50,8 +51,16 @@ static void usage(FILE *stream, const char *program) {
       "  -w, --websocket-port PORT  WebSocket listen port (1-65535)\n"
       "  -N, --network-bootstrap    apply DHCP/static management IP and exit\n"
       "  -W, --network-wait SEC     DHCP wait during bootstrap (0-300, default 60)\n"
-      "      --get-config           print the current persistent JSON config\n"
+      "      --get-config           print the current persistent JSON envelope\n"
+      "      --get-config-raw       print only the current configuration object\n"
       "      --get-status           print current status JSON\n"
+      "      --get-path PATH        print one configuration value\n"
+      "      --set-path PATH VALUE  update/apply a JSON-typed configuration value\n"
+      "      --set-string PATH TEXT update/apply a literal string value\n"
+      "      --show-summary         print a text system summary\n"
+      "      --show-ports RANGE     print a text port table (for example 1-12)\n"
+      "      --show-port PORT       print detailed text state for one port\n"
+      "      --export-config FILE   write a plain JSON configuration backup\n"
       "      --validate FILE        validate a complete configuration file\n"
       "      --apply-file FILE      merge and apply a JSON configuration delta\n"
       "      --apply-json JSON      merge and apply an inline JSON delta\n"
@@ -106,7 +115,15 @@ enum command_mode {
   COMMAND_SERVICE,
   COMMAND_NETWORK_BOOTSTRAP,
   COMMAND_GET_CONFIG,
+  COMMAND_GET_CONFIG_RAW,
   COMMAND_GET_STATUS,
+  COMMAND_GET_PATH,
+  COMMAND_SET_PATH,
+  COMMAND_SET_STRING,
+  COMMAND_SHOW_SUMMARY,
+  COMMAND_SHOW_PORTS,
+  COMMAND_SHOW_PORT,
+  COMMAND_EXPORT_CONFIG,
   COMMAND_VALIDATE,
   COMMAND_APPLY_FILE,
   COMMAND_APPLY_JSON,
@@ -119,8 +136,11 @@ int main(int argc, char **argv) {
   int network_wait = 60;
   enum command_mode command = COMMAND_SERVICE;
   const char *command_value = NULL;
+  const char *command_value2 = NULL;
 
-  enum { OPT_GET_CONFIG = 1000, OPT_GET_STATUS, OPT_VALIDATE,
+  enum { OPT_GET_CONFIG = 1000, OPT_GET_CONFIG_RAW, OPT_GET_STATUS,
+         OPT_GET_PATH, OPT_SET_PATH, OPT_SET_STRING, OPT_SHOW_SUMMARY, OPT_SHOW_PORTS,
+         OPT_SHOW_PORT, OPT_EXPORT_CONFIG, OPT_VALIDATE,
          OPT_APPLY_FILE, OPT_APPLY_JSON, OPT_REPLACE_FILE };
   static const struct option options[] = {
     {"config", required_argument, NULL, 'c'},
@@ -130,7 +150,15 @@ int main(int argc, char **argv) {
     {"network-bootstrap", no_argument, NULL, 'N'},
     {"network-wait", required_argument, NULL, 'W'},
     {"get-config", no_argument, NULL, OPT_GET_CONFIG},
+    {"get-config-raw", no_argument, NULL, OPT_GET_CONFIG_RAW},
     {"get-status", no_argument, NULL, OPT_GET_STATUS},
+    {"get-path", required_argument, NULL, OPT_GET_PATH},
+    {"set-path", required_argument, NULL, OPT_SET_PATH},
+    {"set-string", required_argument, NULL, OPT_SET_STRING},
+    {"show-summary", no_argument, NULL, OPT_SHOW_SUMMARY},
+    {"show-ports", required_argument, NULL, OPT_SHOW_PORTS},
+    {"show-port", required_argument, NULL, OPT_SHOW_PORT},
+    {"export-config", required_argument, NULL, OPT_EXPORT_CONFIG},
     {"validate", required_argument, NULL, OPT_VALIDATE},
     {"apply-file", required_argument, NULL, OPT_APPLY_FILE},
     {"apply-json", required_argument, NULL, OPT_APPLY_JSON},
@@ -164,7 +192,15 @@ int main(int argc, char **argv) {
         }
         break;
       case OPT_GET_CONFIG: command = COMMAND_GET_CONFIG; break;
+      case OPT_GET_CONFIG_RAW: command = COMMAND_GET_CONFIG_RAW; break;
       case OPT_GET_STATUS: command = COMMAND_GET_STATUS; break;
+      case OPT_GET_PATH: command = COMMAND_GET_PATH; command_value = optarg; break;
+      case OPT_SET_PATH: command = COMMAND_SET_PATH; command_value = optarg; break;
+      case OPT_SET_STRING: command = COMMAND_SET_STRING; command_value = optarg; break;
+      case OPT_SHOW_SUMMARY: command = COMMAND_SHOW_SUMMARY; break;
+      case OPT_SHOW_PORTS: command = COMMAND_SHOW_PORTS; command_value = optarg; break;
+      case OPT_SHOW_PORT: command = COMMAND_SHOW_PORT; command_value = optarg; break;
+      case OPT_EXPORT_CONFIG: command = COMMAND_EXPORT_CONFIG; command_value = optarg; break;
       case OPT_VALIDATE: command = COMMAND_VALIDATE; command_value = optarg; break;
       case OPT_APPLY_FILE: command = COMMAND_APPLY_FILE; command_value = optarg; break;
       case OPT_APPLY_JSON: command = COMMAND_APPLY_JSON; command_value = optarg; break;
@@ -172,6 +208,14 @@ int main(int argc, char **argv) {
       case 'h': usage(stdout, argv[0]); return 0;
       default: usage(stderr, argv[0]); return 2;
     }
+  }
+  if (command == COMMAND_SET_PATH || command == COMMAND_SET_STRING) {
+    if (optind + 1 != argc) {
+      fprintf(stderr, "%s requires exactly one VALUE argument\n",
+              command == COMMAND_SET_STRING ? "--set-string" : "--set-path");
+      return 2;
+    }
+    command_value2 = argv[optind++];
   }
   if (optind != argc) {
     usage(stderr, argv[0]);
@@ -263,11 +307,70 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  if (command == COMMAND_GET_CONFIG) {
-    print_envelope("config", config);
+  if (command == COMMAND_GET_CONFIG || command == COMMAND_GET_CONFIG_RAW) {
+    if (command == COMMAND_GET_CONFIG)
+      print_envelope("config", config);
+    else
+      puts(json_object_to_json_string_ext(config, JSON_C_TO_STRING_PRETTY));
     json_object_put(config);
     i2c_close(&pd690xx);
     return 0;
+  }
+
+  if (command == COMMAND_GET_PATH) {
+    int rc = console_print_path(config, command_value);
+    if (rc != 0) fprintf(stderr, "configuration path not found: %s\n", command_value);
+    json_object_put(config);
+    i2c_close(&pd690xx);
+    return rc == 0 ? 0 : 2;
+  }
+
+  if (command == COMMAND_EXPORT_CONFIG) {
+    int rc = console_export_config(config, command_value, error, sizeof(error));
+    if (rc != 0) fprintf(stderr, "configd: backup failed: %s\n", error);
+    json_object_put(config);
+    i2c_close(&pd690xx);
+    return rc == 0 ? 0 : 1;
+  }
+
+  if (command == COMMAND_SHOW_SUMMARY) {
+    int rc = console_print_summary(config);
+    json_object_put(config);
+    i2c_close(&pd690xx);
+    return rc == 0 ? 0 : 1;
+  }
+
+  if (command == COMMAND_SHOW_PORTS) {
+    unsigned int first = 0, last = 0;
+    char trailing = '\0';
+    int count = sscanf(command_value, "%u-%u%c", &first, &last, &trailing);
+    if (count == 1) last = first;
+    if ((count != 1 && count != 2) || !first || last < first ||
+        (hardware.port_count && last > hardware.port_count)) {
+      fprintf(stderr, "invalid port range: %s\n", command_value);
+      json_object_put(config);
+      i2c_close(&pd690xx);
+      return 2;
+    }
+    int rc = console_print_ports(config, first, last);
+    json_object_put(config);
+    i2c_close(&pd690xx);
+    return rc == 0 ? 0 : 1;
+  }
+
+  if (command == COMMAND_SHOW_PORT) {
+    int port = 0;
+    if (parse_int(command_value, 1, 128, &port) != 0 ||
+        !hardware_port_valid(&hardware, (unsigned int)port)) {
+      fprintf(stderr, "invalid hardware port: %s\n", command_value);
+      json_object_put(config);
+      i2c_close(&pd690xx);
+      return 2;
+    }
+    int rc = console_print_port(config, (unsigned int)port);
+    json_object_put(config);
+    i2c_close(&pd690xx);
+    return rc == 0 ? 0 : 1;
   }
 
   struct apply_result startup;
@@ -320,14 +423,24 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (command == COMMAND_APPLY_FILE || command == COMMAND_APPLY_JSON) {
-    struct json_object *delta = command == COMMAND_APPLY_FILE
-        ? load_json_file(command_value) : json_tokener_parse(command_value);
+  if (command == COMMAND_APPLY_FILE || command == COMMAND_APPLY_JSON ||
+      command == COMMAND_SET_PATH || command == COMMAND_SET_STRING) {
+    struct json_object *delta = NULL;
+    if (command == COMMAND_APPLY_FILE)
+      delta = load_json_file(command_value);
+    else if (command == COMMAND_APPLY_JSON)
+      delta = json_tokener_parse(command_value);
+    else if (command == COMMAND_SET_PATH)
+      delta = console_delta_from_path(command_value, command_value2,
+                                      error, sizeof(error));
+    else
+      delta = console_delta_from_string_path(command_value, command_value2,
+                                             error, sizeof(error));
     if (!delta) {
       apply_result_cleanup(&startup);
       json_object_put(config);
       i2c_close(&pd690xx);
-      return print_bad_request("unable to parse configuration delta");
+      return print_bad_request(error[0] ? error : "unable to parse configuration delta");
     }
     struct apply_result result;
     apply_result_init(&result);
@@ -366,7 +479,11 @@ int main(int argc, char **argv) {
 
   struct lws_context *context = ws_init(websocket_port);
   if (!context) {
+    #ifdef CONFIGD_ENABLE_WEBSOCKET
     fprintf(stderr, "configd: WebSocket context creation failed\n");
+#else
+    fprintf(stderr, "configd: this build contains the console core without the optional WebSocket service\n");
+#endif
     i2c_close(&pd690xx);
     return 1;
   }
@@ -375,7 +492,7 @@ int main(int argc, char **argv) {
 
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
-  while (running && lws_service(context, 100) >= 0) mark_clients_pending();
+  while (running && ws_service_once(context, 100) >= 0) mark_clients_pending();
 
   printf("configd: shutting down\n");
   ws_shutdown(context);

@@ -1,0 +1,873 @@
+#!/bin/sh
+set -u
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+CONFIGD=${CONFIGD:-/bin/configd}
+[ -x "$CONFIGD" ] || CONFIGD=/usr/bin/configd
+TMP_RESPONSE=/tmp/postmerkos-console.$$.out
+trap 'rm -f "$TMP_RESPONSE"' EXIT HUP INT TERM
+
+clear_screen() {
+    [ "${TERM:-dumb}" = dumb ] || printf '\033[2J\033[H'
+}
+
+banner() {
+    cat <<'BANNER'
+                      __                      __   ____  _____
+    ____  ____  _____/ /_____ ___  ___  _____/ /__/ __ \/ ___/
+   / __ \/ __ \/ ___/ __/ __ `__ \/ _ \/ ___/ //_/ / / /\__ \
+  / /_/ / /_/ (__  ) /_/ / / / / /  __/ /  / ,< / /_/ /___/ /
+ / .___/\____/____/\__/_/ /_/ /_/\___/_/  /_/|_|\____//____/
+/_/
+BANNER
+    printf '%s\n' 'Welcome to postmerkOS'
+}
+
+heading() {
+    clear_screen
+    banner
+    [ -n "${1:-}" ] && printf '\n%s\n%s\n' "$1" '------------------------------------------------------------'
+}
+
+pause() {
+    printf '\nPress Enter to continue...'
+    IFS= read -r _pause || return 0
+}
+
+read_choice() {
+    printf '%s' "${1:-postmerkOS> }"
+    IFS= read -r CHOICE || CHOICE=0
+}
+
+read_secret() {
+    local prompt=$1 value
+    printf '%s' "$prompt"
+    stty -echo 2>/dev/null || true
+    IFS= read -r value || value=
+    stty echo 2>/dev/null || true
+    printf '\n'
+    printf '%s' "$value"
+}
+
+confirm_word() {
+    local word=$1 prompt=$2 answer
+    printf '%s' "$prompt"
+    IFS= read -r answer || return 1
+    [ "$answer" = "$word" ]
+}
+
+is_number() { case ${1:-} in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+valid_port() { is_number "$1" && [ "$1" -ge 1 ] && [ "$1" -le "$TOTAL_PORTS" ]; }
+valid_vid() { is_number "$1" && [ "$1" -ge 1 ] && [ "$1" -le 4094 ]; }
+valid_mtu() { is_number "$1" && [ "$1" -ge 576 ] && [ "$1" -le 9216 ]; }
+valid_vlan_list() { [ -n "$1" ] && ! printf '%s' "$1" | grep -q '[^0-9,-]'; }
+valid_ipv4_text() { [ -n "$1" ] && ! printf '%s' "$1" | grep -q '[^0-9./]'; }
+valid_username() { [ -n "$1" ] && ! printf '%s' "$1" | grep -q '[^A-Za-z0-9_.-]'; }
+
+cfg_get() { "$CONFIGD" --get-path "$1" 2>/dev/null; }
+
+cfg_set() {
+    local path=$1 value=$2
+    if "$CONFIGD" --set-path "$path" "$value" >"$TMP_RESPONSE" 2>&1; then
+        printf 'Applied: %s = %s\n' "$path" "$value"
+        return 0
+    fi
+    printf 'Configuration change failed:\n'
+    cat "$TMP_RESPONSE"
+    return 1
+}
+
+cfg_set_string() {
+    local path=$1 value=$2
+    if "$CONFIGD" --set-string "$path" "$value" >"$TMP_RESPONSE" 2>&1; then
+        printf 'Applied: %s = %s\n' "$path" "$value"
+        return 0
+    fi
+    printf 'Configuration change failed:\n'
+    cat "$TMP_RESPONSE"
+    return 1
+}
+
+apply_json() {
+    local json=$1
+    if "$CONFIGD" --apply-json "$json" >"$TMP_RESPONSE" 2>&1; then
+        echo 'Configuration applied.'
+        return 0
+    fi
+    echo 'Configuration change failed:'
+    cat "$TMP_RESPONSE"
+    return 1
+}
+
+toggle_path() {
+    local path=$1 current
+    current=$(cfg_get "$path") || { echo "Unable to read $path"; return 1; }
+    case "$current" in
+        true) cfg_set "$path" false ;;
+        false) cfg_set "$path" true ;;
+        *) echo "Current value is not Boolean: $current"; return 1 ;;
+    esac
+}
+
+detect_layout() {
+    TOTAL_PORTS=$(cat /tmp/NUM_PORTS 2>/dev/null || echo 0)
+    is_number "$TOTAL_PORTS" || TOTAL_PORTS=0
+    if [ "$TOTAL_PORTS" -eq 0 ]; then
+        MODEL=$(sed -n 's/^MODEL=//p' /etc/boardinfo 2>/dev/null | head -n 1)
+        case "$MODEL" in
+            MS220-8|MS220-8P) TOTAL_PORTS=10 ;;
+            MS320-24|MS320-24P) TOTAL_PORTS=28 ;;
+            MS220-48*|MS320-48*|MS42|MS42P) TOTAL_PORTS=52 ;;
+            *) TOTAL_PORTS=24 ;;
+        esac
+    fi
+    case "$TOTAL_PORTS" in
+        10) COPPER_PORTS=8; SFP_FIRST=9 ;;
+        28) COPPER_PORTS=24; SFP_FIRST=25 ;;
+        52) COPPER_PORTS=48; SFP_FIRST=49 ;;
+        *) COPPER_PORTS=$TOTAL_PORTS; SFP_FIRST=$((TOTAL_PORTS + 1)) ;;
+    esac
+    SFP_LAST=$TOTAL_PORTS
+}
+
+show_range() {
+    local first=$1 last=$2
+    "$CONFIGD" --show-ports "$first-$last" || echo 'Port status is unavailable.'
+}
+
+system_status_menu() {
+    while :; do
+        heading 'Status'
+        cat <<EOF_STATUS
+1) System overview
+2) All ports
+3) Copper RJ45 ports (1-$COPPER_PORTS)
+EOF_STATUS
+        [ "$SFP_FIRST" -le "$SFP_LAST" ] && printf '4) SFP/SFP+ ports (%s-%s)\n' "$SFP_FIRST" "$SFP_LAST"
+        cat <<'EOF_STATUS'
+5) Firmware updater status
+6) Current complete configuration
+b) Back
+EOF_STATUS
+        read_choice 'status> '
+        case "$CHOICE" in
+            1) heading 'System overview'; "$CONFIGD" --show-summary; pause ;;
+            2) heading 'All ports'; show_range 1 "$TOTAL_PORTS"; pause ;;
+            3) heading 'Copper RJ45 ports'; show_range 1 "$COPPER_PORTS"; pause ;;
+            4) if [ "$SFP_FIRST" -le "$SFP_LAST" ]; then heading 'SFP/SFP+ ports'; show_range "$SFP_FIRST" "$SFP_LAST"; pause; else echo 'No separate SFP range is defined.'; pause; fi ;;
+            5) heading 'Firmware updater status'; fw_update_status 2>/dev/null || cat /run/fwupdate/status.json 2>/dev/null || echo 'No update status is available.'; pause ;;
+            6) heading 'Persistent switch configuration'; "$CONFIGD" --get-config-raw; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+select_speed() {
+    local port=$1
+    heading "Port $port - speed"
+    cat <<'EOF_SPEED'
+1) Auto negotiation
+2) 10 Mbps half duplex
+3) 10 Mbps full duplex
+4) 100 Mbps half duplex
+5) 100 Mbps full duplex
+6) 1000 Mbps full duplex
+b) Back
+EOF_SPEED
+    read_choice 'speed> '
+    case "$CHOICE" in
+        1) cfg_set "ports.$port.speed" auto ;;
+        2) cfg_set "ports.$port.speed" 10half ;;
+        3) cfg_set "ports.$port.speed" 10full ;;
+        4) cfg_set "ports.$port.speed" 100half ;;
+        5) cfg_set "ports.$port.speed" 100full ;;
+        6) cfg_set "ports.$port.speed" 1000full ;;
+        *) return ;;
+    esac
+    pause
+}
+
+vlan_menu() {
+    local port=$1 vid allowed native pvid
+    while :; do
+        heading "Port $port - VLAN configuration"
+        printf 'Mode: %-8s PVID: %-4s Allowed: %-24s Native: %s\n' \
+            "$(cfg_get "ports.$port.vlan.mode")" \
+            "$(cfg_get "ports.$port.vlan.pvid")" \
+            "$(cfg_get "ports.$port.vlan.allowed")" \
+            "$(cfg_get "ports.$port.vlan.untagged_vid")"
+        printf 'Ingress filter: %s\n\n' "$(cfg_get "ports.$port.vlan.ingress_filter")"
+        cat <<'EOF_VLAN'
+1) Configure access VLAN
+2) Configure tagged trunk
+3) Configure hybrid trunk with native VLAN
+4) Toggle ingress filtering
+5) Set PVID only
+b) Back
+EOF_VLAN
+        read_choice 'vlan> '
+        case "$CHOICE" in
+            1)
+                printf 'Access VLAN ID (1-4094): '; read -r vid
+                if valid_vid "$vid"; then
+                    apply_json "{\"ports\":{\"$port\":{\"vlan\":{\"mode\":\"access\",\"pvid\":$vid,\"allowed\":\"\",\"untagged_vid\":0}}}}"
+                else echo 'Invalid VLAN ID.'; fi
+                pause ;;
+            2)
+                printf 'Allowed VLANs (example 1,10,20-30): '; read -r allowed
+                printf 'Port PVID (1-4094): '; read -r pvid
+                if valid_vlan_list "$allowed" && valid_vid "$pvid"; then
+                    apply_json "{\"ports\":{\"$port\":{\"vlan\":{\"mode\":\"trunk\",\"pvid\":$pvid,\"allowed\":\"$allowed\",\"untagged_vid\":0}}}}"
+                else echo 'Invalid VLAN list or PVID.'; fi
+                pause ;;
+            3)
+                printf 'Allowed VLANs (example 1,10,20-30): '; read -r allowed
+                printf 'Native/untagged VLAN (1-4094): '; read -r native
+                printf 'Port PVID [%s]: ' "$native"; read -r pvid; pvid=${pvid:-$native}
+                if valid_vlan_list "$allowed" && valid_vid "$native" && valid_vid "$pvid"; then
+                    apply_json "{\"ports\":{\"$port\":{\"vlan\":{\"mode\":\"hybrid\",\"pvid\":$pvid,\"allowed\":\"$allowed\",\"untagged_vid\":$native}}}}"
+                else echo 'Invalid VLAN settings.'; fi
+                pause ;;
+            4) toggle_path "ports.$port.vlan.ingress_filter"; pause ;;
+            5) printf 'PVID (1-4094): '; read -r pvid; if valid_vid "$pvid"; then cfg_set "ports.$port.vlan.pvid" "$pvid"; else echo 'Invalid PVID.'; fi; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+port_stp_menu() {
+    local port=$1 value
+    while :; do
+        heading "Port $port - spanning tree"
+        printf 'Enabled: %-5s Priority: %-3s Cost: %-10s Edge: %-5s Auto-edge: %s\n\n' \
+            "$(cfg_get "ports.$port.stp.enabled")" \
+            "$(cfg_get "ports.$port.stp.priority")" \
+            "$(cfg_get "ports.$port.stp.cost")" \
+            "$(cfg_get "ports.$port.stp.edge")" \
+            "$(cfg_get "ports.$port.stp.auto_edge")"
+        cat <<'EOF_STP'
+1) Toggle STP
+2) Set port priority
+3) Set path cost
+4) Toggle edge-port mode
+5) Toggle automatic edge detection
+b) Back
+EOF_STP
+        read_choice 'stp> '
+        case "$CHOICE" in
+            1) toggle_path "ports.$port.stp.enabled"; pause ;;
+            2) printf 'Priority (0-255): '; read -r value; if is_number "$value" && [ "$value" -le 255 ]; then cfg_set "ports.$port.stp.priority" "$value"; else echo 'Invalid priority.'; fi; pause ;;
+            3) printf 'Path cost (0-200000000): '; read -r value; if is_number "$value" && [ "$value" -le 200000000 ]; then cfg_set "ports.$port.stp.cost" "$value"; else echo 'Invalid path cost.'; fi; pause ;;
+            4) toggle_path "ports.$port.stp.edge"; pause ;;
+            5) toggle_path "ports.$port.stp.auto_edge"; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+poe_menu() {
+    local port=$1
+    while :; do
+        heading "Port $port - Power over Ethernet"
+        printf 'Enabled: %s    Mode: %s\n\n' "$(cfg_get "ports.$port.poe.enabled")" "$(cfg_get "ports.$port.poe.mode")"
+        cat <<'EOF_POE'
+1) Disable PoE
+2) Enable 802.3af mode
+3) Enable 802.3at mode
+b) Back
+EOF_POE
+        read_choice 'poe> '
+        case "$CHOICE" in
+            1) cfg_set "ports.$port.poe.enabled" false; pause ;;
+            2) apply_json "{\"ports\":{\"$port\":{\"poe\":{\"enabled\":true,\"mode\":\"af\"}}}}"; pause ;;
+            3) apply_json "{\"ports\":{\"$port\":{\"poe\":{\"enabled\":true,\"mode\":\"at\"}}}}"; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+port_menu() {
+    local port=$1 name poe_supported
+    while :; do
+        heading "Port $port configuration"
+        "$CONFIGD" --show-port "$port" || true
+        poe_supported=0
+        cfg_get "ports.$port.poe.enabled" >/dev/null 2>&1 && poe_supported=1
+        cat <<'EOF_PORT'
+
+1) Toggle administrative state       2) Set port name
+3) Set PHY speed                     4) Toggle flow control
+5) Toggle Energy Efficient Ethernet  6) Toggle storm control
+7) VLAN configuration                8) Spanning Tree configuration
+EOF_PORT
+        [ "$poe_supported" -eq 1 ] && echo '9) Power over Ethernet'
+        cat <<'EOF_PORT'
+r) Refresh details
+b) Back
+EOF_PORT
+        read_choice "port $port> "
+        case "$CHOICE" in
+            1) toggle_path "ports.$port.enabled"; pause ;;
+            2) printf 'Port name (blank clears it): '; IFS= read -r name; cfg_set_string "ports.$port.name" "$name"; pause ;;
+            3) select_speed "$port" ;;
+            4) toggle_path "ports.$port.flow_control"; pause ;;
+            5) toggle_path "ports.$port.eee"; pause ;;
+            6) toggle_path "ports.$port.storm_control"; pause ;;
+            7) vlan_menu "$port" ;;
+            8) port_stp_menu "$port" ;;
+            9) [ "$poe_supported" -eq 1 ] && poe_menu "$port" ;;
+            r|R) : ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+port_group_menu() {
+    local first=$1 last=$2 port
+    while :; do
+        heading "Ports $first-$last"
+        show_range "$first" "$last"
+        printf '\nEnter a port number to configure, or b to return: '
+        IFS= read -r port || return
+        case "$port" in b|B|0|'') return ;; esac
+        if valid_port "$port" && [ "$port" -ge "$first" ] && [ "$port" -le "$last" ]; then
+            port_menu "$port"
+        else
+            echo 'That port is outside this section.'; sleep 1
+        fi
+    done
+}
+
+copper_menu() {
+    local index=1 first last choice
+    while :; do
+        heading 'Copper RJ45 port sections'
+        index=1; first=1
+        while [ "$first" -le "$COPPER_PORTS" ]; do
+            last=$((first + 11)); [ "$last" -gt "$COPPER_PORTS" ] && last=$COPPER_PORTS
+            printf '%d) Ports %d-%d\n' "$index" "$first" "$last"
+            index=$((index + 1)); first=$((first + 12))
+        done
+        echo 'b) Back'
+        read_choice 'copper> '
+        case "$CHOICE" in b|B|0|'') return ;; esac
+        if is_number "$CHOICE" && [ "$CHOICE" -ge 1 ] && [ "$CHOICE" -lt "$index" ]; then
+            first=$(( (CHOICE - 1) * 12 + 1 )); last=$((first + 11)); [ "$last" -gt "$COPPER_PORTS" ] && last=$COPPER_PORTS
+            port_group_menu "$first" "$last"
+        else echo 'Unknown option.'; sleep 1; fi
+    done
+}
+
+sfp_menu() {
+    if [ "$SFP_FIRST" -gt "$SFP_LAST" ]; then echo 'No separate SFP/SFP+ ports are defined on this model.'; pause; return; fi
+    port_group_menu "$SFP_FIRST" "$SFP_LAST"
+}
+
+network_menu() {
+    local fallback mtu address gateway
+    while :; do
+        heading 'Management IPv4 configuration'
+        printf 'Mode: %-7s Address: %-20s Gateway: %-15s MTU: %s\n' \
+            "$(cfg_get network.ipv4.mode)" \
+            "$(cfg_get network.ipv4.address 2>/dev/null || cfg_get network.ipv4.fallback_address)" \
+            "$(cfg_get network.ipv4.gateway 2>/dev/null || echo automatic)" \
+            "$(cfg_get network.ipv4.mtu)"
+        cat <<'EOF_NET'
+
+1) Configure DHCP with fallback address
+2) Configure static IPv4
+3) Change MTU
+b) Back
+EOF_NET
+        read_choice 'network> '
+        case "$CHOICE" in
+            1)
+                printf 'Fallback address in CIDR notation [169.254.0.10/16]: '; read -r fallback; fallback=${fallback:-169.254.0.10/16}
+                printf 'MTU [1500]: '; read -r mtu; mtu=${mtu:-1500}
+                if valid_ipv4_text "$fallback" && valid_mtu "$mtu"; then
+                    apply_json "{\"network\":{\"ipv4\":{\"mode\":\"dhcp\",\"fallback_address\":\"$fallback\",\"mtu\":$mtu,\"address\":null,\"gateway\":null}}}"
+                    echo 'The management address may change after a DHCP lease is obtained.'
+                else echo 'Invalid DHCP fallback or MTU.'; fi
+                pause ;;
+            2)
+                printf 'Static address in CIDR notation: '; read -r address
+                printf 'Gateway address: '; read -r gateway
+                printf 'MTU [1500]: '; read -r mtu; mtu=${mtu:-1500}
+                if valid_ipv4_text "$address" && valid_ipv4_text "$gateway" && valid_mtu "$mtu"; then
+                    apply_json "{\"network\":{\"ipv4\":{\"mode\":\"static\",\"address\":\"$address\",\"gateway\":\"$gateway\",\"mtu\":$mtu,\"fallback_address\":null}}}"
+                    echo 'The current SSH/TTL management session may move to the new address.'
+                else echo 'Invalid static IPv4 settings.'; fi
+                pause ;;
+            3) printf 'MTU (576-9216): '; read -r mtu; if valid_mtu "$mtu"; then cfg_set network.ipv4.mtu "$mtu"; else echo 'Invalid MTU.'; fi; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+global_stp_menu() {
+    local path label min max value
+    while :; do
+        heading 'Global Spanning Tree settings'
+        printf 'Priority: %s  Hello: %ss  Forward delay: %ss  Max age: %ss  Hold count: %s\n\n' \
+            "$(cfg_get stp.priority)" "$(cfg_get stp.hello_time)" \
+            "$(cfg_get stp.forward_delay)" "$(cfg_get stp.max_age)" "$(cfg_get stp.hold_count)"
+        cat <<'EOF_GSTP'
+1) Bridge priority
+2) Hello time
+3) Forward delay
+4) Maximum age
+5) Hold count
+b) Back
+EOF_GSTP
+        read_choice 'global-stp> '
+        case "$CHOICE" in
+            1) path=stp.priority; label='Bridge priority'; min=0; max=61440 ;;
+            2) path=stp.hello_time; label='Hello time'; min=1; max=10 ;;
+            3) path=stp.forward_delay; label='Forward delay'; min=4; max=30 ;;
+            4) path=stp.max_age; label='Maximum age'; min=6; max=40 ;;
+            5) path=stp.hold_count; label='Hold count'; min=1; max=10 ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1; continue ;;
+        esac
+        printf '%s (%s-%s): ' "$label" "$min" "$max"; read -r value
+        if is_number "$value" && [ "$value" -ge "$min" ] && [ "$value" -le "$max" ]; then cfg_set "$path" "$value"; else echo 'Value is outside the allowed range.'; fi
+        pause
+    done
+}
+
+multicast_menu() {
+    local value
+    while :; do
+        heading 'Multicast configuration'
+        printf 'IGMP snooping: %-5s  IGMP querier interval: %ss\n' "$(cfg_get multicast.igmp_snooping)" "$(cfg_get multicast.igmp_querier_interval)"
+        printf 'MLD snooping:  %-5s  MLD querier interval:  %ss\n\n' "$(cfg_get multicast.mld_snooping)" "$(cfg_get multicast.mld_querier_interval)"
+        cat <<'EOF_MC'
+1) Toggle IGMP snooping
+2) Set IGMP querier interval
+3) Toggle MLD snooping
+4) Set MLD querier interval
+b) Back
+EOF_MC
+        read_choice 'multicast> '
+        case "$CHOICE" in
+            1) toggle_path multicast.igmp_snooping; pause ;;
+            2) printf 'Interval in seconds (1-3600): '; read -r value; if is_number "$value" && [ "$value" -ge 1 ] && [ "$value" -le 3600 ]; then cfg_set multicast.igmp_querier_interval "$value"; else echo 'Invalid interval.'; fi; pause ;;
+            3) toggle_path multicast.mld_snooping; pause ;;
+            4) printf 'Interval in seconds (1-3600): '; read -r value; if is_number "$value" && [ "$value" -ge 1 ] && [ "$value" -le 3600 ]; then cfg_set multicast.mld_querier_interval "$value"; else echo 'Invalid interval.'; fi; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+global_config_menu() {
+    while :; do
+        heading 'Global switch configuration'
+        cat <<'EOF_GLOBAL'
+1) Management IPv4
+2) Global Spanning Tree
+3) Toggle LACP
+4) Multicast snooping and querier intervals
+5) View complete configuration
+b) Back
+EOF_GLOBAL
+        read_choice 'global> '
+        case "$CHOICE" in
+            1) network_menu ;;
+            2) global_stp_menu ;;
+            3) heading 'LACP'; toggle_path lacp.enabled; pause ;;
+            4) multicast_menu ;;
+            5) heading 'Complete configuration'; "$CONFIGD" --get-config-raw; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+port_configuration_menu() {
+    while :; do
+        heading 'Port Configuration'
+        printf '1) Copper RJ45 ports (1-%s)\n' "$COPPER_PORTS"
+        [ "$SFP_FIRST" -le "$SFP_LAST" ] && printf '2) SFP/SFP+ ports (%s-%s)\n' "$SFP_FIRST" "$SFP_LAST"
+        cat <<'EOF_PC'
+3) Global switch and management settings
+4) All-port summary
+b) Back
+EOF_PC
+        read_choice 'ports> '
+        case "$CHOICE" in
+            1) copper_menu ;;
+            2) sfp_menu ;;
+            3) global_config_menu ;;
+            4) heading 'All-port summary'; show_range 1 "$TOTAL_PORTS"; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+select_overlay() {
+    echo 'Overlay policy:' >&2
+    echo '  1) preserve - keep settings byte-for-byte' >&2
+    echo '  2) migrate  - copy selected settings into a clean overlay' >&2
+    echo '  3) reset    - erase settings' >&2
+    echo '  4) image    - use overlay embedded in a full firmware image' >&2
+    printf 'Selection [1]: ' >&2
+    read -r selection
+    case "${selection:-1}" in
+        1) echo preserve ;;
+        2) echo migrate ;;
+        3) echo reset ;;
+        4) echo image ;;
+        *) echo preserve ;;
+    esac
+}
+
+firmware_menu() {
+    local file hash overlay server remote port url user password
+    while :; do
+        heading 'Firmware Update'
+        cat <<'EOF_FW'
+1) Show updater status
+2) Install a local firmware image
+3) Download and install by TFTP
+4) Download and install by HTTP/HTTPS
+5) Download and install by SFTP
+6) Verify a local image without flashing
+b) Back
+EOF_FW
+        read_choice 'firmware> '
+        case "$CHOICE" in
+            1) heading 'Firmware updater status'; fw_update_status 2>/dev/null || cat /run/fwupdate/status.json 2>/dev/null || echo 'No update is active.'; pause ;;
+            2|6)
+                heading 'Local firmware image'
+                printf 'Firmware path: '; read -r file
+                [ -f "$file" ] || { echo 'File not found.'; pause; continue; }
+                hash=$(sha256sum "$file" | awk '{print $1}') || { echo 'Unable to hash firmware.'; pause; continue; }
+                overlay=$(select_overlay)
+                if [ "$CHOICE" = 6 ]; then fw_update --sha256 "$hash" --overlay "$overlay" --verify-only "$file"; else fw_update --sha256 "$hash" --overlay "$overlay" "$file"; fi
+                pause ;;
+            3)
+                heading 'TFTP firmware update'
+                printf 'TFTP server: '; read -r server
+                printf 'Remote firmware path: '; read -r remote
+                printf 'TFTP port [69]: '; read -r port; port=${port:-69}
+                overlay=$(select_overlay)
+                fw_update_tftp --server "$server" --file "$remote" --port "$port" --overlay "$overlay"
+                pause ;;
+            4)
+                heading 'HTTP/HTTPS firmware update'
+                if ! command -v fw_update_http >/dev/null 2>&1; then echo 'HTTP updater support is not installed in this build.'; pause; continue; fi
+                printf 'Direct firmware URL (blank opens configured catalog): '; read -r url
+                overlay=$(select_overlay)
+                if [ -n "$url" ]; then fw_update_http --url "$url" --overlay "$overlay"; else fw_update_http --overlay "$overlay"; fi
+                pause ;;
+            5)
+                heading 'SFTP firmware update'
+                if ! command -v fw_update_sftp >/dev/null 2>&1; then echo 'SFTP updater support is not installed in this build.'; pause; continue; fi
+                printf 'SFTP server: '; read -r server
+                printf 'Remote firmware path: '; read -r remote
+                printf 'Username: '; read -r user
+                password=$(read_secret 'Password: ')
+                overlay=$(select_overlay)
+                fw_update_sftp --server "$server" --file "$remote" --user "$user" --password "$password" --overlay "$overlay"
+                pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+backup_restore_menu() {
+    local file default
+    while :; do
+        heading 'Backup & Restore'
+        cat <<'EOF_BR'
+1) Back up configuration to JSON
+2) Validate a backup file
+3) Restore and apply a backup
+4) Display current configuration
+b) Back
+EOF_BR
+        read_choice 'backup> '
+        case "$CHOICE" in
+            1)
+                default=/root/postmerkos-config-$(date +%Y%m%d-%H%M%S).json
+                printf 'Output path [%s]: ' "$default"; read -r file; file=${file:-$default}
+                if "$CONFIGD" --export-config "$file"; then echo "Backup written to $file"; else echo 'Backup failed.'; fi
+                pause ;;
+            2) printf 'Backup file: '; read -r file; "$CONFIGD" --validate "$file"; pause ;;
+            3)
+                printf 'Backup file: '; read -r file
+                [ -f "$file" ] || { echo 'File not found.'; pause; continue; }
+                "$CONFIGD" --validate "$file" >/dev/null || { echo 'Backup validation failed.'; pause; continue; }
+                if confirm_word RESTORE 'Type RESTORE to replace the current configuration: '; then "$CONFIGD" --replace-file "$file"; else echo 'Restore cancelled.'; fi
+                pause ;;
+            4) "$CONFIGD" --get-config-raw; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+list_users() {
+    awk -F: '$3 == 0 || $3 >= 1000 {printf "%-20s uid=%-5s home=%-20s shell=%s\\n", $1, $3, $6, $7}' /etc/passwd
+    echo
+    echo 'Web-management administrators:'
+    echo '  root'
+    awk -F: '$1 == "postmerkos-admin" {gsub(/,/, "\\n  ", $4); if ($4 != "") print "  "$4}' /etc/group
+}
+
+ensure_admin_group() {
+    grep -q '^postmerkos-admin:' /etc/group 2>/dev/null && return 0
+    command -v addgroup >/dev/null 2>&1 || return 1
+    addgroup postmerkos-admin >/dev/null 2>&1
+}
+
+user_management_menu() {
+    local user
+    while :; do
+        heading 'User Management'
+        cat <<'EOF_USER'
+1) List login and administrator accounts
+2) Change an account password
+3) Create a management administrator
+4) Grant web-management access
+5) Revoke web-management access
+6) Delete a non-root account
+b) Back
+EOF_USER
+        read_choice 'users> '
+        case "$CHOICE" in
+            1) heading 'Accounts'; list_users; pause ;;
+            2) printf 'Account [root]: '; read -r user; user=${user:-root}; passwd "$user"; pause ;;
+            3)
+                command -v adduser >/dev/null 2>&1 || { echo 'adduser is not installed.'; pause; continue; }
+                printf 'New administrator username: '; read -r user
+                if valid_username "$user" && ensure_admin_group; then adduser "$user" && addgroup "$user" postmerkos-admin; else echo 'Unable to create administrator.'; fi
+                pause ;;
+            4) printf 'Username: '; read -r user; if valid_username "$user" && ensure_admin_group; then addgroup "$user" postmerkos-admin; else echo 'Invalid username or group operation failed.'; fi; pause ;;
+            5) printf 'Username: '; read -r user; if [ "$user" = root ]; then echo 'Root authorization cannot be revoked.'; elif valid_username "$user" && command -v delgroup >/dev/null 2>&1; then delgroup "$user" postmerkos-admin; else echo 'Unable to revoke access.'; fi; pause ;;
+            6) printf 'Username: '; read -r user; if [ "$user" = root ]; then echo 'Root cannot be deleted.'; elif valid_username "$user" && confirm_word DELETE "Type DELETE to remove $user: "; then deluser "$user"; else echo 'Deletion cancelled.'; fi; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+find_init_script() {
+    local pattern=$1 script
+    for script in /etc/init.d/S*; do
+        [ -e "$script" ] || continue
+        case "$(basename "$script")" in *"$pattern"*) echo "$script"; return 0 ;; esac
+    done
+    return 1
+}
+
+service_state() {
+    local name=$1 process=$2 script
+    script=$(find_init_script "$name" 2>/dev/null || true)
+    if pidof "$process" >/dev/null 2>&1; then printf '%-18s running' "$name"; else printf '%-18s stopped' "$name"; fi
+    [ -n "$script" ] && printf '  (%s)' "$script" || printf '  (not installed as a service)'
+    echo
+}
+
+service_action_menu() {
+    local label=$1 pattern=$2 script action
+    script=$(find_init_script "$pattern" 2>/dev/null || true)
+    if [ -z "$script" ]; then echo "$label service is not installed in this build."; pause; return; fi
+    while :; do
+        heading "$label service"
+        printf 'Init script: %s\n\n1) Start\n2) Stop\n3) Restart\nb) Back\n' "$script"
+        read_choice 'service> '
+        case "$CHOICE" in 1) action=start ;; 2) action=stop ;; 3) action=restart ;; b|B|0|'') return ;; *) continue ;; esac
+        if [ "$pattern" = dropbear ] && [ "$action" = stop ]; then
+            echo 'WARNING: stopping SSH will terminate remote management sessions.'
+            confirm_word STOP 'Type STOP to continue: ' || { echo 'Cancelled.'; pause; continue; }
+        fi
+        "$script" "$action"
+        pause
+    done
+}
+
+service_management_menu() {
+    while :; do
+        heading 'Service Management'
+        cat <<'EOF_SERVICE'
+1) Show service status
+2) SSH service (Dropbear)
+3) Configuration backend (configd)
+4) Web interface (uhttpd)
+5) Time synchronization (chrony)
+6) Show management service logs
+b) Back
+EOF_SERVICE
+        read_choice 'services> '
+        case "$CHOICE" in
+            1) heading 'Service status'; service_state dropbear dropbear; service_state configd configd; service_state uhttpd uhttpd; service_state chrony chronyd; pause ;;
+            2) service_action_menu SSH dropbear ;;
+            3) service_action_menu configd configd ;;
+            4) service_action_menu 'Web interface' uhttpd ;;
+            5) service_action_menu 'Time synchronization' chrony ;;
+            6) heading 'Management service logs'; for file in /tmp/configd.log /tmp/uhttpd.log /var/log/messages; do [ -f "$file" ] && { echo "--- $file ---"; tail -n 60 "$file"; }; done; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+power_control_menu() {
+    while :; do
+        heading 'Power Control'
+        cat <<'EOF_POWER'
+1) Reboot switch
+2) Halt and power off switch
+3) Reapply saved switch configuration
+b) Back
+EOF_POWER
+        read_choice 'power> '
+        case "$CHOICE" in
+            1) if confirm_word REBOOT 'Type REBOOT to reboot now: '; then sync; reboot; fi ;;
+            2) if confirm_word POWEROFF 'Type POWEROFF to halt now: '; then sync; poweroff; fi ;;
+            3)
+                echo 'This reapplies the complete saved configuration without remounting Click.'
+                if confirm_word REAPPLY 'Type REAPPLY to continue: '; then
+                    "$CONFIGD" --replace-file /etc/switch.json
+                fi
+                pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+usage() {
+    cat <<'EOF_USAGE'
+usage: postmerkos-console [command]
+
+Interactive:
+  menu                              open the hierarchical SSH/TTL console
+  shell                             enter the unrestricted BusyBox shell
+
+Scriptable compatibility:
+  status                            text system overview
+  ports                             text table of all ports
+  port PORT | port show PORT        detailed port state
+  port set PORT PATH VALUE          update a port configuration value
+  set PATH VALUE                    update any JSON-typed value
+  set-string PATH TEXT              update a literal string value
+  config show                       print complete JSON configuration
+  config backup FILE                write a plain JSON backup
+  config restore FILE               validate, replace, and apply a backup
+  firmware status|local|tftp|http|sftp [arguments]
+  password [USER]                   change a local account password
+
+`postmerkos-cli` is retained as a compatibility symlink.
+EOF_USAGE
+}
+
+main_menu() {
+    while :; do
+        heading ''
+        cat <<'EOF_MAIN'
+- type the preferred option to continue
+
+1) Status                         2) Port Configuration
+3) Firmware Update                4) Backup & Restore
+5) User Management                6) Service Management
+7) Power Control                  8) Shell
+0) Log out
+EOF_MAIN
+        read_choice 'postmerkOS> '
+        case "$CHOICE" in
+            1) system_status_menu ;;
+            2) port_configuration_menu ;;
+            3) firmware_menu ;;
+            4) backup_restore_menu ;;
+            5) user_management_menu ;;
+            6) service_management_menu ;;
+            7) power_control_menu ;;
+            8|s|S|shell)
+                clear_screen
+                echo 'Entering the raw Linux shell. Type exit to return to postmerkOS.'
+                POSTMERKOS_RAW_SHELL=1 /bin/sh -l
+                ;;
+            0|q|Q|logout|exit|'') return 0 ;;
+            help|'?') usage; pause ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+main() {
+    local command sub port path
+    if [ "$(id -u)" -ne 0 ]; then
+        echo 'postmerkOS console management requires the root account.' >&2
+        return 1
+    fi
+    detect_layout
+    command=${1:-menu}
+    case "$command" in
+        menu) main_menu ;;
+        status) "$CONFIGD" --show-summary ;;
+        ports) "$CONFIGD" --show-ports "1-$TOTAL_PORTS" ;;
+        port)
+            sub=${2:-}
+            case "$sub" in
+                show) [ "$#" -eq 3 ] && "$CONFIGD" --show-port "$3" || { usage >&2; return 2; } ;;
+                set)
+                    [ "$#" -ge 5 ] || { usage >&2; return 2; }
+                    port=$3; path=$4; shift 4
+                    "$CONFIGD" --set-path "ports.$port.$path" "$*"
+                    ;;
+                *) [ "$#" -eq 2 ] && "$CONFIGD" --show-port "$2" || { usage >&2; return 2; } ;;
+            esac
+            ;;
+        set)
+            [ "$#" -ge 3 ] || { usage >&2; return 2; }
+            path=$2; shift 2
+            "$CONFIGD" --set-path "$path" "$*"
+            ;;
+        set-string)
+            [ "$#" -ge 3 ] || { usage >&2; return 2; }
+            path=$2; shift 2
+            "$CONFIGD" --set-string "$path" "$*"
+            ;;
+        config)
+            sub=${2:-}
+            case "$sub" in
+                show) "$CONFIGD" --get-config-raw ;;
+                backup) [ "$#" -eq 3 ] && "$CONFIGD" --export-config "$3" || { usage >&2; return 2; } ;;
+                restore)
+                    [ "$#" -eq 3 ] || { usage >&2; return 2; }
+                    "$CONFIGD" --validate "$3" >/dev/null && "$CONFIGD" --replace-file "$3"
+                    ;;
+                *) usage >&2; return 2 ;;
+            esac
+            ;;
+        firmware)
+            sub=${2:-status}; shift 2 2>/dev/null || shift 1
+            case "$sub" in
+                status) fw_update_status "$@" ;;
+                local) exec fw_update "$@" ;;
+                tftp) exec fw_update_tftp "$@" ;;
+                http) exec fw_update_http "$@" ;;
+                sftp) exec fw_update_sftp "$@" ;;
+                *) usage >&2; return 2 ;;
+            esac
+            ;;
+        password) passwd "${2:-root}" ;;
+        shell) POSTMERKOS_RAW_SHELL=1 exec /bin/sh -l ;;
+        help|-h|--help) usage ;;
+        *) usage >&2; return 2 ;;
+    esac
+}
+
+main "$@"
