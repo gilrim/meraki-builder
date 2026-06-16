@@ -1,5 +1,9 @@
 config BR2_PACKAGE_POSTMERKOS_CLI
 	bool "postmerkOS management CLI"
+	depends on BR2_ENABLE_LOCALE # linux-pam
+	depends on BR2_USE_WCHAR # linux-pam
+	depends on !BR2_STATIC_LIBS # linux-pam
+	depends on BR2_USE_MMU # linux-pam/fork()
 	select BR2_PACKAGE_CONFIGD
 	select BR2_PACKAGE_FWUPDATE
 	select BR2_PACKAGE_JQ
