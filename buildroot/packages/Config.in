@@ -5,5 +5,5 @@ menu "MS42P custom packages"
 	source "package/findhdr/Config.in"
 	source "package/pd690xx/Config.in"
 	source "package/fwupdate/Config.in"
-	source "package/postmerkos-cli/Config.in"
+	source "package/postmerkos-console/Config.in"
 endmenu

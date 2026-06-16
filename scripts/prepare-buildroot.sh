@@ -32,7 +32,8 @@ rsync -a "$REPO_ROOT/buildroot/board/meraki/" "$BUILDROOT_DIR/board/meraki/"
 log "Synchronizing custom Buildroot packages"
 # Remove package names used by earlier versions of this workflow so an existing
 # Buildroot work tree cannot retain stale recipes after a rename.
-rm -rf "$BUILDROOT_DIR/package/clickswstatus" "$BUILDROOT_DIR/package/find_hdr"
+rm -rf "$BUILDROOT_DIR/package/clickswstatus" "$BUILDROOT_DIR/package/find_hdr" \
+  "$BUILDROOT_DIR/package/postmerkos-cli"
 for src in "$REPO_ROOT"/buildroot/packages/*; do
   [[ -d "$src" ]] || continue
   name="$(basename "$src")"
@@ -56,6 +57,7 @@ legacy = {
     'source "package/findhdr/Config.in"',
     'source "package/pd690xx/Config.in"',
     'source "package/fwupdate/Config.in"',
+    'source "package/postmerkos-console/Config.in"',
     'source "package/postmerkos-cli/Config.in"',
     'source "package/Config.in.ms42p"',
 }
@@ -159,7 +161,11 @@ set_bool('BR2_PACKAGE_PD690XX', True)
 set_bool('BR2_PACKAGE_FWUPDATE', True)
 set_bool('BR2_PACKAGE_FWUPDATE_CURL', True)
 set_bool('BR2_PACKAGE_CONFIGD', True)
-set_bool('BR2_PACKAGE_POSTMERKOS_CLI', True)
+set_bool('BR2_PACKAGE_CONFIGD_WEBSOCKET', include_ui)
+set_bool('BR2_PACKAGE_LIBWEBSOCKETS', include_ui)
+set_bool('BR2_PACKAGE_POSTMERKOS_CONSOLE', True)
+set_bool('BR2_PACKAGE_POSTMERKOS_CLI', False)
+set_bool('BR2_PACKAGE_JQ', False)
 set_bool('BR2_PACKAGE_LINUX_PAM', False)
 set_bool('BR2_PACKAGE_FLEX', False)
 set_bool('BR2_TOOLCHAIN_BUILDROOT_WCHAR', False)
@@ -179,7 +185,15 @@ grep -q '^BR2_PACKAGE_PD690XX=y$' "$CONFIG" || die "Buildroot did not retain PD6
 grep -q '^BR2_PACKAGE_FWUPDATE=y$' "$CONFIG" || die "Buildroot did not retain FWUPDATE"
 grep -q '^BR2_PACKAGE_FWUPDATE_CURL=y$' "$CONFIG" || die "Buildroot did not retain FWUPDATE_CURL"
 grep -q '^BR2_PACKAGE_CONFIGD=y$' "$CONFIG" || die "Buildroot did not retain CONFIGD"
-grep -q '^BR2_PACKAGE_POSTMERKOS_CLI=y$' "$CONFIG" || die "Buildroot did not retain POSTMERKOS_CLI"
+if (( INCLUDE_UI_VALUE )); then
+  grep -q '^BR2_PACKAGE_CONFIGD_WEBSOCKET=y$' "$CONFIG" || die "Buildroot did not retain CONFIGD WebSocket support"
+  grep -q '^BR2_PACKAGE_LIBWEBSOCKETS=y$' "$CONFIG" || die "Buildroot did not retain libwebsockets for the optional web UI"
+else
+  ! grep -q '^BR2_PACKAGE_CONFIGD_WEBSOCKET=y$' "$CONFIG" || die "Console-only build unexpectedly retained WebSocket support"
+  ! grep -q '^BR2_PACKAGE_LIBWEBSOCKETS=y$' "$CONFIG" || die "Console-only build unexpectedly retained libwebsockets"
+fi
+grep -q '^BR2_PACKAGE_POSTMERKOS_CONSOLE=y$' "$CONFIG" || die "Buildroot did not retain POSTMERKOS_CONSOLE"
+if grep -q '^BR2_PACKAGE_JQ=y$' "$CONFIG"; then die "Buildroot unexpectedly retained jq for the console"; fi
 ! grep -q '^BR2_PACKAGE_LINUX_PAM=y$' "$CONFIG" || die "Linux-PAM must remain disabled for the 8 MiB image"
 ! grep -q '^BR2_TOOLCHAIN_BUILDROOT_WCHAR=y$' "$CONFIG" || die "uClibc wchar support must remain disabled for the compact image"
 ! grep -q '^BR2_TOOLCHAIN_BUILDROOT_LOCALE=y$' "$CONFIG" || die "uClibc locale support must remain disabled for the compact image"

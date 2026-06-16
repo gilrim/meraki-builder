@@ -3,7 +3,9 @@
 - Add local `/etc/shadow` authentication through the existing system `crypt()` implementation without Linux-PAM.
 - Keep uClibc locale and wide-character support disabled and remove the PAM/Flex dependency chain.
 - Add authenticated firmware upload, bounded browser command execution, password updates, and configuration restore.
-- Add the automatic SSH/TTL postmerkOS management CLI and raw-shell escape.
+- Add the automatic hierarchical SSH/TTL postmerkOS console, chassis-aware port grouping, and raw-shell escape.
+- Make the console/configuration core mandatory while keeping libwebsockets, uhttpd, and the browser stack optional.
+- Preserve the existing authenticated WebSocket protocol when `INCLUDE_UI=1`.
 - Use plain JSON configuration backup/restore; no backup crypto helper or extra backup-specific library is included.
 - Add clickable/hoverable port graphics and a persistent Apply/Discard notification for unapplied browser changes.
 

@@ -1,0 +1,8 @@
+config BR2_PACKAGE_POSTMERKOS_CONSOLE
+	bool "postmerkOS console management interface"
+	select BR2_PACKAGE_CONFIGD
+	select BR2_PACKAGE_FWUPDATE
+	help
+	  Lightweight hierarchical text management interface for interactive
+	  SSH and TTL serial sessions. It is the primary switch UI and is
+	  included independently of the optional web interface.

@@ -1,4 +1,5 @@
 #include "websocket.h"
+#include <libwebsockets.h>
 #include "auth.h"
 #include "config_apply.h"
 #include "config_file.h"
@@ -861,6 +862,10 @@ void ws_schedule_timers(struct lws_context *context, int status_interval) {
       10 * LWS_USEC_PER_SEC);
   lws_sul_schedule(context, 0, &network_sul, network_poll_cb,
       (lws_usec_t)network_manager_next_poll_seconds() * LWS_USEC_PER_SEC);
+}
+
+int ws_service_once(struct lws_context *context, int timeout_ms) {
+  return lws_service(context, timeout_ms);
 }
 
 void ws_shutdown(struct lws_context *context) {

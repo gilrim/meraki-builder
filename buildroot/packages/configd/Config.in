@@ -1,8 +1,16 @@
 config BR2_PACKAGE_CONFIGD
-	bool "configd"
+	bool "postmerkOS configuration core"
 	select BR2_PACKAGE_JSON_C
-	select BR2_PACKAGE_LIBWEBSOCKETS
 	select BR2_PACKAGE_PD690XX
 	help
-	  Read and update persistent switch configuration and expose it through a
-	  WebSocket interface for the postmerkOS web UI.
+	  Persistent switch configuration, hardware control, validation, and
+	  one-shot console commands. This core is required by the text console
+	  and does not require the optional web interface.
+
+config BR2_PACKAGE_CONFIGD_WEBSOCKET
+	bool "configd WebSocket service"
+	depends on BR2_PACKAGE_CONFIGD
+	select BR2_PACKAGE_LIBWEBSOCKETS
+	help
+	  Add the authenticated WebSocket daemon used by postmerkos-ui. Leave
+	  disabled in console-only builds to save SquashFS space.
