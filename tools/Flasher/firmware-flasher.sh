@@ -765,6 +765,7 @@ try:
     reboot_seen = False
     last_error = None
     shell_probe_sent = False
+    cli_escape_sent = False
 
     print(f"[serial] opened {a.device} at 115200 baud, 8N1, XON/XOFF", flush=True)
     print("[serial] press Ctrl+C to stop monitoring", flush=True)
@@ -802,6 +803,14 @@ try:
                         raise SystemExit(0)
 
                 if not command_sent:
+                    if re.search(r'(?:^|[\r\n])postmerkOS>\s*$', buffer):
+                        if not cli_escape_sent:
+                            print("\n[serial] postmerkOS management CLI detected; entering raw shell", flush=True)
+                            send('s\r')
+                            cli_escape_sent = True
+                            shell_probe_sent = False
+                            buffer = ''
+                            continue
                     if re.search(r'(?i)login:\s*$', buffer):
                         send(a.username + '\r')
                         username_sent = True

@@ -3,7 +3,9 @@
 | Module | Responsibility |
 |---|---|
 | [main](main.md) | Process lifecycle and CLI commands |
-| [websocket](websocket.md) | JSON WebSocket transport, timers, broadcasts |
+| [websocket](websocket.md) | Authenticated JSON/binary WebSocket transport, timers, broadcasts |
+| [auth](auth.md) | PAM authentication, administrator authorization, password updates |
+| [system_ops](system_ops.md) | Authenticated terminal and firmware-updater handoff |
 | [config_apply](config_apply.md) | Merge, validate, save, and apply orchestration |
 | [config_file](config_file.md) | Atomic persistent storage and backup recovery |
 | [validation](validation.md) | Strict complete-configuration schema validation |

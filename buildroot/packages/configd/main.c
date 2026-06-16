@@ -55,6 +55,7 @@ static void usage(FILE *stream, const char *program) {
       "      --validate FILE        validate a complete configuration file\n"
       "      --apply-file FILE      merge and apply a JSON configuration delta\n"
       "      --apply-json JSON      merge and apply an inline JSON delta\n"
+      "      --replace-file FILE    validate, replace, and apply full config\n"
       "  -h, --help                 show this help\n",
       program);
 }
@@ -109,6 +110,7 @@ enum command_mode {
   COMMAND_VALIDATE,
   COMMAND_APPLY_FILE,
   COMMAND_APPLY_JSON,
+  COMMAND_REPLACE_FILE,
 };
 
 int main(int argc, char **argv) {
@@ -119,7 +121,7 @@ int main(int argc, char **argv) {
   const char *command_value = NULL;
 
   enum { OPT_GET_CONFIG = 1000, OPT_GET_STATUS, OPT_VALIDATE,
-         OPT_APPLY_FILE, OPT_APPLY_JSON };
+         OPT_APPLY_FILE, OPT_APPLY_JSON, OPT_REPLACE_FILE };
   static const struct option options[] = {
     {"config", required_argument, NULL, 'c'},
     {"dry-run", no_argument, NULL, 'd'},
@@ -132,6 +134,7 @@ int main(int argc, char **argv) {
     {"validate", required_argument, NULL, OPT_VALIDATE},
     {"apply-file", required_argument, NULL, OPT_APPLY_FILE},
     {"apply-json", required_argument, NULL, OPT_APPLY_JSON},
+    {"replace-file", required_argument, NULL, OPT_REPLACE_FILE},
     {"help", no_argument, NULL, 'h'},
     {NULL, 0, NULL, 0},
   };
@@ -165,6 +168,7 @@ int main(int argc, char **argv) {
       case OPT_VALIDATE: command = COMMAND_VALIDATE; command_value = optarg; break;
       case OPT_APPLY_FILE: command = COMMAND_APPLY_FILE; command_value = optarg; break;
       case OPT_APPLY_JSON: command = COMMAND_APPLY_JSON; command_value = optarg; break;
+      case OPT_REPLACE_FILE: command = COMMAND_REPLACE_FILE; command_value = optarg; break;
       case 'h': usage(stdout, argv[0]); return 0;
       default: usage(stderr, argv[0]); return 2;
     }
@@ -251,7 +255,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  char error[256];
+  char error[256] = "";
   struct json_object *config = config_load_or_create(error, sizeof(error));
   if (!config) {
     fprintf(stderr, "configd: %s\n", error);
@@ -282,6 +286,39 @@ int main(int argc, char **argv) {
   }
 
   network_manager_init(config, &startup);
+
+  if (command == COMMAND_REPLACE_FILE) {
+    struct json_object *candidate = load_json_file(command_value);
+    if (!candidate) {
+      apply_result_cleanup(&startup);
+      json_object_put(config);
+      i2c_close(&pd690xx);
+      return print_bad_request("unable to parse replacement configuration");
+    }
+    int rc = validate_configuration(candidate, error, sizeof(error));
+    if (rc == 0) rc = save_config_file(candidate, error, sizeof(error));
+    struct apply_result result;
+    apply_result_init(&result);
+    if (rc == 0) rc = config_apply_full(candidate, &result);
+    if (rc != 0) {
+      json_object_put(candidate);
+      apply_result_cleanup(&result);
+      apply_result_cleanup(&startup);
+      json_object_put(config);
+      i2c_close(&pd690xx);
+      return print_bad_request(error[0] ? error : "replacement configuration could not be applied");
+    }
+    struct json_object *data = apply_result_json(&result,
+                                                 "Configuration replaced");
+    print_envelope("ack", data);
+    json_object_put(data);
+    json_object_put(candidate);
+    apply_result_cleanup(&result);
+    apply_result_cleanup(&startup);
+    json_object_put(config);
+    i2c_close(&pd690xx);
+    return 0;
+  }
 
   if (command == COMMAND_APPLY_FILE || command == COMMAND_APPLY_JSON) {
     struct json_object *delta = command == COMMAND_APPLY_FILE

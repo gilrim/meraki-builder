@@ -1,0 +1,338 @@
+#!/bin/sh
+set -u
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+CONFIGD=${CONFIGD:-/bin/configd}
+[ -x "$CONFIGD" ] || CONFIGD=/usr/bin/configd
+
+banner() {
+    cat <<'BANNER'
+
+                 _                      _    ___  ____
+ _ __   ___  ___| |_ _ __ ___   ___ _ __| | _/ _ \/ ___|
+| '_ \ / _ \/ __| __| '_ ` _ \ / _ \ '__| |/ / | \___ \
+| |_) | (_) \__ \ |_| | | | | |  __/ |  |   <| |_| |___) |
+| .__/ \___/|___/\__|_| |_| |_|\___|_|  |_|\_\\___/|____/
+|_|
+                postmerkOS management console
+BANNER
+}
+
+usage() {
+    cat <<'USAGE'
+usage: postmerkos-cli [command]
+
+Interactive:
+  menu                         open the management menu
+  shell                        enter the unrestricted BusyBox shell
+
+Status and configuration:
+  status                       show switch status
+  ports                        show a compact port table
+  port show PORT               show desired and runtime state for one port
+  port set PORT PATH VALUE     set any port JSON field
+  set PATH VALUE               set any full configuration JSON path
+  config show                  print the complete persistent configuration
+  config apply FILE            merge and apply a JSON delta file
+  config replace FILE          validate and replace the complete config
+  config backup FILE           export config; prompts for optional password
+  config restore FILE          restore plain/encrypted config
+
+Firmware:
+  firmware status
+  firmware local [fw_update options] FILE
+  firmware tftp [fw_update_tftp options]
+  firmware http [fw_update_http options]
+  firmware sftp [fw_update_sftp options]
+
+Accounts:
+  password [USER]              change a local Linux account password
+
+JSON VALUE examples: true, false, 42, "text", {"mode":"dhcp"}
+Configuration paths use dots, for example network.mode or ports.12.poe.enabled.
+USAGE
+}
+
+need() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "postmerkos-cli: required command is missing: $1" >&2
+        return 1
+    }
+}
+
+pause() {
+    printf '\nPress Enter to continue...'
+    read -r _unused
+}
+
+config_json() {
+    "$CONFIGD" --get-config | jq -e '.data'
+}
+
+status_json() {
+    "$CONFIGD" --get-status | jq -e '.data'
+}
+
+normalize_value() {
+    value=$1
+    if printf '%s' "$value" | jq -e . >/dev/null 2>&1; then
+        printf '%s' "$value"
+    else
+        jq -cn --arg value "$value" '$value'
+    fi
+}
+
+apply_path() {
+    path=$1
+    value=$(normalize_value "$2") || return 1
+    delta=$(jq -cn --arg path "$path" --argjson value "$value" \
+        'setpath(($path | split(".")); $value)') || return 1
+    "$CONFIGD" --apply-json "$delta" | jq .
+}
+
+show_ports() {
+    config=$(config_json) || return 1
+    status=$(status_json) || return 1
+    jq -nr --argjson c "$config" --argjson s "$status" '
+      "PORT  LINK  SPEED  ADMIN  POE       VLAN  NAME",
+      "----  ----  -----  -----  --------  ----  ----------------", 
+      ($c.ports | to_entries[] | .key as $p | .value as $d |
+       ($s.ports[$p] // {}) as $r |
+       [($p|tonumber),
+        (if $r.link.established then "up" else "down" end),
+        ($r.link.speed // 0),
+        (if ($d.enabled // true) then "on" else "off" end),
+        (if $d.poe then (if $d.poe.enabled then ($d.poe.mode // "on") else "off" end) else "n/a" end),
+        ($d.vlan.pvid // 1),
+        ($d.name // "")] |
+       @tsv)' | awk -F '\t' 'NR<=2 {print; next} {printf "%-4s  %-4s  %-5s  %-5s  %-8s  %-4s  %s\n", $1,$2,$3,$4,$5,$6,$7}'
+}
+
+show_port() {
+    port=$1
+    config=$(config_json) || return 1
+    status=$(status_json) || return 1
+    jq -n --arg p "$port" --argjson c "$config" --argjson s "$status" \
+       '{port:$p, desired:$c.ports[$p], runtime:$s.ports[$p]}'
+}
+
+read_password() {
+    prompt=$1
+    printf '%s' "$prompt" >&2
+    stty -echo 2>/dev/null || true
+    IFS= read -r password
+    stty echo 2>/dev/null || true
+    printf '\n' >&2
+    printf '%s' "$password"
+}
+
+backup_config() {
+    output=$1
+    tmp=$(mktemp /tmp/postmerkos-config.XXXXXX) || return 1
+    trap 'rm -f "$tmp"' EXIT HUP INT TERM
+    if ! config_json >"$tmp"; then rm -f "$tmp"; trap - EXIT HUP INT TERM; return 1; fi
+    password=$(read_password 'Backup password (leave blank for plain JSON): ')
+    if [ -z "$password" ]; then
+        cp "$tmp" "$output"
+    else
+        printf '%s\n' "$password" | postmerkos-backup-crypt encrypt "$tmp" "$output"
+    fi
+    rc=$?
+    rm -f "$tmp"
+    trap - EXIT HUP INT TERM
+    [ "$rc" -eq 0 ] && echo "Configuration backup written to $output"
+    return "$rc"
+}
+
+restore_config() {
+    input=$1
+    [ -f "$input" ] || { echo "Backup not found: $input" >&2; return 1; }
+    tmp=$(mktemp /tmp/postmerkos-restore.XXXXXX) || return 1
+    trap 'rm -f "$tmp"' EXIT HUP INT TERM
+    magic=$(head -c 8 "$input" 2>/dev/null || true)
+    if [ "$magic" = 'Salted__' ]; then
+        password=$(read_password 'Backup password: ')
+        if ! printf '%s\n' "$password" | postmerkos-backup-crypt decrypt "$input" "$tmp"; then
+            rm -f "$tmp"
+            trap - EXIT HUP INT TERM
+            return 1
+        fi
+    else
+        if ! cp "$input" "$tmp"; then
+            rm -f "$tmp"
+            trap - EXIT HUP INT TERM
+            return 1
+        fi
+    fi
+    if ! "$CONFIGD" --validate "$tmp" >/dev/null; then
+        echo 'Backup is not a valid complete switch configuration.' >&2
+        rm -f "$tmp"
+        trap - EXIT HUP INT TERM
+        return 1
+    fi
+    "$CONFIGD" --replace-file "$tmp" | jq .
+    rc=$?
+    rm -f "$tmp"
+    trap - EXIT HUP INT TERM
+    return "$rc"
+}
+
+change_password() {
+    user=${1:-$(id -un)}
+    command -v passwd >/dev/null 2>&1 || {
+        echo 'passwd is unavailable' >&2
+        return 1
+    }
+    passwd "$user"
+}
+
+firmware_menu() {
+    while :; do
+        cat <<'EOF_MENU'
+
+Firmware update
+  1) Show updater status
+  2) Install a local firmware file
+  3) Update using TFTP
+  4) Update using HTTP/HTTPS
+  5) Update using SFTP
+  b) Back
+EOF_MENU
+        printf 'firmware> '
+        read -r choice || return
+        case "$choice" in
+            1) fw_update_status | jq .; pause ;;
+            2)
+                printf 'Firmware path: '; read -r file
+                printf 'Overlay policy [preserve]: '; read -r overlay
+                overlay=${overlay:-preserve}
+                fw_update --overlay "$overlay" "$file"
+                pause
+                ;;
+            3) fw_update_tftp; pause ;;
+            4) fw_update_http; pause ;;
+            5) fw_update_sftp; pause ;;
+            b|B|'') return ;;
+            *) echo 'Unknown selection.' ;;
+        esac
+    done
+}
+
+interactive_menu() {
+    banner
+    while :; do
+        cat <<'EOF_MENU'
+
+  1) Switch status
+  2) Port summary
+  3) Show one port
+  4) Configure a port field
+  5) Configure any JSON path
+  6) Show complete configuration
+  7) Back up configuration
+  8) Restore configuration
+  9) Firmware update
+ 10) Change account password
+  s) Raw Linux shell
+  q) Log out
+EOF_MENU
+        printf 'postmerkOS> '
+        read -r choice || return 0
+        case "$choice" in
+            1) status_json | jq .; pause ;;
+            2) show_ports; pause ;;
+            3)
+                printf 'Port number: '; read -r port
+                show_port "$port" | jq .; pause
+                ;;
+            4)
+                printf 'Port number: '; read -r port
+                printf 'Field path (example poe.enabled): '; read -r path
+                printf 'JSON value: '; read -r value
+                apply_path "ports.$port.$path" "$value"
+                pause
+                ;;
+            5)
+                printf 'Full JSON path: '; read -r path
+                printf 'JSON value: '; read -r value
+                apply_path "$path" "$value"
+                pause
+                ;;
+            6) config_json | jq .; pause ;;
+            7)
+                printf 'Backup output path: '; read -r file
+                backup_config "$file"; pause
+                ;;
+            8)
+                printf 'Backup input path: '; read -r file
+                restore_config "$file"; pause
+                ;;
+            9) firmware_menu ;;
+            10) change_password; pause ;;
+            s|S|shell)
+                echo 'Entering raw Linux shell. Type exit to return to the management menu.'
+                POSTMERKOS_RAW_SHELL=1 /bin/sh -l
+                ;;
+            q|Q|quit|exit) return 0 ;;
+            help|'?') usage; pause ;;
+            *) echo 'Unknown selection. Enter ? for command help.' ;;
+        esac
+    done
+}
+
+main() {
+    need jq || exit 1
+    command=${1:-menu}
+    case "$command" in
+        menu) interactive_menu ;;
+        help|--help|-h) usage ;;
+        shell) POSTMERKOS_RAW_SHELL=1 exec /bin/sh -l ;;
+        status) status_json | jq . ;;
+        ports) show_ports ;;
+        port)
+            sub=${2:-}
+            case "$sub" in
+                show) [ "$#" -eq 3 ] || { usage >&2; exit 2; }; show_port "$3" | jq . ;;
+                set)
+                    [ "$#" -ge 5 ] || { usage >&2; exit 2; }
+                    port=$3; path=$4; shift 4
+                    apply_path "ports.$port.$path" "$*"
+                    ;;
+                *) usage >&2; exit 2 ;;
+            esac
+            ;;
+        set)
+            [ "$#" -ge 3 ] || { usage >&2; exit 2; }
+            path=$2; shift 2
+            apply_path "$path" "$*"
+            ;;
+        config)
+            sub=${2:-}
+            case "$sub" in
+                show) config_json | jq . ;;
+                apply) [ "$#" -eq 3 ] || exit 2; "$CONFIGD" --apply-file "$3" | jq . ;;
+                replace) [ "$#" -eq 3 ] || exit 2; "$CONFIGD" --replace-file "$3" | jq . ;;
+                backup) [ "$#" -eq 3 ] || exit 2; backup_config "$3" ;;
+                restore) [ "$#" -eq 3 ] || exit 2; restore_config "$3" ;;
+                *) usage >&2; exit 2 ;;
+            esac
+            ;;
+        firmware)
+            sub=${2:-status}
+            if [ "$#" -ge 2 ]; then shift 2; else shift 1; fi
+            case "$sub" in
+                status) fw_update_status | jq . ;;
+                local) exec fw_update "$@" ;;
+                tftp) exec fw_update_tftp "$@" ;;
+                http) exec fw_update_http "$@" ;;
+                sftp) exec fw_update_sftp "$@" ;;
+                *) usage >&2; exit 2 ;;
+            esac
+            ;;
+        password) change_password "${2:-$(id -un)}" ;;
+        *) usage >&2; exit 2 ;;
+    esac
+}
+
+main "$@"
