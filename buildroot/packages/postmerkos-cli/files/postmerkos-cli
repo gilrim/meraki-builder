@@ -36,8 +36,8 @@ Status and configuration:
   config show                  print the complete persistent configuration
   config apply FILE            merge and apply a JSON delta file
   config replace FILE          validate and replace the complete config
-  config backup FILE           export config; prompts for optional password
-  config restore FILE          restore plain/encrypted config
+  config backup FILE           export plain JSON configuration
+  config restore FILE          restore plain JSON configuration
 
 Firmware:
   firmware status
@@ -66,13 +66,8 @@ pause() {
     read -r _unused
 }
 
-config_json() {
-    "$CONFIGD" --get-config | jq -e '.data'
-}
-
-status_json() {
-    "$CONFIGD" --get-status | jq -e '.data'
-}
+config_json() { "$CONFIGD" --get-config | jq -e '.data'; }
+status_json() { "$CONFIGD" --get-status | jq -e '.data'; }
 
 normalize_value() {
     value=$1
@@ -117,65 +112,21 @@ show_port() {
        '{port:$p, desired:$c.ports[$p], runtime:$s.ports[$p]}'
 }
 
-read_password() {
-    prompt=$1
-    printf '%s' "$prompt" >&2
-    stty -echo 2>/dev/null || true
-    IFS= read -r password
-    stty echo 2>/dev/null || true
-    printf '\n' >&2
-    printf '%s' "$password"
-}
-
 backup_config() {
     output=$1
-    tmp=$(mktemp /tmp/postmerkos-config.XXXXXX) || return 1
-    trap 'rm -f "$tmp"' EXIT HUP INT TERM
-    if ! config_json >"$tmp"; then rm -f "$tmp"; trap - EXIT HUP INT TERM; return 1; fi
-    password=$(read_password 'Backup password (leave blank for plain JSON): ')
-    if [ -z "$password" ]; then
-        cp "$tmp" "$output"
-    else
-        printf '%s\n' "$password" | postmerkos-backup-crypt encrypt "$tmp" "$output"
-    fi
-    rc=$?
-    rm -f "$tmp"
-    trap - EXIT HUP INT TERM
-    [ "$rc" -eq 0 ] && echo "Configuration backup written to $output"
-    return "$rc"
+    config_json >"$output" || return 1
+    chmod 600 "$output" 2>/dev/null || true
+    echo "Configuration backup written to $output"
 }
 
 restore_config() {
     input=$1
     [ -f "$input" ] || { echo "Backup not found: $input" >&2; return 1; }
-    tmp=$(mktemp /tmp/postmerkos-restore.XXXXXX) || return 1
-    trap 'rm -f "$tmp"' EXIT HUP INT TERM
-    magic=$(head -c 8 "$input" 2>/dev/null || true)
-    if [ "$magic" = 'Salted__' ]; then
-        password=$(read_password 'Backup password: ')
-        if ! printf '%s\n' "$password" | postmerkos-backup-crypt decrypt "$input" "$tmp"; then
-            rm -f "$tmp"
-            trap - EXIT HUP INT TERM
-            return 1
-        fi
-    else
-        if ! cp "$input" "$tmp"; then
-            rm -f "$tmp"
-            trap - EXIT HUP INT TERM
-            return 1
-        fi
-    fi
-    if ! "$CONFIGD" --validate "$tmp" >/dev/null; then
+    "$CONFIGD" --validate "$input" >/dev/null || {
         echo 'Backup is not a valid complete switch configuration.' >&2
-        rm -f "$tmp"
-        trap - EXIT HUP INT TERM
         return 1
-    fi
-    "$CONFIGD" --replace-file "$tmp" | jq .
-    rc=$?
-    rm -f "$tmp"
-    trap - EXIT HUP INT TERM
-    return "$rc"
+    }
+    "$CONFIGD" --replace-file "$input" | jq .
 }
 
 change_password() {
@@ -242,32 +193,19 @@ EOF_MENU
         case "$choice" in
             1) status_json | jq .; pause ;;
             2) show_ports; pause ;;
-            3)
-                printf 'Port number: '; read -r port
-                show_port "$port" | jq .; pause
-                ;;
+            3) printf 'Port number: '; read -r port; show_port "$port" | jq .; pause ;;
             4)
                 printf 'Port number: '; read -r port
                 printf 'Field path (example poe.enabled): '; read -r path
                 printf 'JSON value: '; read -r value
-                apply_path "ports.$port.$path" "$value"
-                pause
-                ;;
+                apply_path "ports.$port.$path" "$value"; pause ;;
             5)
                 printf 'Full JSON path: '; read -r path
                 printf 'JSON value: '; read -r value
-                apply_path "$path" "$value"
-                pause
-                ;;
+                apply_path "$path" "$value"; pause ;;
             6) config_json | jq .; pause ;;
-            7)
-                printf 'Backup output path: '; read -r file
-                backup_config "$file"; pause
-                ;;
-            8)
-                printf 'Backup input path: '; read -r file
-                restore_config "$file"; pause
-                ;;
+            7) printf 'Backup output path: '; read -r file; backup_config "$file"; pause ;;
+            8) printf 'Backup input path: '; read -r file; restore_config "$file"; pause ;;
             9) firmware_menu ;;
             10) change_password; pause ;;
             s|S|shell)
@@ -294,19 +232,10 @@ main() {
             sub=${2:-}
             case "$sub" in
                 show) [ "$#" -eq 3 ] || { usage >&2; exit 2; }; show_port "$3" | jq . ;;
-                set)
-                    [ "$#" -ge 5 ] || { usage >&2; exit 2; }
-                    port=$3; path=$4; shift 4
-                    apply_path "ports.$port.$path" "$*"
-                    ;;
+                set) [ "$#" -ge 5 ] || { usage >&2; exit 2; }; port=$3; path=$4; shift 4; apply_path "ports.$port.$path" "$*" ;;
                 *) usage >&2; exit 2 ;;
-            esac
-            ;;
-        set)
-            [ "$#" -ge 3 ] || { usage >&2; exit 2; }
-            path=$2; shift 2
-            apply_path "$path" "$*"
-            ;;
+            esac ;;
+        set) [ "$#" -ge 3 ] || { usage >&2; exit 2; }; path=$2; shift 2; apply_path "$path" "$*" ;;
         config)
             sub=${2:-}
             case "$sub" in
@@ -316,8 +245,7 @@ main() {
                 backup) [ "$#" -eq 3 ] || exit 2; backup_config "$3" ;;
                 restore) [ "$#" -eq 3 ] || exit 2; restore_config "$3" ;;
                 *) usage >&2; exit 2 ;;
-            esac
-            ;;
+            esac ;;
         firmware)
             sub=${2:-status}
             if [ "$#" -ge 2 ]; then shift 2; else shift 1; fi
@@ -328,8 +256,7 @@ main() {
                 http) exec fw_update_http "$@" ;;
                 sftp) exec fw_update_sftp "$@" ;;
                 *) usage >&2; exit 2 ;;
-            esac
-            ;;
+            esac ;;
         password) change_password "${2:-$(id -un)}" ;;
         *) usage >&2; exit 2 ;;
     esac

@@ -637,32 +637,22 @@ The preparation stage copies each package directory into upstream Buildroot's `p
 
 # Optional web stack
 
-Every generated MS42/MS42P rootfs contains the local management engine and CLI:
-
-```text
-/bin/configd
-/usr/bin/postmerkos-cli
-/etc/profile.d/50-postmerkos-cli.sh
-```
-
-Interactive SSH and hardware-TTL logins open the stylized postmerkOS management menu automatically. Non-interactive SSH commands are left alone, and the menu provides a raw-shell escape. The CLI exposes all configuration fields through the shared JSON schema, firmware update transports, password changes, and plain/encrypted backup/restore.
-
-When `INCLUDE_UI=1`, the generated rootfs additionally contains:
+When `INCLUDE_UI=1`, the generated rootfs contains:
 
 ```text
 /www/index.html
+/bin/configd
 /usr/bin/uhttpd
 /etc/init.d/S15configd
 /etc/init.d/S16uhttpd
-/etc/pam.d/configd
 /usr/sbin/postmerkos-network-rebind
 ```
 
 At runtime:
 
 - uhttpd serves the frontend on TCP port 80;
-- configd listens for WebSocket clients on TCP port 4001 and requires PAM authentication;
-- only root and accounts in `postmerkos-admin` are authorized for the root-equivalent management API;
+- configd listens for authenticated WebSocket clients on TCP port 4001;
+- interactive SSH and TTL serial logins launch the postmerkOS management CLI;
 - configd logs to `/tmp/configd.log`;
 - uhttpd logs to `/tmp/uhttpd.log`;
 - management-address changes are logged to `/tmp/network-rebind.log`;
@@ -674,7 +664,7 @@ applies a different management address, it invokes
 `postmerkos-network-rebind`, which restarts uhttpd after the Click address
 update. Dropbear and configd listen on all local addresses and are not restarted.
 
-The management API is authenticated, but transport remains plain HTTP/WebSocket. Keep it on a trusted management VLAN unless TLS is added. Browser firmware upload and encrypted backups use bundled client-side SHA-256/AES/PBKDF2 code so they work on a normal HTTP origin.
+The web management protocol requires an authorized local Linux username and password. Authentication is implemented directly against `/etc/shadow` using the system `crypt()` implementation, avoiding Linux-PAM, locale, wchar, and Flex in the size-constrained image. Transport remains plain HTTP/WebSocket, so keep it on a trusted management network.
 
 ---
 
@@ -816,8 +806,8 @@ which is required by the updater's strict sidecar parser.
 The current `configd` implementation, CLI/WebSocket protocol, DHCP/static management networking, hardware capability model, PoE handling, and per-module notes are documented at:
 
 - [`buildroot/packages/configd/README.md`](buildroot/packages/configd/README.md)
+- [`buildroot/packages/postmerkos-cli/README.md`](buildroot/packages/postmerkos-cli/README.md)
 - [`buildroot/packages/configd/docs/modules/README.md`](buildroot/packages/configd/docs/modules/README.md)
 - [`docs/CLICK-GRAPH.md`](docs/CLICK-GRAPH.md)
 - [`buildroot/packages/pd690xx/README.md`](buildroot/packages/pd690xx/README.md)
 - [`buildroot/packages/postmerkos/README.md`](buildroot/packages/postmerkos/README.md)
-- [`buildroot/packages/postmerkos-cli/README.md`](buildroot/packages/postmerkos-cli/README.md)

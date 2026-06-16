@@ -7,8 +7,7 @@
 
 struct json_object *terminal_execute(const char *command);
 struct json_object *firmware_status_json(void);
-int firmware_start_update(const char *path, const char *sha256,
-                          const char *overlay, bool force,
+int firmware_start_update(const char *path, const char *overlay, bool force,
                           char *error, size_t error_size);
 
 #endif
