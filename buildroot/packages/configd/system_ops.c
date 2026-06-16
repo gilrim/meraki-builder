@@ -87,6 +87,7 @@ struct json_object *terminal_execute(const char *command) {
     json_object_object_add(result, "truncated", json_object_new_boolean(false));
     return result;
   }
+
   size_t used = 0;
   bool truncated = false;
   bool timed_out = false;
@@ -102,7 +103,8 @@ struct json_object *terminal_execute(const char *command) {
       kill(-child, SIGKILL);
       kill(child, SIGKILL);
     }
-    int wait_ms = child_done ? 0 : (remaining > 200 ? 200 : (remaining > 0 ? remaining : 0));
+    int wait_ms = child_done ? 0 :
+        (remaining > 200 ? 200 : (remaining > 0 ? remaining : 0));
     poll(&fd, 1, wait_ms);
     if (fd.revents & (POLLIN | POLLHUP)) {
       char buffer[4096];
@@ -152,8 +154,62 @@ struct json_object *firmware_status_json(void) {
   return status;
 }
 
-int firmware_start_update(const char *path, const char *sha256,
-                          const char *overlay, bool force,
+static int calculate_sha256(const char *path, char output[65],
+                            char *error, size_t error_size) {
+  int pipefd[2];
+  if (pipe(pipefd) != 0) {
+    set_error(error, error_size, strerror(errno));
+    return -errno;
+  }
+  pid_t child = fork();
+  if (child < 0) {
+    int saved = errno;
+    close(pipefd[0]); close(pipefd[1]);
+    set_error(error, error_size, strerror(saved));
+    return -saved;
+  }
+  if (child == 0) {
+    dup2(pipefd[1], STDOUT_FILENO);
+    int nullfd = open("/dev/null", O_WRONLY);
+    if (nullfd >= 0) {
+      dup2(nullfd, STDERR_FILENO);
+      if (nullfd > STDERR_FILENO) close(nullfd);
+    }
+    close(pipefd[0]); close(pipefd[1]);
+    execlp("sha256sum", "sha256sum", path, (char *)NULL);
+    _exit(127);
+  }
+  close(pipefd[1]);
+  char buffer[96] = {0};
+  ssize_t total = 0;
+  while (total < (ssize_t)sizeof(buffer) - 1) {
+    ssize_t got = read(pipefd[0], buffer + total,
+                       sizeof(buffer) - 1 - (size_t)total);
+    if (got < 0 && errno == EINTR) continue;
+    if (got <= 0) break;
+    total += got;
+  }
+  close(pipefd[0]);
+  int status = 0;
+  waitpid(child, &status, 0);
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 || total < 64) {
+    set_error(error, error_size, "unable to calculate firmware SHA-256");
+    return -EIO;
+  }
+  for (int i = 0; i < 64; i++) {
+    char c = buffer[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+          (c >= 'A' && c <= 'F'))) {
+      set_error(error, error_size, "sha256sum returned invalid output");
+      return -EIO;
+    }
+    output[i] = c;
+  }
+  output[64] = '\0';
+  return 0;
+}
+
+int firmware_start_update(const char *path, const char *overlay, bool force,
                           char *error, size_t error_size) {
   struct stat st;
   if (!path || stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
@@ -166,6 +222,9 @@ int firmware_start_update(const char *path, const char *sha256,
     set_error(error, error_size, "fw_update is unavailable");
     return -ENOENT;
   }
+  char sha256[65];
+  int rc = calculate_sha256(path, sha256, error, error_size);
+  if (rc != 0) return rc;
 
   pid_t child = fork();
   if (child < 0) {

@@ -1,98 +1,78 @@
 # configd WebSocket and CLI protocol
 
-## Envelope and authentication
+## Envelope
 
-Text messages are JSON objects with a string `type`, optional client-generated `id`, and optional `data`. The server sends `auth_required` immediately after a WebSocket connection and does not disclose configuration or status until PAM authentication succeeds.
+All messages are JSON objects with a string `type`, optional `id`, and optional `data`.
 
 ```json
-{"id":"1","type":"auth","data":{"username":"root","password":"..."}}
-{"id":"1","type":"auth","data":{"username":"root","users":[{"username":"root","uid":0}]}}
+{"id":"client-generated-id","type":"get_status"}
 ```
 
-Only root and members of `postmerkos-admin` may authenticate. Authentication is per WebSocket connection; no cookie or bearer token is stored in the browser.
+Maximum request size is 65,536 bytes. Binary frames are rejected. Fragmented WebSocket text messages are reassembled before parsing.
+
+## Requests
+
+### `get_status`
 
 ```json
-{"id":"2","type":"logout"}
-{"id":"3","type":"get_auth"}
-{"id":"4","type":"password_change","data":{"username":"root","current_password":"...","new_password":"..."}}
+{"id":"1","type":"get_status"}
 ```
 
-JSON text requests are limited to 65,536 bytes. Binary frames are accepted only while the same authenticated session owns an active firmware upload.
+Returns current best-effort device state. A missing sensor or Click handler is represented in `data.errors`; the rest of the status remains available.
 
-## Configuration and status
+### `get_config`
 
 ```json
-{"id":"10","type":"get_status"}
-{"id":"11","type":"get_config"}
+{"id":"2","type":"get_config"}
 ```
 
-`config` deep-merges a partial delta into persistent desired state, validates the complete result, atomically saves it, and applies the changed fields:
+Returns the complete persistent desired configuration.
+
+### `config`
+
+`data` is a partial configuration delta. It is deep-merged into the saved complete configuration, the complete result is validated, atomically saved, and then applied.
 
 ```json
-{"id":"12","type":"config","data":{"ports":{"4":{"poe":{"enabled":true,"mode":"af"}}}}}
+{"id":"3","type":"config","data":{"ports":{"4":{"poe":{"enabled":true,"mode":"af"}}}}}
 ```
 
-`replace_config` validates, saves, and applies a complete configuration. It is used for backup restoration:
+A successful response is an `ack`. The daemon then broadcasts the complete `config` and updated `status` to connected clients.
+
+## Responses
+
+### Acknowledgement
 
 ```json
-{"id":"13","type":"replace_config","data":{"network":{},"ports":{},"stp":{},"lacp":{},"multicast":{}}}
+{"id":"3","type":"ack","data":{"message":"Configuration accepted","applied":2,"warnings":[]}}
 ```
 
-Port changes are based on desired state rather than current link activity. A disconnected PoE-capable port can therefore be enabled before its powered device establishes link.
+Warnings mean the desired state was valid and saved, but one or more runtime operations could not be verified or applied. Clients must not treat warnings as `Bad Request`.
 
-## Authenticated terminal
+### Bad request
 
 ```json
-{"id":"20","type":"terminal_exec","data":{"command":"fw_update_status"}}
-{"id":"20","type":"terminal","data":{"command":"fw_update_status","output":"...","exit_code":0,"timed_out":false,"truncated":false}}
+{"id":"3","type":"error","data":{"status":400,"message":"Bad Request","detail":"ports.49.poe is not supported by port 49"}}
 ```
 
-Commands run as root, time out after 15 seconds, and return at most 64 KiB of combined stdout/stderr.
+Bad requests are not saved and do not change hardware.
 
-## Firmware upload
-
-The client computes SHA-256 and starts an upload:
+### Broadcasts
 
 ```json
-{"id":"30","type":"firmware_upload_start","data":{"name":"firmware.bin","size":16777216,"sha256":"64-hex-digits","overlay":"preserve","force":false}}
-```
-
-After `firmware_upload_ready`, the client sends one or more binary WebSocket messages. The total may not exceed 16 MiB. The client then sends:
-
-```json
-{"id":"31","type":"firmware_upload_finish"}
-```
-
-configd flushes the upload and hands it to `fw_update`. The updater independently verifies the supplied digest and firmware structure before writing. The web and SSH connections are expected to close once flashing begins.
-
-Other upload/status requests:
-
-```json
-{"id":"32","type":"firmware_upload_status"}
-{"id":"33","type":"firmware_upload_cancel"}
-{"id":"34","type":"firmware_status"}
-```
-
-Only one WebSocket may own an upload at a time.
-
-## Responses and broadcasts
-
-```json
-{"id":"12","type":"ack","data":{"message":"Configuration accepted","applied":2,"warnings":[]}}
-{"id":"12","type":"error","data":{"status":400,"message":"Bad Request","detail":"..."}}
 {"type":"config","data":{}}
 {"type":"status","data":{}}
 ```
 
-Warnings mean valid desired state was saved but one or more runtime operations could not be completed or verified. Authenticated sessions receive unsolicited complete configuration and status broadcasts.
+Broadcasts do not normally contain an `id`.
 
-## Local CLI equivalents
+## CLI equivalents
 
 ```sh
 configd --get-status
 configd --get-config
 configd --apply-json '{"ports":{"1":{"enabled":false}}}'
 configd --apply-file ./delta.json
-configd --replace-file ./complete.json
 configd --validate ./complete.json
 ```
+
+The CLI intentionally uses the same envelopes and validation rules so a future standalone CLI can use either local process execution or the WebSocket transport without changing its data model.

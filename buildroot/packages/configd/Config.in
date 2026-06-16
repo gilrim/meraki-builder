@@ -1,13 +1,7 @@
 config BR2_PACKAGE_CONFIGD
 	bool "configd"
-	depends on BR2_ENABLE_LOCALE # linux-pam
-	depends on BR2_USE_WCHAR # linux-pam
-	depends on !BR2_STATIC_LIBS # linux-pam
-	depends on BR2_USE_MMU # linux-pam/fork()
 	select BR2_PACKAGE_JSON_C
 	select BR2_PACKAGE_LIBWEBSOCKETS
-	select BR2_PACKAGE_FLEX # direct linux-pam runtime dependency in Buildroot 2023.02.4
-	select BR2_PACKAGE_LINUX_PAM
 	select BR2_PACKAGE_PD690XX
 	help
 	  Read and update persistent switch configuration and expose it through a

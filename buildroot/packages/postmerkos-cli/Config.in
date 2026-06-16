@@ -1,13 +1,8 @@
 config BR2_PACKAGE_POSTMERKOS_CLI
 	bool "postmerkOS management CLI"
-	depends on BR2_ENABLE_LOCALE # linux-pam
-	depends on BR2_USE_WCHAR # linux-pam
-	depends on !BR2_STATIC_LIBS # linux-pam
-	depends on BR2_USE_MMU # linux-pam/fork()
 	select BR2_PACKAGE_CONFIGD
 	select BR2_PACKAGE_FWUPDATE
 	select BR2_PACKAGE_JQ
-	select BR2_PACKAGE_MBEDTLS
 	help
 	  Interactive and scriptable management interface for postmerkOS switch
-	  configuration, configuration backup/restore, and firmware updates.
+	  configuration, plain JSON backup/restore, and firmware updates.

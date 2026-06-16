@@ -1,28 +1,17 @@
-# websocket
+# websocket module
 
-`websocket.c` owns the libwebsockets server, per-connection authentication state, request/response queues, configuration/status broadcasts, and binary firmware-upload transport.
+`websocket.c` implements a UI-independent JSON protocol over libwebsockets.
 
-## Session lifecycle
+## Accepted inputs
 
-1. The server sends `auth_required` on connection.
-2. `auth` verifies the supplied local account through Linux PAM and confirms that it is root or belongs to `postmerkos-admin`.
-3. Only an authenticated session receives the initial configuration/status and later broadcasts.
-4. `logout`, disconnect, or reconnect clears authentication and any unfinished upload.
+Text frames containing `get_status`, `get_config`, or `config` requests. Messages may arrive in fragments and are reassembled up to `MAX_MSG_LEN` (65,536 bytes). Binary, oversized, malformed, missing-type, and unknown requests receive `Bad Request`.
 
-Responses are held in a per-session FIFO queue so simultaneous status polling, terminal commands, and firmware requests cannot overwrite one another before libwebsockets schedules a writable callback.
+## Timers
 
-## Management requests
+- Status refresh: configurable, default 3 seconds.
+- Configuration file check: 10 seconds.
+- Network poll: scheduled by the network state machine.
 
-The module dispatches:
+## Important behavior
 
-- authentication, logout, user list, and password update;
-- `get_config`, `get_status`, configuration delta, and full replacement;
-- bounded root terminal execution;
-- updater status;
-- firmware upload start/status/cancel/finish.
-
-Configuration changes continue to use `config_apply`, validation, atomic persistence, hardware capabilities, and management-address rebind logic.
-
-## Firmware transport
-
-Only one connection may own an upload. The declared file is limited to 16 MiB, includes a SHA-256 and overlay policy, and is written with mode `0600` under `/tmp`. Binary messages are accepted only for the owning authenticated session. On finish, the file is flushed and handed to `fw_update`; incomplete or oversized uploads are deleted.
+A client-specific direct response is sent before queued broadcasts. Configuration requests receive an explicit `ack`; clients must not use the later configuration broadcast as the acknowledgement. External edits to `/etc/switch.json` are validated before application. Invalid external files are ignored and reported in status.

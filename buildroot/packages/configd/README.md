@@ -27,7 +27,6 @@ configd --get-status
 configd --validate /tmp/complete-switch.json
 configd --apply-file /tmp/change.json
 configd --apply-json '{"ports":{"1":{"storm_control":false}}}'
-configd --replace-file /tmp/complete-switch.json
 configd --network-bootstrap --network-wait 60
 configd --dry-run --apply-file /tmp/change.json
 ```
@@ -50,7 +49,7 @@ Invalid input exits non-zero and prints:
 
 ## WebSocket protocol
 
-The service listens on TCP port 4001 by default. It requires Linux PAM authentication before returning configuration/status or accepting management requests. UID 0 and members of `postmerkos-admin` are authorized. JSON text frames carry normal requests; binary frames are accepted only for a negotiated firmware upload.
+The service listens on TCP port 4001 by default. Requests and responses are UTF-8 JSON text frames.
 
 ```json
 {"id":"1","type":"get_status"}
@@ -96,4 +95,8 @@ Each module is documented under [`docs/modules`](docs/modules/README.md). The Cl
 make -C buildroot/packages/configd
 ```
 
-The Buildroot package links against JSON-C, libwebsockets, Linux PAM, `libpostmerkos`, and `libpd690xx`. Host tests cover network management and authenticated-system-operation helpers with `make -C buildroot/packages/configd test-host`.
+The Buildroot package links against JSON-C, libwebsockets, `libpostmerkos`, and `libpd690xx`.
+
+## Authentication and size constraints
+
+The WebSocket service authenticates root and members of `postmerkos-admin` directly against `/etc/shadow` with `crypt()`. Linux-PAM is deliberately not used because its locale, wchar, Flex, and module dependencies consume too much of the 8 MiB SquashFS region. Password updates use the existing BusyBox `chpasswd` applet.

@@ -3,7 +3,7 @@ PD690XX_DIR ?= ../pd690xx
 POSTMERKOS_DIR ?= ../postmerkos
 INCLUDES = -I$(PD690XX_DIR) -I$(POSTMERKOS_DIR)
 CFLAGS ?= -Os
-LDLIBS += -ljson-c -lwebsockets -lpam
+LDLIBS += -ljson-c -lwebsockets -lcrypt
 
 SRCS = main.c click_port.c click_global.c status.c websocket.c json_util.c \
        config_file.c config_apply.c hardware.c network.c result.c validation.c auth.c system_ops.c
