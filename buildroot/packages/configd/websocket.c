@@ -13,6 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 struct per_session_data {
   bool send_initial_status;
@@ -36,6 +39,55 @@ static struct lws_sorted_usec_list status_sul;
 static struct lws_sorted_usec_list config_sul;
 static struct lws_sorted_usec_list network_sul;
 static struct lws_context *ws_context;
+
+static bool management_address_changed(const struct network_runtime *before,
+                                       const struct network_runtime *after) {
+  if (!before || !after) return false;
+  return strcmp(before->applied.address, after->applied.address) ||
+         before->applied.prefix != after->applied.prefix;
+}
+
+static void rebind_management_services(const struct network_runtime *before,
+                                       const struct network_runtime *after) {
+  if (!before || !after || dry_run || !after->applied.address[0]) return;
+
+  const char *script = getenv("CONFIGD_NETWORK_REBIND");
+  if (!script || !*script) script = "/usr/sbin/postmerkos-network-rebind";
+  if (access(script, X_OK) != 0) {
+    fprintf(stderr, "%s network: rebind hook is unavailable: %s\n",
+            get_time(), script);
+    return;
+  }
+
+  char old_cidr[32];
+  char new_cidr[32];
+  snprintf(old_cidr, sizeof(old_cidr), "%s/%u",
+           before->applied.address[0] ? before->applied.address : "0.0.0.0",
+           before->applied.prefix);
+  snprintf(new_cidr, sizeof(new_cidr), "%s/%u", after->applied.address,
+           after->applied.prefix);
+
+  fprintf(stderr, "%s network: management address changed %s -> %s; "
+                  "rebinding web service\n",
+          get_time(), old_cidr, new_cidr);
+  pid_t child = fork();
+  if (child == 0) {
+    execl(script, script, old_cidr, new_cidr, after->source, (char *)NULL);
+    _exit(127);
+  }
+  if (child < 0) {
+    fprintf(stderr, "%s network: unable to start rebind hook: %s\n",
+            get_time(), strerror(errno));
+    return;
+  }
+
+  int status = 0;
+  if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status) ||
+      WEXITSTATUS(status) != 0) {
+    fprintf(stderr, "%s network: web-service rebind hook failed\n",
+            get_time());
+  }
+}
 
 char *wrap_message(const char *type, struct json_object *data,
                    struct json_object *request_id) {
@@ -116,13 +168,17 @@ static void status_poll_cb(struct lws_sorted_usec_list *sul) {
 }
 
 static void network_poll_cb(struct lws_sorted_usec_list *sul) {
+  struct network_runtime before = *network_manager_runtime();
   struct apply_result result;
   apply_result_init(&result);
   bool changed = network_manager_poll(&result);
+  const struct network_runtime *after = network_manager_runtime();
   if (json_object_array_length(result.warnings) > 0)
     fprintf(stderr, "%s network: %s\n", get_time(),
             json_object_to_json_string(result.warnings));
   apply_result_cleanup(&result);
+  if (management_address_changed(&before, after))
+    rebind_management_services(&before, after);
   if (changed) refresh_status_cache(true);
   lws_sul_schedule(ws_context, 0, sul, network_poll_cb,
       (lws_usec_t)network_manager_next_poll_seconds() * LWS_USEC_PER_SEC);
@@ -144,11 +200,15 @@ static void config_poll_cb(struct lws_sorted_usec_list *sul) {
       config_file_set_runtime_error(NULL);
       struct apply_result result;
       apply_result_init(&result);
+      struct network_runtime before = *network_manager_runtime();
       config_apply_full(config, &result);
+      const struct network_runtime *after = network_manager_runtime();
       if (json_object_array_length(result.warnings) > 0)
         fprintf(stderr, "%s config reload: %s\n", get_time(),
                 json_object_to_json_string(result.warnings));
       apply_result_cleanup(&result);
+      if (management_address_changed(&before, after))
+        rebind_management_services(&before, after);
       refresh_config_cache(config, true);
       refresh_status_cache(true);
       json_object_put(config);

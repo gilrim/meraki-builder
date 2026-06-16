@@ -645,6 +645,7 @@ When `INCLUDE_UI=1`, the generated rootfs contains:
 /usr/bin/uhttpd
 /etc/init.d/S15configd
 /etc/init.d/S16uhttpd
+/usr/sbin/postmerkos-network-rebind
 ```
 
 At runtime:
@@ -653,7 +654,14 @@ At runtime:
 - configd listens for WebSocket clients on TCP port 4001;
 - configd logs to `/tmp/configd.log`;
 - uhttpd logs to `/tmp/uhttpd.log`;
+- management-address changes are logged to `/tmp/network-rebind.log`;
 - persistent switch configuration is stored in `/etc/switch.json` on the JFFS2-backed overlay.
+
+Both init scripts verify that their process remains alive and that TCP 80 or
+TCP 4001 actually enters the LISTEN state before reporting `OK`. When configd
+applies a different management address, it invokes
+`postmerkos-network-rebind`, which restarts uhttpd after the Click address
+update. Dropbear and configd listen on all local addresses and are not restarted.
 
 The current web service has no authentication or TLS. Keep it on a trusted management network.
 
@@ -705,6 +713,26 @@ netstat -lnt | grep 4001
 ```
 
 Also confirm `/etc/init.d/S15configd` exists and that the Click graph was initialized before configd started.
+
+## The browser times out and the boot log only reports the fallback address
+
+Check the DHCP and service logs:
+
+```sh
+cat /click/uplinkstate/dhcp_state 2>/dev/null
+cat /click/uplinkstate/dhcpc_state_for_brain 2>/dev/null
+cat /tmp/configd.log
+cat /tmp/uhttpd.log
+cat /tmp/network-rebind.log
+/etc/init.d/S15configd status; echo $?
+/etc/init.d/S16uhttpd status; echo $?
+```
+
+The bootstrap path waits up to 60 seconds for DHCP by default. It supports both
+the table-form `dhcp_state` handler and older graphs that expose only the
+key/value `dhcpc_state_for_brain` handler. Override the boot wait for testing by
+exporting `CONFIGD_NETWORK_WAIT` before starting `S10clickconfig`, or invoke
+`configd -N -W SECONDS` directly.
 
 ## configd exits while reading storm control
 

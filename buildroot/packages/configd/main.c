@@ -49,6 +49,7 @@ static void usage(FILE *stream, const char *program) {
       "  -p, --status-interval SEC  status broadcast interval (1-3600)\n"
       "  -w, --websocket-port PORT  WebSocket listen port (1-65535)\n"
       "  -N, --network-bootstrap    apply DHCP/static management IP and exit\n"
+      "  -W, --network-wait SEC     DHCP wait during bootstrap (0-300, default 60)\n"
       "      --get-config           print the current persistent JSON config\n"
       "      --get-status           print current status JSON\n"
       "      --validate FILE        validate a complete configuration file\n"
@@ -113,6 +114,7 @@ enum command_mode {
 int main(int argc, char **argv) {
   int websocket_port = 4001;
   int status_interval = 3;
+  int network_wait = 60;
   enum command_mode command = COMMAND_SERVICE;
   const char *command_value = NULL;
 
@@ -124,6 +126,7 @@ int main(int argc, char **argv) {
     {"status-interval", required_argument, NULL, 'p'},
     {"websocket-port", required_argument, NULL, 'w'},
     {"network-bootstrap", no_argument, NULL, 'N'},
+    {"network-wait", required_argument, NULL, 'W'},
     {"get-config", no_argument, NULL, OPT_GET_CONFIG},
     {"get-status", no_argument, NULL, OPT_GET_STATUS},
     {"validate", required_argument, NULL, OPT_VALIDATE},
@@ -134,7 +137,7 @@ int main(int argc, char **argv) {
   };
 
   int option;
-  while ((option = getopt_long(argc, argv, "c:dp:w:Nh", options, NULL)) != -1) {
+  while ((option = getopt_long(argc, argv, "c:dp:w:NW:h", options, NULL)) != -1) {
     switch (option) {
       case 'c': config_file = optarg; break;
       case 'd': dry_run = true; break;
@@ -151,6 +154,12 @@ int main(int argc, char **argv) {
         }
         break;
       case 'N': command = COMMAND_NETWORK_BOOTSTRAP; break;
+      case 'W':
+        if (parse_int(optarg, 0, 300, &network_wait) != 0) {
+          fprintf(stderr, "invalid network wait interval\n");
+          return 2;
+        }
+        break;
       case OPT_GET_CONFIG: command = COMMAND_GET_CONFIG; break;
       case OPT_GET_STATUS: command = COMMAND_GET_STATUS; break;
       case OPT_VALIDATE: command = COMMAND_VALIDATE; command_value = optarg; break;
@@ -177,16 +186,50 @@ int main(int argc, char **argv) {
       config = json_object_new_object();
       json_object_object_add(config, "network", network_default_config());
     }
+    network_manager_observe(config);
+    const struct network_runtime *observed = network_manager_runtime();
+    if (!strcmp(observed->configured_mode, "dhcp") &&
+        strcmp(observed->source, "dhcp") && network_wait > 0) {
+      fprintf(stderr, "Waiting up to %d seconds for a DHCP lease", network_wait);
+      fflush(stderr);
+      for (int elapsed = 0; elapsed < network_wait; elapsed++) {
+        sleep(1);
+        network_manager_observe(config);
+        observed = network_manager_runtime();
+        if (!strcmp(observed->source, "dhcp")) break;
+        fputc('.', stderr);
+        fflush(stderr);
+      }
+      fputc('\n', stderr);
+      observed = network_manager_runtime();
+      if (!strcmp(observed->source, "dhcp")) {
+        fprintf(stderr, "DHCP lease detected: %s/%u via %s\n",
+                observed->applied.address, observed->applied.prefix,
+                observed->applied.gateway);
+      } else {
+        fprintf(stderr,
+                "No DHCP lease detected during bootstrap; applying fallback\n");
+      }
+    }
+
     struct apply_result result;
     apply_result_init(&result);
-    network_manager_init(config, &result);
+    int network_rc = network_manager_init(config, &result);
+    const struct network_runtime *runtime = network_manager_runtime();
+    if (runtime->applied.address[0]) {
+      fprintf(stderr,
+              "Management IPv4 configured: source=%s address=%s/%u gateway=%s broadcast=%s mtu=%u\n",
+              runtime->source, runtime->applied.address,
+              runtime->applied.prefix, runtime->applied.gateway,
+              runtime->applied.broadcast, runtime->applied.mtu);
+    }
     struct json_object *data = apply_result_json(&result,
                                                  "Network bootstrap complete");
     print_envelope("ack", data);
     json_object_put(data);
     apply_result_cleanup(&result);
     json_object_put(config);
-    return 0;
+    return network_rc == 0 ? 0 : 1;
   }
 
   hardware_init(&hardware, &pd690xx);

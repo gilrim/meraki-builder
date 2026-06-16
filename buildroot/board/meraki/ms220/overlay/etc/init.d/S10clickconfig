@@ -106,10 +106,9 @@ start() {
     echo -e "route_ip 1.1.2.2" > /click/set_alt_conf/set
     echo -e "1024" > /click/sw0_ctrl/set_default_queue_rate_limit
     echo -e "HYBRID_8021x_TIMEOUT 8000, HYBRID_MAC_RADIUS_TIMEOUT 8000 " > /click/switch_auth_port_table/set_hybrid_auth_timeouts
-    # only 9 access policies permitted:
-    # Write handler 'switch_auth_port_table.set_access_policies' error:
-    # NUM: value 10 out of range, bound 9
-    for i in $(seq 1 9); do
+    # This Click graph accepts access-policy indices 1 through 8. Index 9
+    # produces "value 9 out of range, bound 8" on MS42/MS42P.
+    for i in $(seq 1 8); do
       echo -e "NUM $i, ENABLED false" > /click/switch_auth_port_table/set_access_policies
     done
     for i in $(seq 1 $NUM_PORTS); do
@@ -206,10 +205,11 @@ start() {
     echo -e "gateway_good 0" > /click/mtun_client_state/update_node_state
     # configd is the authoritative management-IP owner when installed. Its
     # bootstrap mode restores a persistent static address immediately, or
-    # applies the current DHCP lease/fallback address without blocking boot.
+    # waits a bounded period for DHCP before applying the fallback address.
     CONFIGD_OWNS_NETWORK=0
     if [ -x /bin/configd ]; then
-      if /bin/configd -N -c /etc/switch.json; then
+      if /bin/configd -N -W "${CONFIGD_NETWORK_WAIT:-60}" \
+          -c /etc/switch.json; then
         CONFIGD_OWNS_NETWORK=1
       else
         echo "configd network bootstrap failed; using legacy DHCP bootstrap"

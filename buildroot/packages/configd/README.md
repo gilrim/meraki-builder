@@ -27,9 +27,13 @@ configd --get-status
 configd --validate /tmp/complete-switch.json
 configd --apply-file /tmp/change.json
 configd --apply-json '{"ports":{"1":{"storm_control":false}}}'
-configd --network-bootstrap
+configd --network-bootstrap --network-wait 60
 configd --dry-run --apply-file /tmp/change.json
 ```
+
+Bootstrap mode waits for DHCP for the requested bounded interval, applies the
+lease or configured fallback address, prints the selected management settings,
+and exits without probing PoE hardware or creating a full configuration file.
 
 CLI responses use the same envelope as WebSocket responses:
 
