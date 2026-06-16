@@ -56,6 +56,7 @@ legacy = {
     'source "package/findhdr/Config.in"',
     'source "package/pd690xx/Config.in"',
     'source "package/fwupdate/Config.in"',
+    'source "package/postmerkos-cli/Config.in"',
     'source "package/Config.in.ms42p"',
 }
 s = '\n'.join(line for line in s.splitlines() if line.strip() not in legacy) + '\n'
@@ -157,7 +158,8 @@ set_bool('BR2_SHARED_STATIC_LIBS', True)
 set_bool('BR2_PACKAGE_PD690XX', True)
 set_bool('BR2_PACKAGE_FWUPDATE', True)
 set_bool('BR2_PACKAGE_FWUPDATE_CURL', True)
-set_bool('BR2_PACKAGE_CONFIGD', include_ui)
+set_bool('BR2_PACKAGE_CONFIGD', True)
+set_bool('BR2_PACKAGE_POSTMERKOS_CLI', True)
 set_bool('BR2_PACKAGE_UHTTPD', include_ui)
 set_bool('BR2_PACKAGE_STATUS', include_status)
 p.write_text(s)
@@ -172,8 +174,9 @@ grep -q '^BR2_SHARED_STATIC_LIBS=y$' "$CONFIG" || die "Buildroot did not retain 
 grep -q '^BR2_PACKAGE_PD690XX=y$' "$CONFIG" || die "Buildroot did not retain PD690XX"
 grep -q '^BR2_PACKAGE_FWUPDATE=y$' "$CONFIG" || die "Buildroot did not retain FWUPDATE"
 grep -q '^BR2_PACKAGE_FWUPDATE_CURL=y$' "$CONFIG" || die "Buildroot did not retain FWUPDATE_CURL"
+grep -q '^BR2_PACKAGE_CONFIGD=y$' "$CONFIG" || die "Buildroot did not retain CONFIGD"
+grep -q '^BR2_PACKAGE_POSTMERKOS_CLI=y$' "$CONFIG" || die "Buildroot did not retain POSTMERKOS_CLI"
 if (( INCLUDE_UI_VALUE )); then
-  grep -q '^BR2_PACKAGE_CONFIGD=y$' "$CONFIG" || die "Buildroot did not retain CONFIGD"
   grep -q '^BR2_PACKAGE_UHTTPD=y$' "$CONFIG" || die "Buildroot did not retain UHTTPD"
 fi
 

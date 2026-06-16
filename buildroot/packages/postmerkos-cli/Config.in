@@ -1,0 +1,9 @@
+config BR2_PACKAGE_POSTMERKOS_CLI
+	bool "postmerkOS management CLI"
+	select BR2_PACKAGE_CONFIGD
+	select BR2_PACKAGE_FWUPDATE
+	select BR2_PACKAGE_JQ
+	select BR2_PACKAGE_MBEDTLS
+	help
+	  Interactive and scriptable management interface for postmerkOS switch
+	  configuration, configuration backup/restore, and firmware updates.
