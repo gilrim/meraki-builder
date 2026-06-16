@@ -2,6 +2,7 @@ config BR2_PACKAGE_CONFIGD
 	bool "configd"
 	select BR2_PACKAGE_JSON_C
 	select BR2_PACKAGE_LIBWEBSOCKETS
+	select BR2_PACKAGE_LINUX_PAM
 	select BR2_PACKAGE_PD690XX
 	help
 	  Read and update persistent switch configuration and expose it through a

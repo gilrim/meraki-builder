@@ -1,30 +1,58 @@
 #include "websocket.h"
+#include "auth.h"
 #include "config_apply.h"
 #include "config_file.h"
 #include "configd.h"
 #include "network.h"
 #include "result.h"
 #include "status.h"
+#include "system_ops.h"
 #include "validation.h"
 
 #include <libpostmerkos.h>
+#include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#define MAX_FIRMWARE_UPLOAD (16U * 1024U * 1024U)
+
+struct queued_reply {
+  char *text;
+  struct queued_reply *next;
+};
+
 struct per_session_data {
+  bool authenticated;
+  char username[65];
+  unsigned int auth_failures;
   bool send_initial_status;
   bool send_initial_config;
   bool send_status;
   bool send_config;
-  char *reply;
+  struct queued_reply *reply_head;
+  struct queued_reply *reply_tail;
   char *receive_buffer;
   size_t receive_length;
+
+  bool upload_active;
+  bool upload_handed_off;
+  int upload_fd;
+  char upload_path[256];
+  char upload_name[128];
+  char upload_sha256[65];
+  char upload_overlay[16];
+  size_t upload_expected;
+  size_t upload_received;
+  bool upload_force;
 };
 
 static struct lws *clients[MAX_CLIENTS];
@@ -39,6 +67,7 @@ static struct lws_sorted_usec_list status_sul;
 static struct lws_sorted_usec_list config_sul;
 static struct lws_sorted_usec_list network_sul;
 static struct lws_context *ws_context;
+static struct lws *upload_owner;
 
 static bool management_address_changed(const struct network_runtime *before,
                                        const struct network_runtime *after) {
@@ -190,7 +219,7 @@ static void config_poll_cb(struct lws_sorted_usec_list *sul) {
       current_mtime != config_mtime_ns) {
     config_mtime_ns = current_mtime;
     struct json_object *config = load_config_file();
-    char error[256];
+    char error[256] = {0};
     if (!config || validate_configuration(config, error, sizeof(error)) != 0) {
       config_file_set_runtime_error(config ? error :
                                     "configuration file could not be parsed");
@@ -218,10 +247,12 @@ static void config_poll_cb(struct lws_sorted_usec_list *sul) {
                    10 * LWS_USEC_PER_SEC);
 }
 
-static struct json_object *error_data(const char *detail) {
+static struct json_object *error_data_status(int status, const char *message,
+                                             const char *detail) {
   struct json_object *data = json_object_new_object();
-  json_object_object_add(data, "status", json_object_new_int(400));
-  json_object_object_add(data, "message", json_object_new_string("Bad Request"));
+  json_object_object_add(data, "status", json_object_new_int(status));
+  json_object_object_add(data, "message",
+                         json_object_new_string(message ? message : "Error"));
   if (detail && *detail)
     json_object_object_add(data, "detail", json_object_new_string(detail));
   return data;
@@ -230,18 +261,114 @@ static struct json_object *error_data(const char *detail) {
 static void queue_response(struct lws *wsi, struct per_session_data *session,
                            const char *type, struct json_object *data,
                            struct json_object *request_id) {
-  free(session->reply);
-  session->reply = wrap_message(type, data, request_id);
+  struct queued_reply *reply = calloc(1, sizeof(*reply));
+  if (!reply) return;
+  reply->text = wrap_message(type, data, request_id);
+  if (!reply->text) {
+    free(reply);
+    return;
+  }
+  if (session->reply_tail) session->reply_tail->next = reply;
+  else session->reply_head = reply;
+  session->reply_tail = reply;
   lws_callback_on_writable(wsi);
+}
+
+static void free_replies(struct per_session_data *session) {
+  while (session->reply_head) {
+    struct queued_reply *reply = session->reply_head;
+    session->reply_head = reply->next;
+    free(reply->text);
+    free(reply);
+  }
+  session->reply_tail = NULL;
+}
+
+static void queue_error(struct lws *wsi, struct per_session_data *session,
+                        struct json_object *request_id, int status,
+                        const char *message, const char *detail) {
+  struct json_object *data = error_data_status(status, message, detail);
+  queue_response(wsi, session, "error", data, request_id);
+  json_object_put(data);
 }
 
 static void queue_bad_request(struct lws *wsi,
                               struct per_session_data *session,
                               struct json_object *request_id,
                               const char *detail) {
-  struct json_object *data = error_data(detail);
-  queue_response(wsi, session, "error", data, request_id);
-  json_object_put(data);
+  queue_error(wsi, session, request_id, 400, "Bad Request", detail);
+}
+
+static struct json_object *request_data_object(struct json_object *message) {
+  struct json_object *data = NULL;
+  if (!json_object_object_get_ex(message, "data", &data) ||
+      !json_object_is_type(data, json_type_object))
+    return NULL;
+  return data;
+}
+
+static const char *object_string(struct json_object *object, const char *key) {
+  struct json_object *value = NULL;
+  if (!object || !json_object_object_get_ex(object, key, &value) ||
+      !json_object_is_type(value, json_type_string))
+    return NULL;
+  return json_object_get_string(value);
+}
+
+static bool valid_sha256(const char *value) {
+  if (!value || strlen(value) != 64) return false;
+  for (const unsigned char *p = (const unsigned char *)value; *p; p++)
+    if (!isxdigit(*p)) return false;
+  return true;
+}
+
+static bool valid_overlay(const char *value) {
+  return value && (!strcmp(value, "preserve") || !strcmp(value, "migrate") ||
+                   !strcmp(value, "reset") || !strcmp(value, "image"));
+}
+
+static void cleanup_upload(struct lws *wsi, struct per_session_data *session) {
+  if (session->upload_fd >= 0) close(session->upload_fd);
+  session->upload_fd = -1;
+  if (session->upload_path[0] && !session->upload_handed_off)
+    unlink(session->upload_path);
+  session->upload_active = false;
+  session->upload_expected = 0;
+  session->upload_received = 0;
+  session->upload_path[0] = '\0';
+  if (upload_owner == wsi) upload_owner = NULL;
+}
+
+static struct json_object *upload_status_json(
+    const struct per_session_data *session) {
+  struct json_object *data = json_object_new_object();
+  json_object_object_add(data, "active",
+                         json_object_new_boolean(session->upload_active));
+  json_object_object_add(data, "name",
+                         json_object_new_string(session->upload_name));
+  json_object_object_add(data, "received",
+                         json_object_new_int64((int64_t)session->upload_received));
+  json_object_object_add(data, "expected",
+                         json_object_new_int64((int64_t)session->upload_expected));
+  int progress = session->upload_expected
+      ? (int)((session->upload_received * 100U) / session->upload_expected) : 0;
+  json_object_object_add(data, "progress", json_object_new_int(progress));
+  return data;
+}
+
+static int replace_configuration(struct json_object *candidate,
+                                 struct apply_result *result,
+                                 char *error, size_t error_size) {
+  int rc = validate_configuration(candidate, error, error_size);
+  if (rc != 0) return rc;
+  struct network_runtime before = *network_manager_runtime();
+  rc = save_config_file(candidate, error, error_size);
+  if (rc != 0) return rc;
+  rc = config_apply_full(candidate, result);
+  const struct network_runtime *after = network_manager_runtime();
+  if (management_address_changed(&before, after))
+    rebind_management_services(&before, after);
+  return rc;
 }
 
 static int handle_request(struct lws *wsi, struct per_session_data *session,
@@ -261,6 +388,225 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
   const char *type = json_object_get_string(type_object);
 
+  if (!strcmp(type, "auth")) {
+    struct json_object *data = request_data_object(message);
+    const char *username = object_string(data, "username");
+    const char *password = object_string(data, "password");
+    char error[256] = {0};
+    if (!data || auth_verify_user(username, password, error, sizeof(error)) != 0) {
+      session->authenticated = false;
+      session->username[0] = '\0';
+      session->auth_failures++;
+      if (session->auth_failures > 2) usleep(500000);
+      queue_error(wsi, session, request_id, 401, "Unauthorized", error);
+      return 0;
+    }
+    session->authenticated = true;
+    session->auth_failures = 0;
+    snprintf(session->username, sizeof(session->username), "%s", username);
+    session->send_initial_status = true;
+    session->send_initial_config = true;
+    struct json_object *auth = json_object_new_object();
+    json_object_object_add(auth, "username", json_object_new_string(username));
+    json_object_object_add(auth, "users", auth_list_users());
+    queue_response(wsi, session, "auth", auth, request_id);
+    json_object_put(auth);
+    return 0;
+  }
+
+  if (!strcmp(type, "logout")) {
+    session->authenticated = false;
+    session->username[0] = '\0';
+    session->send_initial_status = false;
+    session->send_initial_config = false;
+    cleanup_upload(wsi, session);
+    struct json_object *data = json_object_new_object();
+    json_object_object_add(data, "message", json_object_new_string("Logged out"));
+    queue_response(wsi, session, "auth_required", data, request_id);
+    json_object_put(data);
+    return 0;
+  }
+
+  if (!session->authenticated) {
+    queue_error(wsi, session, request_id, 401, "Unauthorized",
+                "authenticate with Linux PAM before using this interface");
+    return 0;
+  }
+
+  if (!strcmp(type, "get_auth")) {
+    struct json_object *data = json_object_new_object();
+    json_object_object_add(data, "username",
+                           json_object_new_string(session->username));
+    json_object_object_add(data, "users", auth_list_users());
+    queue_response(wsi, session, "auth", data, request_id);
+    json_object_put(data);
+    return 0;
+  }
+
+  if (!strcmp(type, "user_list")) {
+    struct json_object *data = json_object_new_object();
+    json_object_object_add(data, "users", auth_list_users());
+    queue_response(wsi, session, "users", data, request_id);
+    json_object_put(data);
+    return 0;
+  }
+
+  if (!strcmp(type, "password_change")) {
+    struct json_object *data = request_data_object(message);
+    const char *target = object_string(data, "username");
+    const char *current = object_string(data, "current_password");
+    const char *replacement = object_string(data, "new_password");
+    if (!target || !*target) target = session->username;
+    char error[256] = {0};
+    if (!data || auth_change_password(session->username, target, current,
+                                      replacement, error, sizeof(error)) != 0) {
+      queue_error(wsi, session, request_id, 400, "Password update failed",
+                  error);
+      return 0;
+    }
+    struct json_object *ack = json_object_new_object();
+    json_object_object_add(ack, "message",
+                           json_object_new_string("Password updated"));
+    json_object_object_add(ack, "username", json_object_new_string(target));
+    queue_response(wsi, session, "ack", ack, request_id);
+    json_object_put(ack);
+    return 0;
+  }
+
+  if (!strcmp(type, "terminal_exec")) {
+    struct json_object *data = request_data_object(message);
+    const char *command = object_string(data, "command");
+    if (!command) {
+      queue_bad_request(wsi, session, request_id,
+                        "terminal_exec.data.command must be a string");
+      return 0;
+    }
+    struct json_object *result = terminal_execute(command);
+    queue_response(wsi, session, "terminal", result, request_id);
+    json_object_put(result);
+    return 0;
+  }
+
+  if (!strcmp(type, "firmware_status")) {
+    struct json_object *status = firmware_status_json();
+    queue_response(wsi, session, "firmware_status", status, request_id);
+    json_object_put(status);
+    return 0;
+  }
+
+  if (!strcmp(type, "firmware_upload_status")) {
+    struct json_object *data = upload_status_json(session);
+    queue_response(wsi, session, "firmware_upload_status", data, request_id);
+    json_object_put(data);
+    return 0;
+  }
+
+  if (!strcmp(type, "firmware_upload_cancel")) {
+    cleanup_upload(wsi, session);
+    struct json_object *data = json_object_new_object();
+    json_object_object_add(data, "message",
+                           json_object_new_string("Firmware upload cancelled"));
+    queue_response(wsi, session, "ack", data, request_id);
+    json_object_put(data);
+    return 0;
+  }
+
+  if (!strcmp(type, "firmware_upload_start")) {
+    struct json_object *data = request_data_object(message);
+    const char *name = object_string(data, "name");
+    const char *sha256 = object_string(data, "sha256");
+    const char *overlay = object_string(data, "overlay");
+    struct json_object *size_object = NULL;
+    struct json_object *force_object = NULL;
+    if (!data || !json_object_object_get_ex(data, "size", &size_object)) {
+      queue_bad_request(wsi, session, request_id, "firmware size is required");
+      return 0;
+    }
+    int64_t size_value = json_object_get_int64(size_object);
+    bool force = json_object_object_get_ex(data, "force", &force_object) &&
+                 json_object_get_boolean(force_object);
+    if (size_value <= 0 || size_value > MAX_FIRMWARE_UPLOAD ||
+        !valid_sha256(sha256) || !valid_overlay(overlay)) {
+      queue_bad_request(wsi, session, request_id,
+                        "invalid firmware size, SHA-256, or overlay policy");
+      return 0;
+    }
+    if (upload_owner && upload_owner != wsi) {
+      queue_error(wsi, session, request_id, 409, "Conflict",
+                  "another firmware upload is active");
+      return 0;
+    }
+    cleanup_upload(wsi, session);
+    session->upload_handed_off = false;
+    snprintf(session->upload_path, sizeof(session->upload_path),
+             "/tmp/postmerkos-upload-%ld-%lx.bin", (long)getpid(),
+             (unsigned long)wsi);
+    session->upload_fd = open(session->upload_path,
+                              O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (session->upload_fd < 0) {
+      queue_error(wsi, session, request_id, 500, "Upload initialization failed",
+                  strerror(errno));
+      cleanup_upload(wsi, session);
+      return 0;
+    }
+    snprintf(session->upload_name, sizeof(session->upload_name), "%s",
+             name && *name ? name : "firmware.bin");
+    snprintf(session->upload_sha256, sizeof(session->upload_sha256), "%s",
+             sha256);
+    snprintf(session->upload_overlay, sizeof(session->upload_overlay), "%s",
+             overlay);
+    session->upload_expected = (size_t)size_value;
+    session->upload_received = 0;
+    session->upload_force = force;
+    session->upload_active = true;
+    upload_owner = wsi;
+    struct json_object *ready = upload_status_json(session);
+    queue_response(wsi, session, "firmware_upload_ready", ready, request_id);
+    json_object_put(ready);
+    return 0;
+  }
+
+  if (!strcmp(type, "firmware_upload_finish")) {
+    if (!session->upload_active || session->upload_fd < 0) {
+      queue_bad_request(wsi, session, request_id, "no firmware upload is active");
+      return 0;
+    }
+    if (fsync(session->upload_fd) != 0) {
+      queue_error(wsi, session, request_id, 500, "Upload failed",
+                  strerror(errno));
+      cleanup_upload(wsi, session);
+      return 0;
+    }
+    close(session->upload_fd);
+    session->upload_fd = -1;
+    if (session->upload_received != session->upload_expected) {
+      queue_bad_request(wsi, session, request_id,
+                        "uploaded byte count does not match the declared size");
+      cleanup_upload(wsi, session);
+      return 0;
+    }
+    char error[256] = {0};
+    if (firmware_start_update(session->upload_path, session->upload_sha256,
+                              session->upload_overlay, session->upload_force,
+                              error, sizeof(error)) != 0) {
+      queue_error(wsi, session, request_id, 500,
+                  "Firmware update could not be started", error);
+      cleanup_upload(wsi, session);
+      return 0;
+    }
+    session->upload_active = false;
+    session->upload_handed_off = true;
+    upload_owner = NULL;
+    struct json_object *started = json_object_new_object();
+    json_object_object_add(started, "message", json_object_new_string(
+        "Firmware update started. The management connection will close while flash is written and the switch reboots."));
+    json_object_object_add(started, "name",
+                           json_object_new_string(session->upload_name));
+    queue_response(wsi, session, "firmware_started", started, request_id);
+    json_object_put(started);
+    return 0;
+  }
+
   if (!strcmp(type, "get_status")) {
     struct json_object *status = get_status();
     queue_response(wsi, session, "status", status, request_id);
@@ -278,14 +624,44 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     }
     return 0;
   }
+
+  if (!strcmp(type, "replace_config")) {
+    struct json_object *candidate = request_data_object(message);
+    if (!candidate) {
+      queue_bad_request(wsi, session, request_id,
+                        "replace_config.data must be a complete configuration object");
+      return 0;
+    }
+    struct apply_result result;
+    apply_result_init(&result);
+    char error[256] = "";
+    int rc = replace_configuration(candidate, &result, error, sizeof(error));
+    if (rc != 0) {
+      queue_bad_request(wsi, session, request_id,
+                        error[0] ? error : "configuration replacement failed");
+      apply_result_cleanup(&result);
+      return 0;
+    }
+    struct json_object *ack = apply_result_json(&result,
+                                                "Configuration restored");
+    queue_response(wsi, session, "ack", ack, request_id);
+    json_object_put(ack);
+    apply_result_cleanup(&result);
+    config_file_mtime(&config_mtime_ns);
+    refresh_config_cache(candidate, true);
+    refresh_status_cache(true);
+    lws_sul_schedule(ws_context, 0, &network_sul, network_poll_cb,
+                     1 * LWS_USEC_PER_SEC);
+    return 0;
+  }
+
   if (strcmp(type, "config")) {
     queue_bad_request(wsi, session, request_id, "unknown request type");
     return 0;
   }
 
-  struct json_object *delta = NULL;
-  if (!json_object_object_get_ex(message, "data", &delta) ||
-      !json_object_is_type(delta, json_type_object)) {
+  struct json_object *delta = request_data_object(message);
+  if (!delta) {
     queue_bad_request(wsi, session, request_id,
                       "config.data must be a JSON object");
     return 0;
@@ -294,7 +670,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   struct apply_result result;
   apply_result_init(&result);
   struct json_object *saved = NULL;
-  char error[256];
+  char error[256] = {0};
   int rc = config_merge_validate_save_apply(delta, &saved, &result, true,
                                              error, sizeof(error));
   if (rc != 0) {
@@ -324,13 +700,49 @@ static void reset_receive(struct per_session_data *session) {
   session->receive_length = 0;
 }
 
-static int receive_fragment(struct lws *wsi, struct per_session_data *session,
-                            const void *input, size_t length) {
-  if (lws_frame_is_binary(wsi)) {
-    queue_bad_request(wsi, session, NULL, "binary frames are not supported");
-    reset_receive(session);
+static int receive_binary(struct lws *wsi, struct per_session_data *session,
+                          const void *input, size_t length) {
+  if (!session->authenticated || !session->upload_active ||
+      session->upload_fd < 0 || upload_owner != wsi) {
+    queue_error(wsi, session, NULL, 400, "Unexpected binary data",
+                "start an authenticated firmware upload first");
     return 0;
   }
+  if (session->upload_received + length > session->upload_expected) {
+    queue_bad_request(wsi, session, NULL,
+                      "firmware upload exceeds the declared size");
+    cleanup_upload(wsi, session);
+    return 0;
+  }
+  const unsigned char *cursor = input;
+  size_t remaining = length;
+  while (remaining) {
+    ssize_t written = write(session->upload_fd, cursor, remaining);
+    if (written < 0) {
+      if (errno == EINTR) continue;
+      queue_error(wsi, session, NULL, 500, "Firmware upload failed",
+                  strerror(errno));
+      cleanup_upload(wsi, session);
+      return 0;
+    }
+    if (written == 0) {
+      queue_error(wsi, session, NULL, 500, "Firmware upload failed",
+                  "temporary upload file stopped accepting data");
+      cleanup_upload(wsi, session);
+      return 0;
+    }
+    cursor += written;
+    remaining -= (size_t)written;
+    session->upload_received += (size_t)written;
+  }
+  return 0;
+}
+
+static int receive_fragment(struct lws *wsi, struct per_session_data *session,
+                            const void *input, size_t length) {
+  if (lws_frame_is_binary(wsi))
+    return receive_binary(wsi, session, input, length);
+
   if (session->receive_length + length > MAX_MSG_LEN) {
     queue_bad_request(wsi, session, NULL, "request exceeds maximum size");
     reset_receive(session);
@@ -376,23 +788,28 @@ static int configd_ws_callback(struct lws *wsi,
                                void *user, void *input, size_t length) {
   struct per_session_data *session = user;
   switch (reason) {
-    case LWS_CALLBACK_ESTABLISHED:
+    case LWS_CALLBACK_ESTABLISHED: {
       if (client_count >= MAX_CLIENTS) {
         queue_bad_request(wsi, session, NULL, "server client limit reached");
         return -1;
       }
+      memset(session, 0, sizeof(*session));
+      session->upload_fd = -1;
       add_client(wsi);
-      session->send_initial_status = true;
-      session->send_initial_config = true;
-      lws_callback_on_writable(wsi);
+      struct json_object *data = json_object_new_object();
+      json_object_object_add(data, "message", json_object_new_string(
+          "Linux PAM authentication is required"));
+      queue_response(wsi, session, "auth_required", data, NULL);
+      json_object_put(data);
       printf("ws: client connected (%zu total)\n", client_count);
       break;
+    }
 
     case LWS_CALLBACK_CLOSED:
       remove_client(wsi);
+      cleanup_upload(wsi, session);
       reset_receive(session);
-      free(session->reply);
-      session->reply = NULL;
+      free_replies(session);
       printf("ws: client disconnected (%zu total)\n", client_count);
       break;
 
@@ -401,26 +818,34 @@ static int configd_ws_callback(struct lws *wsi,
       break;
 
     case LWS_CALLBACK_SERVER_WRITEABLE:
-      if (session->reply) {
-        ws_send(wsi, session->reply);
-        free(session->reply);
-        session->reply = NULL;
-      } else if (session->send_initial_status && cached_status_json) {
+      if (session->reply_head) {
+        struct queued_reply *reply = session->reply_head;
+        session->reply_head = reply->next;
+        if (!session->reply_head) session->reply_tail = NULL;
+        ws_send(wsi, reply->text);
+        free(reply->text);
+        free(reply);
+      } else if (session->authenticated && session->send_initial_status &&
+                 cached_status_json) {
         ws_send(wsi, cached_status_json);
         session->send_initial_status = false;
-      } else if (session->send_initial_config && cached_config_json) {
+      } else if (session->authenticated && session->send_initial_config &&
+                 cached_config_json) {
         ws_send(wsi, cached_config_json);
         session->send_initial_config = false;
-      } else if (session->send_status && cached_status_json) {
+      } else if (session->authenticated && session->send_status &&
+                 cached_status_json) {
         ws_send(wsi, cached_status_json);
         session->send_status = false;
-      } else if (session->send_config && cached_config_json) {
+      } else if (session->authenticated && session->send_config &&
+                 cached_config_json) {
         ws_send(wsi, cached_config_json);
         session->send_config = false;
       }
-      if (session->reply || session->send_initial_status ||
-          session->send_initial_config || session->send_status ||
-          session->send_config)
+      if (session->reply_head ||
+          (session->authenticated &&
+           (session->send_initial_status || session->send_initial_config ||
+            session->send_status || session->send_config)))
         lws_callback_on_writable(wsi);
       break;
 
@@ -434,7 +859,7 @@ void mark_clients_pending(void) {
   if (!status_pending && !config_pending) return;
   for (size_t i = 0; i < client_count; i++) {
     struct per_session_data *session = lws_wsi_user(clients[i]);
-    if (!session) continue;
+    if (!session || !session->authenticated) continue;
     if (status_pending) session->send_status = true;
     if (config_pending) session->send_config = true;
     lws_callback_on_writable(clients[i]);
@@ -444,8 +869,12 @@ void mark_clients_pending(void) {
 }
 
 static const struct lws_protocols protocols[] = {
-  {"configd-ws", configd_ws_callback, sizeof(struct per_session_data),
-   MAX_MSG_LEN},
+  {
+    .name = "configd-ws",
+    .callback = configd_ws_callback,
+    .per_session_data_size = sizeof(struct per_session_data),
+    .rx_buffer_size = MAX_MSG_LEN,
+  },
   LWS_PROTOCOL_LIST_TERM
 };
 

@@ -8,7 +8,7 @@ CONFIGD_VERSION = 0.1
 CONFIGD_SITE = package/configd
 CONFIGD_SITE_METHOD = local
 CONFIGD_INSTALL_TARGET = YES
-CONFIGD_DEPENDENCIES = json-c libwebsockets pd690xx
+CONFIGD_DEPENDENCIES = json-c libwebsockets linux-pam pd690xx
 
 define CONFIGD_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) \

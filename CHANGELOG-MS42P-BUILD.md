@@ -1,3 +1,16 @@
+## Authenticated management, CLI, backup, and firmware UI
+
+- Add Linux PAM authentication and administrator authorization to every WebSocket management session.
+- Add local account password updates and prevent non-admin local accounts from gaining the root-equivalent web terminal.
+- Add bounded authenticated browser command execution.
+- Add 16 MiB streamed browser firmware upload with SHA-256 and existing `fw_update` status/safety integration.
+- Add complete configuration replacement for validated backup restoration.
+- Add the always-installed `postmerkos-cli` menu for interactive SSH and TTL sessions, with raw-shell escape and scriptable commands for all JSON configuration paths.
+- Add OpenSSL-compatible optional-password backups shared by browser and CLI.
+- Teach the host serial flasher to detect `postmerkOS>` and enter the raw shell automatically.
+- Add per-session FIFO WebSocket replies so concurrent tool/status requests are not lost.
+- Add host tests for command execution and updater-status parsing.
+
 ## DHCP and web-service reliability fixes
 
 - Wait up to 60 seconds for a DHCP lease during early network bootstrap before applying the link-local fallback.
