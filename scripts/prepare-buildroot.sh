@@ -152,12 +152,16 @@ set_string('BR2_ROOTFS_OVERLAY', f'{generated} board/meraki/ms220/overlay')
 set_string('BR2_ROOTFS_POST_BUILD_SCRIPT', 'board/meraki/ms220/post-build.sh')
 set_string('BR2_ROOTFS_POST_FAKEROOT_SCRIPT', '')
 set_string('BR2_ROOTFS_POST_IMAGE_SCRIPT', 'board/meraki/ms220/post-image.sh')
+set_bool('BR2_TOOLCHAIN_BUILDROOT_WCHAR', True)
+set_bool('BR2_TOOLCHAIN_BUILDROOT_LOCALE', True)
 set_bool('BR2_STATIC_LIBS', False)
 set_bool('BR2_SHARED_LIBS', False)
 set_bool('BR2_SHARED_STATIC_LIBS', True)
 set_bool('BR2_PACKAGE_PD690XX', True)
 set_bool('BR2_PACKAGE_FWUPDATE', True)
 set_bool('BR2_PACKAGE_FWUPDATE_CURL', True)
+set_bool('BR2_PACKAGE_FLEX', True)
+set_bool('BR2_PACKAGE_LINUX_PAM', True)
 set_bool('BR2_PACKAGE_CONFIGD', True)
 set_bool('BR2_PACKAGE_POSTMERKOS_CLI', True)
 set_bool('BR2_PACKAGE_UHTTPD', include_ui)
@@ -171,6 +175,10 @@ PY
 )
 
 grep -q '^BR2_SHARED_STATIC_LIBS=y$' "$CONFIG" || die "Buildroot did not retain shared/static library support"
+grep -q '^BR2_TOOLCHAIN_BUILDROOT_WCHAR=y$' "$CONFIG" || die "Buildroot did not retain uClibc wchar support required by Linux-PAM"
+grep -q '^BR2_TOOLCHAIN_BUILDROOT_LOCALE=y$' "$CONFIG" || die "Buildroot did not retain uClibc locale support required by Linux-PAM"
+grep -q '^BR2_PACKAGE_FLEX=y$' "$CONFIG" || die "Buildroot did not retain FLEX required by Linux-PAM 1.5.2"
+grep -q '^BR2_PACKAGE_LINUX_PAM=y$' "$CONFIG" || die "Buildroot did not retain Linux-PAM"
 grep -q '^BR2_PACKAGE_PD690XX=y$' "$CONFIG" || die "Buildroot did not retain PD690XX"
 grep -q '^BR2_PACKAGE_FWUPDATE=y$' "$CONFIG" || die "Buildroot did not retain FWUPDATE"
 grep -q '^BR2_PACKAGE_FWUPDATE_CURL=y$' "$CONFIG" || die "Buildroot did not retain FWUPDATE_CURL"
