@@ -9,6 +9,7 @@
 - `--status-interval 1..3600`: broadcast period.
 - `--websocket-port 1..65535`: listen port.
 - `--network-bootstrap`: apply only management IPv4 and exit.
+- `--network-wait 0..300`: DHCP wait used by bootstrap mode; default 60 seconds.
 - `--get-config`, `--get-status`, `--validate`, `--apply-file`, `--apply-json`.
 
 Only one command mode should be used per invocation. Malformed numeric values or trailing arguments exit with status 2.

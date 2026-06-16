@@ -1,0 +1,31 @@
+#!/bin/sh
+
+OLD_ADDRESS=${1:-unknown}
+NEW_ADDRESS=${2:-unknown}
+SOURCE=${3:-unknown}
+WEB_INIT=${POSTMERKOS_WEB_INIT:-/etc/init.d/S16uhttpd}
+LOGFILE=/tmp/network-rebind.log
+
+log() {
+    message="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date) $*"
+    echo "$message"
+    echo "$message" >>"$LOGFILE"
+}
+
+printf '%s\n' "$NEW_ADDRESS" >/tmp/MANAGEMENT_IP
+log "management IPv4 changed: source=$SOURCE old=$OLD_ADDRESS new=$NEW_ADDRESS"
+
+if [ ! -x "$WEB_INIT" ]; then
+    log "web rebind skipped: $WEB_INIT is unavailable"
+    exit 0
+fi
+
+"$WEB_INIT" rebind "$OLD_ADDRESS" "$NEW_ADDRESS"
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    log "web service rebound successfully on $NEW_ADDRESS"
+    exit 0
+fi
+
+log "web service rebind failed with status $rc"
+exit "$rc"

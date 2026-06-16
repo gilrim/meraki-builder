@@ -10,7 +10,11 @@ Read-only status requests use `network_manager_observe()`, which parses desired 
 {"network":{"ipv4":{"mode":"dhcp","fallback_address":"169.254.0.10/16","mtu":1500}}}
 ```
 
-The manager reads `/click/uplinkstate/dhcp_state`, confirms details with `/click/uplinkstate/dhcpc_state_for_brain`, and applies changed leases through `/click/set_host_ip/run`.
+The manager prefers `/click/uplinkstate/dhcp_state`, confirms details with
+`/click/uplinkstate/dhcpc_state_for_brain`, and applies changed leases through
+`/click/set_host_ip/run`. Older donor graphs that do not expose `dhcp_state`
+are supported by treating `dhcpc_state_for_brain` as the primary lease source.
+Both numeric prefixes and dotted subnet masks are accepted from that handler.
 
 Polling policy:
 
@@ -44,14 +48,21 @@ The second value is the CIDR prefix length, not a dotted netmask.
 When a running switch is changed from static mode to DHCP, the already-applied
 static address remains active until Click reports a valid bound lease. This is a
 make-before-break transition and prevents an accidental loss of management
-access on networks without a DHCP server. A cold boot in DHCP mode still uses
-the configured link-local fallback until a lease appears.
+access on networks without a DHCP server. A cold boot in DHCP mode waits up to
+60 seconds for a lease, then uses the configured link-local fallback while the
+daemon continues polling.
 
 ## Early boot
 
-`configd --network-bootstrap` runs from `S10clickconfig`, before `S11poe`. It
+`configd --network-bootstrap --network-wait 60` runs from `S10clickconfig`, before `S11poe`. It
 loads only the persisted `network` object and deliberately avoids hardware/PoE
 probing or creation of the full switch configuration. On a fresh flash, where no
 configuration exists yet, it uses an in-memory DHCP default and does not create
 `/etc/switch.json`; the normal daemon creates the complete configuration after
 PoE initialization.
+
+When a running daemon applies a different management address, the WebSocket
+service invokes `/usr/sbin/postmerkos-network-rebind`. The hook restarts uhttpd
+after the Click update so HTTP is verified on the new address. uhttpd is still
+bound to `0.0.0.0:80`; the restart is a defensive rebind rather than a
+single-address bind.

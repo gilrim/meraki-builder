@@ -56,11 +56,20 @@ required=(
   etc/fwupdate/preserve.list
 )
 if bool_enabled "${INCLUDE_UI:-0}"; then
-  required+=(www/index.html bin/configd usr/bin/uhttpd etc/init.d/S15configd etc/init.d/S16uhttpd)
+  required+=(www/index.html bin/configd usr/bin/uhttpd etc/init.d/S15configd \
+    etc/init.d/S16uhttpd usr/sbin/postmerkos-network-rebind)
 fi
 for path in "${required[@]}"; do
   [[ -e "$VERIFY_DIR/$path" ]] || die "Rootfs verification failed: missing /$path"
 done
+
+if bool_enabled "${INCLUDE_UI:-0}"; then
+  for path in bin/configd usr/bin/uhttpd etc/init.d/S15configd \
+      etc/init.d/S16uhttpd usr/sbin/postmerkos-network-rebind; do
+    [[ -x "$VERIFY_DIR/$path" ]] || \
+      die "Rootfs verification failed: /$path is not executable"
+  done
+fi
 
 file "$VERIFY_DIR/usr/libexec/fwupdate/fwflash" | grep -qi 'statically linked' || \
   die "Firmware updater helper is not statically linked"

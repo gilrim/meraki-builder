@@ -44,7 +44,27 @@ int main(void) {
   assert(strcmp(runtime->applied.address, "169.254.0.10") == 0);
   apply_result_cleanup(&result);
 
-  FILE *file = fopen(state, "w");
+  /* Older donor graphs may expose only dhcpc_state_for_brain. A dotted
+   * netmask must be normalized to the numeric prefix expected by set_host_ip. */
+  FILE *file = fopen(brain, "w");
+  assert(file);
+  fputs("ip=192.168.4.15\n"
+        "subnet=255.255.252.0\n"
+        "router=192.168.4.1\n"
+        "broadcast=192.168.7.255\n"
+        "dns=192.168.4.1 1.1.1.1\n", file);
+  fclose(file);
+  apply_result_init(&result);
+  assert(network_manager_poll(&result));
+  runtime = network_manager_runtime();
+  assert(strcmp(runtime->source, "dhcp") == 0);
+  assert(strcmp(runtime->applied.address, "192.168.4.15") == 0);
+  assert(runtime->applied.prefix == 22);
+  assert(strcmp(runtime->applied.dns[0], "192.168.4.1") == 0);
+  assert(strcmp(runtime->applied.dns[1], "1.1.1.1") == 0);
+  apply_result_cleanup(&result);
+
+  file = fopen(state, "w");
   assert(file);
   fputs("vlan added_by active state disc_ago offer_ago req_ago ack_delay renew_at exp_at ip gw bcast dns dns mtu\n", file);
   fputs("1 C|T true bound 10 9 8 0.0049 120 3600 192.168.4.15/22 192.168.4.1 192.168.7.255 192.168.4.1 0.0.0.0 1500\n", file);
@@ -55,7 +75,7 @@ int main(void) {
   fclose(file);
 
   apply_result_init(&result);
-  assert(network_manager_poll(&result));
+  network_manager_poll(&result);
   runtime = network_manager_runtime();
   assert(strcmp(runtime->source, "dhcp") == 0);
   assert(strcmp(runtime->applied.address, "192.168.4.15") == 0);

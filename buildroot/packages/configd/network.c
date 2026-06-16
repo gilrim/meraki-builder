@@ -58,6 +58,12 @@ static int parse_ipv4(const char *text, struct in_addr *address) {
   return inet_pton(AF_INET, text, address) == 1 ? 0 : -EINVAL;
 }
 
+static int copy_ipv4(char destination[16], const char *source) {
+  struct in_addr parsed;
+  if (!destination || parse_ipv4(source, &parsed) != 0) return -EINVAL;
+  return inet_ntop(AF_INET, &parsed, destination, 16) ? 0 : -errno;
+}
+
 static void address_to_string(uint32_t host_order, char *buffer, size_t size) {
   struct in_addr address = { .s_addr = htonl(host_order) };
   if (!inet_ntop(AF_INET, &address, buffer, size))
@@ -252,6 +258,105 @@ static int read_key_value(const char *path, const char *key,
   return rc;
 }
 
+static int parse_prefix(const char *text, unsigned int *prefix) {
+  if (!text || !*text || !prefix) return -EINVAL;
+
+  if (!strchr(text, '.')) {
+    char *end = NULL;
+    errno = 0;
+    unsigned long value = strtoul(text, &end, 10);
+    if (errno || !end || *end || value > 32) return -EINVAL;
+    *prefix = (unsigned int)value;
+    return 0;
+  }
+
+  struct in_addr address;
+  if (parse_ipv4(text, &address) != 0) return -EINVAL;
+  uint32_t mask = ntohl(address.s_addr);
+  bool saw_zero = false;
+  unsigned int bits = 0;
+  for (int bit = 31; bit >= 0; bit--) {
+    bool set = (mask & (1U << bit)) != 0;
+    if (set && saw_zero) return -EINVAL;
+    if (set) bits++;
+    else saw_zero = true;
+  }
+  *prefix = bits;
+  return 0;
+}
+
+static void parse_dns_values(const char *text, struct ipv4_runtime *value) {
+  if (!text || !value) return;
+  char copy[96];
+  if (snprintf(copy, sizeof(copy), "%s", text) >= (int)sizeof(copy)) return;
+  char *save = NULL;
+  unsigned int index = 0;
+  for (char *token = strtok_r(copy, " ,\t\r\n", &save);
+       token && index < 2;
+       token = strtok_r(NULL, " ,\t\r\n", &save)) {
+    struct in_addr parsed;
+    if (parse_ipv4(token, &parsed) != 0 || !strcmp(token, "0.0.0.0"))
+      continue;
+    snprintf(value->dns[index], sizeof(value->dns[index]), "%s", token);
+    index++;
+  }
+}
+
+static int parse_dhcp_brain(struct dhcp_lease *lease,
+                            char *error, size_t error_size) {
+  const char *path = env_or_default(
+      "CONFIGD_DHCP_BRAIN", "/click/uplinkstate/dhcpc_state_for_brain");
+  char address[32] = "";
+  char subnet[32] = "";
+  char gateway[32] = "";
+  char broadcast[32] = "";
+  char dns[96] = "";
+
+  int rc = read_key_value(path, "ip", address, sizeof(address));
+  if (rc != 0 || !strcmp(address, "0.0.0.0")) {
+    set_error(error, error_size,
+              rc == -ENOENT ? "no DHCP address in brain state" :
+              rc < 0 ? strerror(-rc) : "no DHCP address in brain state");
+    return rc != 0 ? rc : -ENOENT;
+  }
+  if (read_key_value(path, "subnet", subnet, sizeof(subnet)) != 0)
+    subnet[0] = '\0';
+  if (read_key_value(path, "router", gateway, sizeof(gateway)) != 0)
+    gateway[0] = '\0';
+  if (read_key_value(path, "broadcast", broadcast, sizeof(broadcast)) != 0)
+    broadcast[0] = '\0';
+  if (read_key_value(path, "dns", dns, sizeof(dns)) != 0)
+    dns[0] = '\0';
+
+  unsigned int prefix = 0;
+  if (parse_prefix(subnet, &prefix) != 0) {
+    set_error(error, error_size,
+              "DHCP brain state is missing a valid subnet/prefix");
+    return -EINVAL;
+  }
+
+  char cidr[64];
+  if (snprintf(cidr, sizeof(cidr), "%s/%u", address, prefix) >=
+      (int)sizeof(cidr) ||
+      network_parse_cidr(cidr, &lease->ipv4, error, error_size) != 0)
+    return -EINVAL;
+
+  struct in_addr parsed;
+  if (gateway[0] && parse_ipv4(gateway, &parsed) == 0)
+    copy_ipv4(lease->ipv4.gateway, gateway);
+  else
+    snprintf(lease->ipv4.gateway, sizeof(lease->ipv4.gateway), "0.0.0.0");
+  if (broadcast[0] && parse_ipv4(broadcast, &parsed) == 0)
+    copy_ipv4(lease->ipv4.broadcast, broadcast);
+  parse_dns_values(dns, &lease->ipv4);
+  lease->ipv4.mtu = DEFAULT_MTU;
+  lease->vlan = 1;
+  lease->renew_in = MIN_POLL_SECONDS;
+  lease->expires_in = 0;
+  lease->valid = true;
+  return 0;
+}
+
 static int parse_dhcp_state(struct dhcp_lease *lease,
                             char *error, size_t error_size) {
   memset(lease, 0, sizeof(*lease));
@@ -259,8 +364,12 @@ static int parse_dhcp_state(struct dhcp_lease *lease,
                                     "/click/uplinkstate/dhcp_state");
   FILE *file = fopen(path, "r");
   if (!file) {
-    set_error(error, error_size, strerror(errno));
-    return -errno;
+    int state_error = -errno;
+    int brain_rc = parse_dhcp_brain(lease, error, error_size);
+    if (brain_rc == 0) return 0;
+    if (state_error != -ENOENT)
+      set_error(error, error_size, strerror(-state_error));
+    return brain_rc != -ENOENT ? brain_rc : state_error;
   }
 
   char line[512];
@@ -312,6 +421,8 @@ static int parse_dhcp_state(struct dhcp_lease *lease,
   fclose(file);
 
   if (!lease->valid) {
+    int brain_rc = parse_dhcp_brain(lease, error, error_size);
+    if (brain_rc == 0) return 0;
     set_error(error, error_size, "no active bound DHCP lease");
     return -ENOENT;
   }
@@ -319,20 +430,25 @@ static int parse_dhcp_state(struct dhcp_lease *lease,
   const char *brain = env_or_default(
       "CONFIGD_DHCP_BRAIN", "/click/uplinkstate/dhcpc_state_for_brain");
   struct in_addr parsed;
-  char brain_value[16];
+  char brain_value[96];
   if (read_key_value(brain, "ip", brain_value, sizeof(brain_value)) == 0 &&
       parse_ipv4(brain_value, &parsed) == 0)
-    snprintf(lease->ipv4.address, sizeof(lease->ipv4.address), "%s",
-             brain_value);
+    copy_ipv4(lease->ipv4.address, brain_value);
   if (read_key_value(brain, "router", brain_value, sizeof(brain_value)) == 0 &&
       parse_ipv4(brain_value, &parsed) == 0)
-    snprintf(lease->ipv4.gateway, sizeof(lease->ipv4.gateway), "%s",
-             brain_value);
+    copy_ipv4(lease->ipv4.gateway, brain_value);
   if (read_key_value(brain, "broadcast", brain_value,
                      sizeof(brain_value)) == 0 &&
       parse_ipv4(brain_value, &parsed) == 0)
-    snprintf(lease->ipv4.broadcast, sizeof(lease->ipv4.broadcast), "%s",
-             brain_value);
+    copy_ipv4(lease->ipv4.broadcast, brain_value);
+  if (read_key_value(brain, "subnet", brain_value,
+                     sizeof(brain_value)) == 0) {
+    unsigned int prefix = 0;
+    if (parse_prefix(brain_value, &prefix) == 0)
+      lease->ipv4.prefix = prefix;
+  }
+  if (read_key_value(brain, "dns", brain_value, sizeof(brain_value)) == 0)
+    parse_dns_values(brain_value, &lease->ipv4);
   return 0;
 }
 

@@ -1,3 +1,13 @@
+## DHCP and web-service reliability fixes
+
+- Wait up to 60 seconds for a DHCP lease during early network bootstrap before applying the link-local fallback.
+- Support Click graphs that expose only `dhcpc_state_for_brain`, including dotted subnet masks.
+- Print the selected management address, gateway, broadcast, and source on the serial console.
+- Continue polling after fallback and rebind uhttpd whenever the applied management address changes.
+- Verify configd TCP 4001 and uhttpd TCP 80 listeners before reporting successful startup.
+- Add persistent runtime diagnostics in `/tmp/configd.log`, `/tmp/uhttpd.log`, and `/tmp/network-rebind.log`.
+- Correct the MS42/MS42P access-policy initialization range from 1-9 to 1-8.
+
 ## Distrobox Buildroot hotfix
 
 - Route the complete Arch/CachyOS build through Ubuntu 22.04 Distrobox instead of containerizing only the kernel stage.
