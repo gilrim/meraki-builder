@@ -21,13 +21,16 @@ endif
 SUPPORT_SRCS = $(PD690XX_DIR)/libpd690xx.c $(POSTMERKOS_DIR)/libpostmerkos.c
 
 .PHONY: all clean test-host
-all: configd
+all: configd postmerkosctl
 
 configd: $(SRCS) $(SUPPORT_SRCS)
 	$(CC) $(CPPFLAGS) $(INCLUDES) $(CFLAGS) -o $@ $(SRCS) $(SUPPORT_SRCS) $(LDFLAGS) $(LDLIBS)
+
+postmerkosctl: postmerkosctl.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ postmerkosctl.c $(LDFLAGS) -ljson-c
 
 test-host:
 	./tests/test-host.sh
 
 clean:
-	rm -f configd *.o
+	rm -f configd postmerkosctl *.o

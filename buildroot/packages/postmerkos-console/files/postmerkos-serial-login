@@ -1,0 +1,25 @@
+#!/bin/sh
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+SECURITY=/config/postmerkos/security.json
+mode=disabled
+if [ -r "$SECURITY" ]; then
+    detected=$(sed -n 's/.*"serial_authentication"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SECURITY" | head -n 1)
+    [ -n "$detected" ] && mode=$detected
+fi
+printf '\npostmerkOS serial console\n'
+case "$mode" in
+    root)
+        echo 'Root authentication is required.'
+        exec /bin/login root
+        ;;
+    users)
+        echo 'Login with a postmerkOS administrator, operator, or viewer account.'
+        exec /bin/login
+        ;;
+    *)
+        printf 'Press Enter or type "pmc" to start the management interface.\npmc: '
+        IFS= read -r _trigger || exit 0
+        exec /usr/bin/postmerkos-console menu
+        ;;
+esac

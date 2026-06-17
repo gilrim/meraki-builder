@@ -1,6 +1,10 @@
 #define _GNU_SOURCE
 #include "local_socket.h"
 #include "config_file.h"
+#include "config_apply.h"
+#include "configd.h"
+#include "result.h"
+#include "validation.h"
 #include "console_cli.h"
 #include "roles.h"
 #include "status.h"
@@ -18,6 +22,7 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <sys/reboot.h>
 
 #define LOCAL_REQUEST_MAX 65536
 
@@ -54,6 +59,54 @@ static const char *request_type(struct json_object *request) {
       json_object_is_type(type, json_type_string) ? json_object_get_string(type) : NULL;
 }
 
+static struct json_object *request_data(struct json_object *request) {
+  struct json_object *data = NULL;
+  return request && json_object_object_get_ex(request, "data", &data) &&
+      json_object_is_type(data, json_type_object) ? data : NULL;
+}
+
+static const char *object_string(struct json_object *object, const char *key) {
+  struct json_object *value = NULL;
+  return object && json_object_object_get_ex(object, key, &value) &&
+      json_object_is_type(value, json_type_string) ? json_object_get_string(value) : NULL;
+}
+
+static const char *path_capability(const char *path) {
+  if (!path) return "network.write";
+  if (!strncmp(path, "ports.", 6) || !strncmp(path, "stp.", 4) ||
+      !strncmp(path, "lacp.", 5) || !strncmp(path, "multicast.", 10))
+    return "switching.write";
+  return "network.write";
+}
+
+static bool delta_operator_safe(struct json_object *delta) {
+  if (!delta || !json_object_is_type(delta, json_type_object)) return false;
+  json_object_object_foreach(delta, key, value) {
+    (void)value;
+    if (strcmp(key, "ports") && strcmp(key, "stp") && strcmp(key, "lacp") &&
+        strcmp(key, "multicast")) return false;
+  }
+  return true;
+}
+
+static int save_delta_reply(int fd, struct json_object *delta) {
+  struct apply_result result;
+  apply_result_init(&result);
+  struct json_object *saved = NULL;
+  char error[256] = {0};
+  int rc = config_merge_validate_save_apply(delta, &saved, &result, false,
+                                             error, sizeof(error));
+  if (rc != 0) send_error(fd, 400, error[0] ? error : "configuration rejected");
+  else {
+    struct json_object *ack = apply_result_json(&result, "Configuration accepted");
+    send_json(fd, "ack", ack);
+    json_object_put(ack);
+  }
+  if (saved) json_object_put(saved);
+  apply_result_cleanup(&result);
+  return rc;
+}
+
 static void handle_client(int fd) {
   struct ucred credentials;
   socklen_t credentials_length = sizeof(credentials);
@@ -88,8 +141,7 @@ static void handle_client(int fd) {
     if (!config) send_error(fd, 404, "configuration unavailable");
     else { send_json(fd, "config", config); json_object_put(config); }
   } else if (!strcmp(type, "config.path.get") && role_has_capability(role, "config.read")) {
-    struct json_object *data = NULL, *path = NULL;
-    json_object_object_get_ex(request, "data", &data);
+    struct json_object *data = request_data(request), *path = NULL;
     if (!data || !json_object_object_get_ex(data, "path", &path) ||
         !json_object_is_type(path, json_type_string)) send_error(fd, 400, "path is required");
     else {
@@ -98,6 +150,83 @@ static void handle_client(int fd) {
       if (!value) send_error(fd, 404, "configuration path not found");
       else send_json(fd, "value", value);
       if (config) json_object_put(config);
+    }
+  } else if (!strcmp(type, "config.path.set")) {
+    struct json_object *data = request_data(request);
+    const char *path = object_string(data, "path");
+    const char *value = object_string(data, "value");
+    struct json_object *literal = NULL;
+    bool string_value = data && json_object_object_get_ex(data, "string", &literal) &&
+                        json_object_get_boolean(literal);
+    const char *capability = path_capability(path);
+    if (!role_has_capability(role, capability)) send_error(fd, 403, "operation is not permitted for this role");
+    else if (!path || value == NULL) send_error(fd, 400, "path and value are required");
+    else {
+      char error[256] = {0};
+      struct json_object *delta = string_value
+          ? console_delta_from_string_path(path, value, error, sizeof(error))
+          : console_delta_from_path(path, value, error, sizeof(error));
+      if (!delta) send_error(fd, 400, error[0] ? error : "invalid configuration value");
+      else { save_delta_reply(fd, delta); json_object_put(delta); }
+    }
+  } else if (!strcmp(type, "config.delta")) {
+    struct json_object *data = request_data(request), *delta = NULL;
+    if (!data || !json_object_object_get_ex(data, "delta", &delta) ||
+        !json_object_is_type(delta, json_type_object)) send_error(fd, 400, "configuration delta is required");
+    else {
+      const char *capability = delta_operator_safe(delta) ? "switching.write" : "network.write";
+      if (!role_has_capability(role, capability)) send_error(fd, 403, "operation is not permitted for this role");
+      else save_delta_reply(fd, delta);
+    }
+  } else if (!strcmp(type, "config.validate")) {
+    struct json_object *data = request_data(request), *candidate = NULL;
+    if (!role_has_capability(role, "config.restore")) send_error(fd, 403, "configuration validation requires administrator access");
+    else if (!data || !json_object_object_get_ex(data, "config", &candidate) ||
+             !json_object_is_type(candidate, json_type_object)) send_error(fd, 400, "complete configuration is required");
+    else {
+      char error[256] = {0};
+      if (validate_configuration(candidate, error, sizeof(error)) != 0)
+        send_error(fd, 400, error[0] ? error : "configuration is invalid");
+      else {
+        struct json_object *ack = json_object_new_object();
+        json_object_object_add(ack, "message", json_object_new_string("Configuration is valid"));
+        send_json(fd, "ack", ack); json_object_put(ack);
+      }
+    }
+  } else if (!strcmp(type, "config.replace")) {
+    struct json_object *data = request_data(request), *candidate = NULL;
+    if (!role_has_capability(role, "config.restore")) send_error(fd, 403, "configuration restore requires administrator access");
+    else if (!data || !json_object_object_get_ex(data, "config", &candidate) ||
+             !json_object_is_type(candidate, json_type_object)) send_error(fd, 400, "complete configuration is required");
+    else {
+      char error[256] = {0};
+      struct apply_result result;
+      apply_result_init(&result);
+      int rc = validate_configuration(candidate, error, sizeof(error));
+      if (rc == 0) rc = save_config_file(candidate, error, sizeof(error));
+      if (rc == 0) rc = config_apply_full(candidate, &result);
+      if (rc != 0) send_error(fd, 400, error[0] ? error : "configuration restore failed");
+      else {
+        struct json_object *ack = apply_result_json(&result, "Configuration restored");
+        send_json(fd, "ack", ack); json_object_put(ack);
+      }
+      apply_result_cleanup(&result);
+    }
+  } else if (!strcmp(type, "snapshot.get") && role_has_capability(role, "status.read")) {
+    struct json_object *snapshot = json_object_new_object();
+    struct json_object *status = get_status();
+    struct json_object *config = load_config_file();
+    json_object_object_add(snapshot, "status", status);
+    json_object_object_add(snapshot, "config", config ? config : json_object_new_null());
+    send_json(fd, "snapshot", snapshot);
+    json_object_put(snapshot);
+  } else if (!strcmp(type, "system.reboot") && role_has_capability(role, "system.reboot")) {
+    struct json_object *ack = json_object_new_object();
+    json_object_object_add(ack, "message", json_object_new_string("Reboot scheduled"));
+    send_json(fd, "ack", ack); json_object_put(ack);
+    if (!dry_run && !getenv("CONFIGD_DISABLE_REBOOT")) {
+      pid_t child = fork();
+      if (child == 0) { sleep(1); sync(); reboot(RB_AUTOBOOT); _exit(1); }
     }
   } else send_error(fd, 403, "operation is unavailable or not permitted");
 

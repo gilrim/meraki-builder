@@ -15,7 +15,10 @@ define POSTMERKOS_CONSOLE_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/postmerkos-backup-crypt
 	$(INSTALL) -D -m 0755 $(@D)/files/postmerkos-console \
 		$(TARGET_DIR)/usr/bin/postmerkos-console
+	$(INSTALL) -D -m 0755 $(@D)/files/postmerkos-serial-login \
+		$(TARGET_DIR)/usr/sbin/postmerkos-serial-login
 	ln -snf postmerkos-console $(TARGET_DIR)/usr/bin/postmerkos-cli
+	ln -snf postmerkos-console $(TARGET_DIR)/usr/bin/pmc
 	$(INSTALL) -D -m 0644 $(@D)/files/50-postmerkos-console.sh \
 		$(TARGET_DIR)/etc/profile.d/50-postmerkos-console.sh
 endef
