@@ -1,110 +1,75 @@
 # configd
 
-`configd` is the persistent configuration and status service for postmerkOS switches. It owns the desired switch configuration in `/etc/switch.json`, replays that state into the Meraki Click graph and PD690xx PoE controllers, monitors the management IPv4 lease, and exposes the same JSON API to the web interface, CLI clients, and scripts.
+## Purpose
 
-## Design rules
+Configd is the always-running privileged management core for postmerkOS. It owns desired switch state, validates changes, applies Click and PoE configuration, observes management networking, enforces roles, coordinates firmware operations, and serves the console and optional web UI.
 
-- `/etc/switch.json` is **desired state** and is stored on the JFFS2-backed `/etc` overlay.
-- Status messages are **observed state** and may be partial when hardware or a Click handler is unavailable.
-- Missing handlers and device read failures produce warnings; they do not terminate the daemon.
-- Invalid requests never modify the saved configuration and receive `Bad Request`.
-- Write-only settings, notably storm control, are read from persistent desired state and replayed at daemon startup.
-- PoE is exposed only for ports supported by the detected hardware. The strict schema is `{ "enabled": boolean, "mode": "af" | "at" }`.
+## Runtime responsibilities
 
-## Service usage
+- Desired switch configuration: `/etc/switch.json`
+- Service policy: `/config/postmerkos/services.json`
+- Security policy: `/config/postmerkos/security.json`
+- Time/NTP/DST policy: `/config/postmerkos/time.json`
+- Firmware repositories: `/config/postmerkos/firmware-repositories.json`
+- Update history and compatibility acknowledgements under `/config/postmerkos/`
+- Local Unix socket: `/run/postmerkos/configd.sock`
+- Optional authenticated WebSocket frontend on port 4001
+
+Desired configuration is persistent state; status is observed state and may omit unavailable hardware. Invalid requests never replace the saved configuration. Missing Click handlers and transient hardware reads become structured warnings rather than daemon termination.
+
+## Interfaces
+
+The local socket is used by `postmerkosctl` and the role-aware console. Web builds additionally compile the WebSocket, authentication, terminal, and firmware-upload frontend. Both paths use the same operation handlers and capability checks.
+
+One-shot recovery/automation examples:
 
 ```sh
-configd --config /etc/switch.json --websocket-port 4001 --status-interval 3
-```
-
-The Buildroot init script starts the service after the Click graph has been mounted and configured.
-
-## CLI usage
-
-```sh
-configd --get-config
-configd --get-status
-configd --validate /tmp/complete-switch.json
-configd --apply-file /tmp/change.json
-configd --apply-json '{"ports":{"1":{"storm_control":false}}}'
+configd --get-config-raw
+configd --show-summary
+configd --show-ports 1-12
+configd --get-path ports.1.vlan.pvid
+configd --set-path ports.1.enabled false
+configd --set-string ports.1.name uplink
+configd --validate /tmp/switch.json
+configd --replace-file /tmp/switch.json
 configd --network-bootstrap --network-wait 60
-configd --dry-run --apply-file /tmp/change.json
 ```
 
-Bootstrap mode waits for DHCP for the requested bounded interval, applies the
-lease or configured fallback address, prints the selected management settings,
-and exits without probing PoE hardware or creating a full configuration file.
+Responses are JSON envelopes with `ack`, `error`, or operation-specific types. See [the protocol](docs/PROTOCOL.md).
 
-CLI responses use the same envelope as WebSocket responses:
+## Configuration
 
-```json
-{"type":"ack","data":{"message":"Configuration accepted","applied":1,"warnings":[]}}
-```
-
-Invalid input exits non-zero and prints:
-
-```json
-{"type":"error","data":{"status":400,"message":"Bad Request","detail":"..."}}
-```
-
-## WebSocket protocol
-
-The service listens on TCP port 4001 by default. Requests and responses are UTF-8 JSON text frames.
-
-```json
-{"id":"1","type":"get_status"}
-{"id":"2","type":"get_config"}
-{"id":"3","type":"config","data":{"network":{"ipv4":{"mode":"dhcp","fallback_address":"169.254.0.10/16","mtu":1500}}}}
-```
-
-The `id` is optional, but clients should supply one to correlate acknowledgements. See [WebSocket and CLI protocol](docs/PROTOCOL.md).
-
-## Configuration outline
+Per-port state includes administrative state, name, PHY speed, flow control, EEE, storm control, VLAN, STP, and capability-dependent PoE:
 
 ```json
 {
-  "network": {"ipv4":{"mode":"dhcp","fallback_address":"169.254.0.10/16","mtu":1500}},
-  "ports": {
-    "1": {
-      "enabled": true,
-      "name": "uplink",
-      "speed": "auto",
-      "flow_control": false,
-      "eee": true,
-      "storm_control": true,
-      "vlan": {"mode":"access","pvid":1,"allowed":"","untagged_vid":1,"ingress_filter":true},
-      "stp": {"enabled":true,"priority":128,"cost":0,"edge":false,"auto_edge":true},
-      "poe": {"enabled":true,"mode":"at"}
-    }
-  },
-  "stp": {"priority":32768,"hello_time":2,"forward_delay":15,"max_age":20,"hold_count":6},
-  "lacp": {"enabled":false},
-  "multicast": {"igmp_snooping":true,"igmp_querier_interval":125,"mld_snooping":true,"mld_querier_interval":125}
+  "poe": {
+    "enabled": true,
+    "mode": "at",
+    "policy": "normal",
+    "observation_seconds": 300
+  }
 }
 ```
 
-The `poe` object is present only on PoE-capable copper ports.
+PoE mode is `af` or `at`; policy is `normal` or `boot-prune`. Uplink and non-PoE ports do not expose PoE state.
 
-## Source modules
+## Security
 
-Each module is documented under [`docs/modules`](docs/modules/README.md). The Click integration is documented in the repository-level [`docs/CLICK-GRAPH.md`](../../../docs/CLICK-GRAPH.md).
+Linux users and the `postmerkos-admin`, `postmerkos-operator`, and `postmerkos-viewer` groups provide identity and role data. Root is always an administrator and cannot be deleted. Configd enforces capabilities for every local-socket and WebSocket operation.
 
-## Building
+Authentication uses the target system’s shadow/crypt implementation without PAM. This keeps dependencies within the 8 MiB SquashFS limit.
+
+## Build integration
+
+The core links JSON-C, `libpostmerkos`, and `libpd690xx`. Console-only builds compile the Unix-socket core without libwebsockets. `INCLUDE_UI=1` adds libwebsockets, authentication, terminal, firmware-upload, and browser-facing handlers.
+
+## Tests
+
+Run:
 
 ```sh
-make -C buildroot/packages/configd
+make -C buildroot/packages/configd test-host
 ```
 
-The Buildroot package links against JSON-C, libwebsockets, `libpostmerkos`, and `libpd690xx`.
-
-## Authentication and size constraints
-
-The WebSocket service authenticates root and members of `postmerkos-admin` directly against `/etc/shadow` with `crypt()`. Linux-PAM is deliberately not used because its locale, wchar, Flex, and module dependencies consume too much of the 8 MiB SquashFS region. Password updates use the existing BusyBox `chpasswd` applet.
-
-## Service and time policy
-
-The privileged core owns `/config/postmerkos/services.json` and
-`/config/postmerkos/time.json`. Administrators may control SSH, the optional web
-service and chrony through the local socket or WebSocket frontends. The system
-clock remains UTC. Local display time is calculated from a fixed offset and an
-optional compact recurring DST rule, avoiding the size of tzdata.
+Module responsibilities are documented under [docs/modules](docs/modules/README.md). The Click graph is documented in [the repository architecture guide](../../../docs/architecture/click-system.md).
