@@ -3,7 +3,8 @@ set -eu
 
 : "${TARGET_DIR:?Buildroot TARGET_DIR is not set}"
 
-mkdir -p "$TARGET_DIR/overlay" "$TARGET_DIR/click" "$TARGET_DIR/etc"
+mkdir -p "$TARGET_DIR/overlay" "$TARGET_DIR/click" "$TARGET_DIR/etc" "$TARGET_DIR/usr/share/postmerkos"
+ln -snf /overlay "$TARGET_DIR/config"
 
 # Dropbear host keys are created in the persistent JFFS2-backed /etc overlay.
 if [ -L "$TARGET_DIR/etc/dropbear" ]; then
@@ -12,16 +13,29 @@ fi
 mkdir -p "$TARGET_DIR/etc/dropbear"
 
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
-    image_date="$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y%m%d 2>/dev/null || date -u +%Y%m%d)"
+    build_version="$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%d-%H-%M 2>/dev/null || date -u +%Y-%m-%d-%H-%M)"
 else
-    image_date="$(date -u +%Y%m%d)"
+    build_version="$(date -u +%Y-%m-%d-%H-%M)"
 fi
-release="${MS42P_RELEASE:-$image_date}"
+release="${POSTMERKOS_RELEASE:-${MS42P_RELEASE:-$build_version}}"
+revision="${POSTMERKOS_GIT_REVISION:-unknown}"
+cat > "$TARGET_DIR/etc/postmerkos-release.json" <<EOF_POSTMERKOS_RELEASE
+{
+  "version": "$release",
+  "build_time_utc": "$build_version",
+  "git_revision": "$revision",
+  "target_family": "vcore3",
+  "image_format": 2,
+  "config_schema": 3,
+  "fwupdate_api": 2,
+  "web_api": 2
+}
+EOF_POSTMERKOS_RELEASE
 
 cat > "$TARGET_DIR/etc/lsb-release" <<EOF_RELEASE
 DISTRIB_ID="postmerkOS"
 DISTRIB_RELEASE="$release"
-DISTRIB_DESCRIPTION="postmerkOS MS42P mipsel"
+DISTRIB_DESCRIPTION="postmerkOS VCore-III mipsel"
 EOF_RELEASE
 
 # S14passwd contains a source-controlled placeholder. Replace it with the salt

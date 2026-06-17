@@ -28,6 +28,18 @@ loader_size="$(stat -c %s "$MS42P_LOADER")"
 kernel_size="$(stat -c %s "$MS42P_KERNEL_BIN")"
 rootfs_size="$(stat -c %s "$ROOTFS")"
 entry="$(readelf -h "$MS42P_KERNEL_ELF" | awk '/Entry point address/ {print $4}')"
+rootfs_remaining=$((ROOTFS_REGION - rootfs_size))
+rootfs_percent="$(awk -v used="$rootfs_size" -v max="$ROOTFS_REGION" 'BEGIN { printf "%.2f", used * 100 / max }')"
+{
+    printf 'SquashFS bytes used: %s\n' "$rootfs_size"
+    printf 'SquashFS maximum:    %s\n' "$ROOTFS_REGION"
+    printf 'SquashFS usage:      %s%%\n' "$rootfs_percent"
+    printf 'SquashFS remaining:  %s\n' "$rootfs_remaining"
+    if [[ -n "${TARGET_DIR:-}" && -d "${TARGET_DIR:-}" ]]; then
+        printf '\nLargest target files:\n'
+        find "$TARGET_DIR" -type f -printf '%s %p\n' | sort -nr | head -n 40
+    fi
+} | tee "$BINARIES_DIR/squashfs-usage.txt"
 
 [[ "$loader_size" -eq "$LOADER_REGION" ]] || { echo "Loader must be exactly 256 KiB" >&2; exit 1; }
 (( kernel_size + 32 <= KERNEL_REGION )) || { echo "Kernel exceeds the 2816 KiB region" >&2; exit 1; }
@@ -66,5 +78,8 @@ cat "$MS42P_LOADER" "$WORK/kernel.region" "$WORK/rootfs.region" \
 
 cp -f "$WORK/boot1-header.bin" "$WORK/kernel.region" "$WORK/rootfs.region" \
     "$WORK/overlay.region" "$BINARIES_DIR/"
+if [[ -n "${TARGET_DIR:-}" && -f "$TARGET_DIR/etc/postmerkos-release.json" ]]; then
+    cp -f "$TARGET_DIR/etc/postmerkos-release.json" "$BINARIES_DIR/postmerkos-release.json"
+fi
 (cd "$BINARIES_DIR" && sha256sum "$(basename "$OUTPUT")" > "$(basename "$OUTPUT").sha256")
 printf 'Generated %s\n' "$OUTPUT"

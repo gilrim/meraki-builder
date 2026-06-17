@@ -6,6 +6,7 @@
 #include "configd.h"
 #include "network.h"
 #include "result.h"
+#include "roles.h"
 #include "status.h"
 #include "system_ops.h"
 #include "validation.h"
@@ -32,6 +33,7 @@ struct queued_reply {
 
 struct per_session_data {
   bool authenticated;
+  enum postmerkos_role role;
   char username[65];
   unsigned int auth_failures;
   bool send_initial_status;
@@ -286,6 +288,26 @@ static void queue_bad_request(struct lws *wsi,
   queue_error(wsi, session, request_id, 400, "Bad Request", detail);
 }
 
+static bool require_capability(struct lws *wsi,
+                               struct per_session_data *session,
+                               struct json_object *request_id,
+                               const char *capability) {
+  if (role_has_capability(session->role, capability)) return true;
+  queue_error(wsi, session, request_id, 403, "Forbidden",
+              "the current account does not have permission for this operation");
+  return false;
+}
+
+static bool delta_is_operator_safe(struct json_object *delta) {
+  if (!delta || !json_object_is_type(delta, json_type_object)) return false;
+  json_object_object_foreach(delta, key, value) {
+    (void)value;
+    if (strcmp(key, "ports") && strcmp(key, "stp") && strcmp(key, "lacp") &&
+        strcmp(key, "multicast")) return false;
+  }
+  return true;
+}
+
 static struct json_object *request_data_object(struct json_object *message) {
   struct json_object *data = NULL;
   if (!json_object_object_get_ex(message, "data", &data) ||
@@ -372,6 +394,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     char error[256] = {0};
     if (!data || auth_verify_user(username, password, error, sizeof(error)) != 0) {
       session->authenticated = false;
+      session->role = POSTMERKOS_ROLE_NONE;
       session->username[0] = '\0';
       session->auth_failures++;
       if (session->auth_failures > 2) usleep(500000);
@@ -379,12 +402,12 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
       return 0;
     }
     session->authenticated = true;
+    session->role = role_for_username(username);
     session->auth_failures = 0;
     snprintf(session->username, sizeof(session->username), "%s", username);
     session->send_initial_status = true;
     session->send_initial_config = true;
-    struct json_object *auth = json_object_new_object();
-    json_object_object_add(auth, "username", json_object_new_string(username));
+    struct json_object *auth = role_identity_json(username);
     json_object_object_add(auth, "users", auth_list_users());
     queue_response(wsi, session, "auth", auth, request_id);
     json_object_put(auth);
@@ -393,6 +416,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
 
   if (!strcmp(type, "logout")) {
     session->authenticated = false;
+    session->role = POSTMERKOS_ROLE_NONE;
     session->username[0] = '\0';
     session->send_initial_status = false;
     session->send_initial_config = false;
@@ -411,9 +435,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
 
   if (!strcmp(type, "get_auth")) {
-    struct json_object *data = json_object_new_object();
-    json_object_object_add(data, "username",
-                           json_object_new_string(session->username));
+    struct json_object *data = role_identity_json(session->username);
     json_object_object_add(data, "users", auth_list_users());
     queue_response(wsi, session, "auth", data, request_id);
     json_object_put(data);
@@ -421,6 +443,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
 
   if (!strcmp(type, "user_list")) {
+    if (!require_capability(wsi, session, request_id, "users.manage")) return 0;
     struct json_object *data = json_object_new_object();
     json_object_object_add(data, "users", auth_list_users());
     queue_response(wsi, session, "users", data, request_id);
@@ -450,6 +473,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
 
   if (!strcmp(type, "terminal_exec")) {
+    if (!require_capability(wsi, session, request_id, "terminal.exec")) return 0;
     struct json_object *data = request_data_object(message);
     const char *command = object_string(data, "command");
     if (!command) {
@@ -464,6 +488,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
 
   if (!strcmp(type, "firmware_status")) {
+    if (!require_capability(wsi, session, request_id, "firmware.history.read")) return 0;
     struct json_object *status = firmware_status_json();
     queue_response(wsi, session, "firmware_status", status, request_id);
     json_object_put(status);
@@ -471,6 +496,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
 
   if (!strcmp(type, "firmware_upload_status")) {
+    if (!require_capability(wsi, session, request_id, "firmware.update")) return 0;
     struct json_object *data = upload_status_json(session);
     queue_response(wsi, session, "firmware_upload_status", data, request_id);
     json_object_put(data);
@@ -478,6 +504,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
 
   if (!strcmp(type, "firmware_upload_cancel")) {
+    if (!require_capability(wsi, session, request_id, "firmware.update")) return 0;
     cleanup_upload(wsi, session);
     struct json_object *data = json_object_new_object();
     json_object_object_add(data, "message",
@@ -488,6 +515,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
 
   if (!strcmp(type, "firmware_upload_start")) {
+    if (!require_capability(wsi, session, request_id, "firmware.update")) return 0;
     struct json_object *data = request_data_object(message);
     const char *name = object_string(data, "name");
     const char *overlay = object_string(data, "overlay");
@@ -540,6 +568,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
 
   if (!strcmp(type, "firmware_upload_finish")) {
+    if (!require_capability(wsi, session, request_id, "firmware.update")) return 0;
     if (!session->upload_active || session->upload_fd < 0) {
       queue_bad_request(wsi, session, request_id, "no firmware upload is active");
       return 0;
@@ -579,12 +608,14 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
 
   if (!strcmp(type, "get_status")) {
+    if (!require_capability(wsi, session, request_id, "status.read")) return 0;
     struct json_object *status = get_status();
     queue_response(wsi, session, "status", status, request_id);
     json_object_put(status);
     return 0;
   }
   if (!strcmp(type, "get_config")) {
+    if (!require_capability(wsi, session, request_id, "config.read")) return 0;
     struct json_object *config = load_config_file();
     if (!config) queue_bad_request(wsi, session, request_id,
                                    "persistent configuration is unavailable");
@@ -596,6 +627,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
 
   if (!strcmp(type, "replace_config")) {
+    if (!require_capability(wsi, session, request_id, "config.restore")) return 0;
     struct json_object *candidate = request_data_object(message);
     if (!candidate) {
       queue_bad_request(wsi, session, request_id,
@@ -636,6 +668,9 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
                       "config.data must be a JSON object");
     return 0;
   }
+  const char *needed_capability = delta_is_operator_safe(delta)
+      ? "switching.write" : "network.write";
+  if (!require_capability(wsi, session, request_id, needed_capability)) return 0;
   struct apply_result result;
   apply_result_init(&result);
   struct json_object *saved = NULL;

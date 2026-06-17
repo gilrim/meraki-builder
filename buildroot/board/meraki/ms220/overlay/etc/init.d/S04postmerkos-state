@@ -1,0 +1,22 @@
+#!/bin/sh
+STATE=/config/postmerkos
+DEFAULTS=/usr/share/postmerkos/defaults
+
+start() {
+    mkdir -p "$STATE" "$STATE/update-history"
+    chmod 0700 "$STATE" "$STATE/update-history"
+    for name in services security time firmware-repositories; do
+        [ -s "$STATE/$name.json" ] || cp "$DEFAULTS/$name.json" "$STATE/$name.json"
+        chmod 0600 "$STATE/$name.json"
+    done
+    for group in postmerkos-admin postmerkos-operator postmerkos-viewer; do
+        grep -q "^$group:" /etc/group 2>/dev/null || addgroup "$group" >/dev/null 2>&1 || true
+    done
+}
+
+case "$1" in
+    start) start ;;
+    stop) : ;;
+    restart|reload) start ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}"; exit 1 ;;
+esac

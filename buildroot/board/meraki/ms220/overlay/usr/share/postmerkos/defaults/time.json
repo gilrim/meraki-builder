@@ -1,0 +1,6 @@
+{
+  "standard_offset_minutes": 0,
+  "dst": {"enabled": false, "offset_minutes": 60},
+  "ntp_enabled": true,
+  "servers": ["pool.ntp.org"]
+}

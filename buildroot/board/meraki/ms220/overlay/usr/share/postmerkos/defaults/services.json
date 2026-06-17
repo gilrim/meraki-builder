@@ -1,0 +1,5 @@
+{
+  "ssh": {"enabled": true, "autostart": true, "password_auth": true, "port": 22},
+  "web": {"enabled": true, "autostart": true},
+  "chrony": {"enabled": true, "autostart": true}
+}
