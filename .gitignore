@@ -1,6 +1,7 @@
-# Integrated MS42P build workspace and artifacts
+# Integrated build workspaces and published artifacts
 /.work/
 /artifacts/
+/logs/
 
 # Local donor and bootloader inputs
 /inputs/*.bin
@@ -10,23 +11,22 @@
 /inputs/*.ko
 /inputs/SHA256SUMS
 
-# Legacy local binaries
-nor/bin/*
-nor/vmlinux*
-nor/vmlinuz*
-nor/*.bin
-*.ko
+# Research-tool output
+/tools/research/nand/bin/
+/tools/research/nand/ramdisk/
+/tools/research/nand/ramdisk.gz
+/tools/research/nor/bin/*
+!/tools/research/nor/bin/README.md
+/tools/research/nor/vmlinux*
+/tools/research/nor/vmlinuz*
+/tools/research/nor/*.bin
 
-# Build products
+# Compiled objects and local binaries
+*.ko
 *.so
 *.o
 
-# Docker build directories
-docker/*/src
-
-# devenv
+# Local editor/environment state
 .devenv/
 .devenv.flake.nix
-
-# Nix build output
 /build/

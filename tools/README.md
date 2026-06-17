@@ -1,13 +1,7 @@
-# Compile
+# Host tools
 
-`gcc find_hdr.c -o find_hdr`
+- `Flasher/` provides interactive SSH and hardware-serial firmware deployment.
+- `fwupdate-host/` validates and publishes updater inputs from a development host.
+- `research/` contains raw NAND/NOR extraction and firmware-analysis utilities that are not part of the normal build.
 
-# Usage
-
-`find_hdr` is used by the extraction scripts to find gzip/XZ headers (or an XZ footer). The extract scripts expect `find_hdr` be in your `PATH`
-
-It returns the byte offset you use with dd to extract the archive. This avoids hard-coded offsets in the extraction script.
-
-# Python
-
-There is also a python version included (`find_hdr.py`), however I mainly used the C version so there may be bugs in the python version.
+Each directory contains its own usage and safety information.
