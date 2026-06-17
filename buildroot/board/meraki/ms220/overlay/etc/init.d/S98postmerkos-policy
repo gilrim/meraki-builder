@@ -1,0 +1,8 @@
+#!/bin/sh
+case "${1:-start}" in
+  start|restart)
+    /usr/bin/postmerkosctl services-apply >/tmp/postmerkos-service-policy.log 2>&1 || true
+    ;;
+  stop) ;;
+  *) echo "usage: $0 {start|stop|restart}" >&2; exit 2 ;;
+esac

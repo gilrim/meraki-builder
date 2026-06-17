@@ -9,6 +9,8 @@
 #include "roles.h"
 #include "status.h"
 #include "system_ops.h"
+#include "service_ops.h"
+#include "time_ops.h"
 #include "validation.h"
 
 #include <libpostmerkos.h>
@@ -692,6 +694,36 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     return 0;
   }
 
+  if (!strcmp(type, "services_get")) {
+    if (!require_capability(wsi, session, request_id, "status.read")) return 0;
+    struct json_object *data=service_status_json(); queue_response(wsi,session,"services",data,request_id); json_object_put(data); return 0;
+  }
+  if (!strcmp(type, "services_set")) {
+    if (!require_capability(wsi, session, request_id, "services.manage")) return 0;
+    struct json_object *data=request_data_object(message); char error[256]={0};
+    if(service_policy_save(data,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
+    struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Service policy saved"));queue_response(wsi,session,"ack",ack,request_id);json_object_put(ack);return 0;
+  }
+  if (!strcmp(type, "services_action")) {
+    if (!require_capability(wsi, session, request_id, "services.manage")) return 0;
+    struct json_object *data=request_data_object(message);const char *service=object_string(data,"service"),*action=object_string(data,"action");char error[256]={0};
+    if(service_action(service,action,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
+    struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Service action completed"));queue_response(wsi,session,"ack",ack,request_id);json_object_put(ack);return 0;
+  }
+  if (!strcmp(type, "time_get")) {
+    if (!require_capability(wsi, session, request_id, "status.read")) return 0;
+    struct json_object *data=time_status_json();queue_response(wsi,session,"time",data,request_id);json_object_put(data);return 0;
+  }
+  if (!strcmp(type, "time_set")) {
+    if (!require_capability(wsi, session, request_id, "services.manage")) return 0;
+    struct json_object *data=request_data_object(message);char error[256]={0};if(time_policy_save(data,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
+    struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Time policy saved"));queue_response(wsi,session,"ack",ack,request_id);json_object_put(ack);return 0;
+  }
+  if (!strcmp(type, "time_sync")) {
+    if (!require_capability(wsi, session, request_id, "services.manage")) return 0;
+    char error[256]={0};if(time_force_sync(error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
+    struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Time synchronization requested"));queue_response(wsi,session,"ack",ack,request_id);json_object_put(ack);return 0;
+  }
   if (!strcmp(type, "get_status")) {
     if (!require_capability(wsi, session, request_id, "status.read")) return 0;
     struct json_object *status = get_status();

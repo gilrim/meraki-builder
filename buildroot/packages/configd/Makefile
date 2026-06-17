@@ -8,7 +8,7 @@ LDLIBS += -ljson-c
 
 BASE_SRCS = main.c click_port.c click_global.c status.c json_util.c \
        config_file.c config_apply.c hardware.c network.c result.c validation.c \
-       console_cli.c release.c roles.c local_socket.c
+       console_cli.c release.c roles.c local_socket.c service_ops.c time_ops.c
 
 ifeq ($(ENABLE_WEBSOCKET),1)
 CPPFLAGS += -DCONFIGD_ENABLE_WEBSOCKET=1

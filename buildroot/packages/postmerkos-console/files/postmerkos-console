@@ -805,60 +805,132 @@ EOF_USER
     done
 }
 
-find_init_script() {
-    local pattern=$1 script
-    for script in /etc/init.d/S*; do
-        [ -e "$script" ] || continue
-        case "$(basename "$script")" in *"$pattern"*) echo "$script"; return 0 ;; esac
-    done
-    return 1
-}
-
-service_state() {
-    local name=$1 process=$2 script
-    script=$(find_init_script "$name" 2>/dev/null || true)
-    if pidof "$process" >/dev/null 2>&1; then printf '%-18s running' "$name"; else printf '%-18s stopped' "$name"; fi
-    [ -n "$script" ] && printf '  (%s)' "$script" || printf '  (not installed as a service)'
-    echo
-}
-
 service_action_menu() {
-    local label=$1 pattern=$2 script action
-    script=$(find_init_script "$pattern" 2>/dev/null || true)
-    if [ -z "$script" ]; then echo "$label service is not installed in this build."; pause; return; fi
+    local service=$1 label=$2 action
     while :; do
         heading "$label service"
-        printf 'Init script: %s\n\n1) Start\n2) Stop\n3) Restart\nb) Back\n' "$script"
+        printf 'Enabled: %-5s  Start at boot: %-5s\n\n' \
+            "$("$CTL" service-get "$service.enabled" 2>/dev/null || echo unknown)" \
+            "$("$CTL" service-get "$service.autostart" 2>/dev/null || echo unknown)"
+        cat <<'EOF_SVC'
+1) Start
+2) Stop
+3) Restart
+4) Toggle enabled policy
+5) Toggle automatic startup
+b) Back
+EOF_SVC
         read_choice 'service> '
-        case "$CHOICE" in 1) action=start ;; 2) action=stop ;; 3) action=restart ;; b|B|0|'') return ;; *) continue ;; esac
-        if [ "$pattern" = dropbear ] && [ "$action" = stop ]; then
+        case "$CHOICE" in
+            1) action=start ;;
+            2) action=stop ;;
+            3) action=restart ;;
+            4)
+                current=$("$CTL" service-get "$service.enabled" 2>/dev/null || echo false)
+                [ "$current" = true ] && value=false || value=true
+                "$CTL" service-set "$service.enabled" "$value"; pause; continue ;;
+            5)
+                current=$("$CTL" service-get "$service.autostart" 2>/dev/null || echo false)
+                [ "$current" = true ] && value=false || value=true
+                "$CTL" service-set "$service.autostart" "$value"; pause; continue ;;
+            b|B|0|'') return ;;
+            *) continue ;;
+        esac
+        if [ "$service" = ssh ] && [ "$action" = stop ]; then
             echo 'WARNING: stopping SSH will terminate remote management sessions.'
             confirm_word STOP 'Type STOP to continue: ' || { echo 'Cancelled.'; pause; continue; }
         fi
-        "$script" "$action"
+        "$CTL" service "$service" "$action"
         pause
+    done
+}
+
+ssh_configuration_menu() {
+    local value current
+    while :; do
+        heading 'SSH Configuration'
+        printf 'Enabled: %-5s  Autostart: %-5s  Password authentication: %-5s  Port: %s\n\n' \
+          "$("$CTL" service-get ssh.enabled 2>/dev/null || echo unknown)" \
+          "$("$CTL" service-get ssh.autostart 2>/dev/null || echo unknown)" \
+          "$("$CTL" service-get ssh.password_auth 2>/dev/null || echo unknown)" \
+          "$("$CTL" service-get ssh.port 2>/dev/null || echo 22)"
+        cat <<'EOF_SSH'
+1) Service control and startup policy
+2) Toggle password authentication
+3) Change listening port
+4) Regenerate host keys
+b) Back
+EOF_SSH
+        read_choice 'ssh> '
+        case "$CHOICE" in
+            1) service_action_menu ssh SSH ;;
+            2) current=$("$CTL" service-get ssh.password_auth 2>/dev/null || echo true); [ "$current" = true ] && value=false || value=true; "$CTL" service-set ssh.password_auth "$value"; pause ;;
+            3) printf 'SSH port (1-65535): '; read -r value; if is_number "$value" && [ "$value" -ge 1 ] && [ "$value" -le 65535 ]; then "$CTL" service-set ssh.port "$value"; "$CTL" service ssh restart; else echo 'Invalid port.'; fi; pause ;;
+            4) if confirm_word REGENERATE 'Type REGENERATE to replace SSH host keys: '; then rm -f /etc/dropbear/dropbear_*_host_key; /etc/init.d/S12dropbearkey start; "$CTL" service ssh restart; fi; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+time_configuration_menu() {
+    local value server preset epoch
+    while :; do
+        heading 'Time, NTP and DST'
+        "$CTL" time 2>/dev/null || true
+        cat <<'EOF_TIME'
+
+1) Set standard UTC offset
+2) Select daylight-saving rule
+3) Set NTP server list
+4) Toggle NTP synchronization
+5) Set current date/time from Unix epoch
+6) Request immediate chrony synchronization
+b) Back
+EOF_TIME
+        read_choice 'time> '
+        case "$CHOICE" in
+            1) printf 'Standard UTC offset in minutes (-720 to 840): '; read -r value; if is_number "${value#-}" && [ "$value" -ge -720 ] && [ "$value" -le 840 ]; then "$CTL" time-set-field standard_offset_minutes "$value"; else echo 'Invalid offset.'; fi; pause ;;
+            2)
+                printf '1) Disabled\n2) North America\n3) European Union\nSelection: '; read -r preset
+                case "$preset" in
+                    1) "$CTL" time-set-field dst.enabled false ;;
+                    2) "$CTL" time-set '{"standard_offset_minutes":-240,"dst":{"enabled":true,"offset_minutes":-180,"start":{"month":3,"week":2,"weekday":0,"hour":2,"minute":0},"end":{"month":11,"week":1,"weekday":0,"hour":2,"minute":0}},"ntp_enabled":true,"servers":["pool.ntp.org"]}' ;;
+                    3) "$CTL" time-set '{"standard_offset_minutes":60,"dst":{"enabled":true,"offset_minutes":120,"start":{"month":3,"week":5,"weekday":0,"hour":2,"minute":0},"end":{"month":10,"week":5,"weekday":0,"hour":3,"minute":0}},"ntp_enabled":true,"servers":["pool.ntp.org"]}' ;;
+                    *) echo 'Cancelled.' ;;
+                esac
+                pause ;;
+            3) printf 'NTP servers as JSON array (example ["pool.ntp.org"]): '; read -r server; "$CTL" time-set-field servers "$server"; pause ;;
+            4) current=$("$CTL" time-get ntp_enabled 2>/dev/null || echo true); [ "$current" = true ] && value=false || value=true; "$CTL" time-set-field ntp_enabled "$value"; pause ;;
+            5) printf 'Unix epoch value: '; read -r epoch; if is_number "$epoch"; then "$CTL" time-set-clock "$epoch"; else echo 'Invalid epoch.'; fi; pause ;;
+            6) "$CTL" time-sync; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
     done
 }
 
 service_management_menu() {
     while :; do
         heading 'Service Management'
+        "$CTL" services 2>/dev/null || true
         cat <<'EOF_SERVICE'
-1) Show service status
-2) SSH service (Dropbear)
-3) Configuration backend (configd)
-4) Web interface (uhttpd)
-5) Time synchronization (chrony)
+
+1) SSH configuration
+2) Web-interface service
+3) Chrony service
+4) Time, NTP and DST configuration
+5) Apply saved service policy
 6) Show management service logs
 b) Back
 EOF_SERVICE
         read_choice 'services> '
         case "$CHOICE" in
-            1) heading 'Service status'; service_state dropbear dropbear; service_state configd configd; service_state uhttpd uhttpd; service_state chrony chronyd; pause ;;
-            2) service_action_menu SSH dropbear ;;
-            3) service_action_menu configd configd ;;
-            4) service_action_menu 'Web interface' uhttpd ;;
-            5) service_action_menu 'Time synchronization' chrony ;;
+            1) ssh_configuration_menu ;;
+            2) service_action_menu web 'Web interface' ;;
+            3) service_action_menu chrony Chrony ;;
+            4) time_configuration_menu ;;
+            5) "$CTL" services-apply; pause ;;
             6) heading 'Management service logs'; for file in /tmp/configd.log /tmp/uhttpd.log /var/log/messages; do [ -f "$file" ] && { echo "--- $file ---"; tail -n 60 "$file"; }; done; pause ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;

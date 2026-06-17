@@ -3,6 +3,8 @@
 #include "configd.h"
 #include "network.h"
 #include "release.h"
+#include "service_ops.h"
+#include "time_ops.h"
 
 #include <libpostmerkos.h>
 #include <libpd690xx.h>
@@ -13,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 static void add_error(struct json_object *errors, const char *source,
                       const char *message) {
@@ -139,6 +142,8 @@ struct json_object *get_status(void) {
   json_object_object_add(root, "datetime", json_object_new_string(get_time()));
   json_object_object_add(root, "device", json_object_new_string(hardware.model));
   json_object_object_add(root, "release", release_info_load());
+  json_object_object_add(root, "time", time_status_json());
+  json_object_object_add(root, "services", service_status_json());
   json_object_object_add(root, "capabilities",
                          hardware_capabilities_json(&hardware));
   json_object_object_add(root, "network", network_manager_status_json());
