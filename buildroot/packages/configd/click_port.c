@@ -125,6 +125,8 @@ static struct json_object *read_poe(unsigned int port,
   }
   json_object_object_add(poe, "enabled", json_object_new_boolean(enabled));
   json_object_object_add(poe, "mode", json_object_new_string(mode));
+  json_object_object_add(poe, "policy", json_object_new_string("normal"));
+  json_object_object_add(poe, "observation_seconds", json_object_new_int(300));
   return poe;
 }
 

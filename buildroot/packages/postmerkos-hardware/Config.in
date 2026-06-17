@@ -1,0 +1,8 @@
+config BR2_PACKAGE_POSTMERKOS_HARDWARE
+	bool "postmerkOS hardware policy helpers"
+	default y
+	select BR2_PACKAGE_CONFIGD
+	select BR2_PACKAGE_FWUPDATE
+	help
+	  Lightweight LED ownership, reset-button hold handling and one-shot
+	  PoE boot-prune policy for supported postmerkOS switches.

@@ -122,6 +122,10 @@ static void add_port_status(struct json_object *root,
         else
           json_object_object_add(poe, "power", json_object_new_null());
       }
+      char pruned_path[96];
+      snprintf(pruned_path, sizeof(pruned_path), "/run/postmerkos/poe-pruned/%u", port);
+      json_object_object_add(poe, "boot_pruned",
+                             json_object_new_boolean(access(pruned_path, F_OK) == 0));
       json_object_object_add(port_status, "poe", poe);
     }
     json_object_object_add(ports, key, port_status);

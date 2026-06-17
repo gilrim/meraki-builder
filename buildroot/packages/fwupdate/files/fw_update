@@ -302,6 +302,12 @@ if [ "$ASSUME_YES" -ne 1 ]; then
 fi
 
 history_prepare
+if command -v postmerkos-ledctl >/dev/null 2>&1; then
+    postmerkos-ledctl acquire firmware || true
+    LED_PORTS=$(postmerkosctl status 2>/dev/null | sed -n 's/.*"copper_ports"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -n1)
+else
+    LED_PORTS=0
+fi
 status_write starting acknowledged 34 "Starting firmware update; management services will stop shortly"
 status_write preparing quiesce 35 "Stopping services and unmounting the writable overlay"
 trap '' HUP
@@ -387,7 +393,9 @@ set -- "$WORK/fwflash" \
     --log-file /run/fwupdate/flash.log \
     --source "$SOURCE" \
     --firmware "$FWUPDATE_FIRMWARE" \
-    --target-version "${FWUPDATE_TARGET_VERSION:-unknown}"
+    --target-version "${FWUPDATE_TARGET_VERSION:-unknown}" \
+    --led-handler /click/sw0_ctrl/poe_led_state \
+    --led-ports "${LED_PORTS:-0}"
 if [ -n "$OVERLAY_IMAGE" ]; then
     set -- "$@" \
         --overlay-image "$OVERLAY_IMAGE" \

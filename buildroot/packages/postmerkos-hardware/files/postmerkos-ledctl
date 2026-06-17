@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+OWNER=/run/postmerkos/led-owner
+HANDLER=${POSTMERKOS_LED_HANDLER:-/click/sw0_ctrl/poe_led_state}
+mkdir -p /run/postmerkos
+ports() {
+    p=$(postmerkosctl status 2>/dev/null | sed -n 's/.*"copper_ports"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -n1)
+    [ -n "$p" ] || p=$(cat /tmp/NUM_PORTS 2>/dev/null || echo 0)
+    [ "$p" -gt 48 ] 2>/dev/null && p=48
+    echo "${p:-0}"
+}
+set_port() { [ -w "$HANDLER" ] && printf 'PORT %s, STATE %s\n' "$1" "$2" > "$HANDLER" 2>/dev/null || true; }
+case "${1:-status}" in
+  capabilities)
+    if [ -w "$HANDLER" ]; then echo '{"mode":"binary-poe-ports","colors":false}'; else echo '{"mode":"unavailable","colors":false}'; fi ;;
+  acquire) printf '%s\n' "${2:-unknown}" > "$OWNER" ;;
+  release) [ ! -f "$OWNER" ] || [ "$(cat "$OWNER" 2>/dev/null)" = "${2:-}" ] && rm -f "$OWNER" ;;
+  all-off) n=$(ports); i=1; while [ "$i" -le "$n" ]; do set_port "$i" 0; i=$((i+1)); done ;;
+  all-on) n=$(ports); i=1; while [ "$i" -le "$n" ]; do set_port "$i" 1; i=$((i+1)); done ;;
+  progress)
+    pct=${2:-0}; n=$(ports); lit=$(( (n * pct + 50) / 100 )); i=1
+    while [ "$i" -le "$n" ]; do [ "$i" -le "$lit" ] && state=1 || state=0; set_port "$i" "$state"; i=$((i+1)); done ;;
+  error)
+    n=$(ports); count=0; while [ "$count" -lt 10 ]; do "$0" all-on; sleep 1; "$0" all-off; sleep 1; count=$((count+1)); done ;;
+  reset-step)
+    second=${2:-0}; n=$(ports); remain=$(( n - ((n * second + 9) / 10) )); [ "$remain" -lt 0 ] && remain=0
+    i=1; while [ "$i" -le "$n" ]; do [ "$i" -le "$remain" ] && state=1 || state=0; set_port "$i" "$state"; i=$((i+1)); done ;;
+  status) [ -f "$OWNER" ] && cat "$OWNER" || echo normal ;;
+  *) echo 'usage: postmerkos-ledctl capabilities|acquire OWNER|release OWNER|progress PCT|error|reset-step SECOND|all-on|all-off|status' >&2; exit 2 ;;
+esac

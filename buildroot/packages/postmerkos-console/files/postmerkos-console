@@ -288,14 +288,25 @@ EOF_STP
 }
 
 poe_menu() {
-    local port=$1
+    local port=$1 seconds
     while :; do
         heading "Port $port - Power over Ethernet"
-        printf 'Enabled: %s    Mode: %s\n\n' "$(cfg_get "ports.$port.poe.enabled")" "$(cfg_get "ports.$port.poe.mode")"
+        printf 'Enabled: %s    Standard: %s    Policy: %s    Observation: %ss\n' \
+            "$(cfg_get "ports.$port.poe.enabled")" \
+            "$(cfg_get "ports.$port.poe.mode")" \
+            "$(cfg_get "ports.$port.poe.policy" 2>/dev/null || echo normal)" \
+            "$(cfg_get "ports.$port.poe.observation_seconds" 2>/dev/null || echo 300)"
+        [ -f "/run/postmerkos/poe-pruned/$port" ] && echo 'Runtime state: pruned by energy-saving policy'
         cat <<'EOF_POE'
+
 1) Disable PoE
 2) Enable 802.3af mode
 3) Enable 802.3at mode
+4) Use normal automatic PD detection
+5) Use boot-prune energy-saving policy
+6) Set boot-prune observation period
+7) Enable until next reboot
+8) Enable and change policy to Normal
 b) Back
 EOF_POE
         read_choice 'poe> '
@@ -303,6 +314,15 @@ EOF_POE
             1) cfg_set "ports.$port.poe.enabled" false; pause ;;
             2) apply_json "{\"ports\":{\"$port\":{\"poe\":{\"enabled\":true,\"mode\":\"af\"}}}}"; pause ;;
             3) apply_json "{\"ports\":{\"$port\":{\"poe\":{\"enabled\":true,\"mode\":\"at\"}}}}"; pause ;;
+            4) cfg_set_string "ports.$port.poe.policy" normal; pause ;;
+            5)
+                echo 'Ports unused during the startup observation period are runtime-disabled.'
+                echo 'Equipment connected later must be manually re-enabled.'
+                confirm_word ENABLE 'Type ENABLE to use boot-prune: ' && cfg_set_string "ports.$port.poe.policy" boot-prune
+                pause ;;
+            6) printf 'Observation seconds (30-3600) [300]: '; read -r seconds; seconds=${seconds:-300}; if is_number "$seconds" && [ "$seconds" -ge 30 ] && [ "$seconds" -le 3600 ]; then cfg_set "ports.$port.poe.observation_seconds" "$seconds"; else echo 'Invalid period.'; fi; pause ;;
+            7) pd690xx -e "$port" >/dev/null 2>&1 && rm -f "/run/postmerkos/poe-pruned/$port"; pause ;;
+            8) apply_json "{\"ports\":{\"$port\":{\"poe\":{\"enabled\":true,\"policy\":\"normal\"}}}}"; rm -f "/run/postmerkos/poe-pruned/$port"; pause ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac

@@ -58,6 +58,7 @@ legacy = {
     'source "package/pd690xx/Config.in"',
     'source "package/fwupdate/Config.in"',
     'source "package/postmerkos-console/Config.in"',
+    'source "package/postmerkos-hardware/Config.in"',
     'source "package/postmerkos-cli/Config.in"',
     'source "package/Config.in.ms42p"',
 }
@@ -164,6 +165,7 @@ set_bool('BR2_PACKAGE_CONFIGD', True)
 set_bool('BR2_PACKAGE_CONFIGD_WEBSOCKET', include_ui)
 set_bool('BR2_PACKAGE_LIBWEBSOCKETS', include_ui)
 set_bool('BR2_PACKAGE_POSTMERKOS_CONSOLE', True)
+set_bool('BR2_PACKAGE_POSTMERKOS_HARDWARE', True)
 set_bool('BR2_PACKAGE_POSTMERKOS_CLI', False)
 set_bool('BR2_PACKAGE_JQ', False)
 set_bool('BR2_PACKAGE_LINUX_PAM', False)

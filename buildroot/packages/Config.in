@@ -7,3 +7,5 @@ menu "MS42P custom packages"
 	source "package/fwupdate/Config.in"
 	source "package/postmerkos-console/Config.in"
 endmenu
+
+source "package/postmerkos-hardware/Config.in"
