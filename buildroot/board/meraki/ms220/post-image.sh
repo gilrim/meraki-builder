@@ -37,7 +37,7 @@ rootfs_percent="$(awk -v used="$rootfs_size" -v max="$ROOTFS_REGION" 'BEGIN { pr
     printf 'SquashFS remaining:  %s\n' "$rootfs_remaining"
     if [[ -n "${TARGET_DIR:-}" && -d "${TARGET_DIR:-}" ]]; then
         printf '\nLargest target files:\n'
-        find "$TARGET_DIR" -type f -printf '%s %p\n' | sort -nr | head -n 40
+        find "$TARGET_DIR" -type f -printf '%s %p\n' | sort -nr | sed -n '1,40p'
     fi
 } | tee "$BINARIES_DIR/squashfs-usage.txt"
 
