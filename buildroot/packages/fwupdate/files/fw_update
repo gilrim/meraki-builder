@@ -7,7 +7,7 @@ usage() {
     cat <<'USAGE'
 usage: fw_update [options] FIRMWARE
 
-Installs an already-downloaded MS42/MS42P firmware image or SquashFS.
+Installs an already-downloaded postmerkOS switch image or SquashFS region.
 The kernel and bootloader partitions are never modified.
 
 Options:
@@ -16,8 +16,10 @@ Options:
   --overlay POLICY      preserve (default), migrate, reset, or image
   --version VERSION     version reported by the transport/catalog
   --source TEXT         source reported in status output
+  --manifest FILE       release manifest for an unpadded SquashFS image
+  --accept-untested     accept an untested but compatible switch model
   --yes                 do not ask for confirmation
-  --force               allow reinstalling the reported current version
+  --force               override same/older/missing-metadata checks
   --verify-only         validate everything without changing flash
   --dry-run             prepare images/backups, but do not stop services
   --help
@@ -39,6 +41,8 @@ ASSUME_YES=0
 FORCE=0
 VERIFY_ONLY=0
 DRY_RUN=0
+ACCEPT_UNTESTED=0
+MANIFEST=""
 FIRMWARE=""
 
 while [ "$#" -gt 0 ]; do
@@ -48,6 +52,8 @@ while [ "$#" -gt 0 ]; do
         --overlay) [ "$#" -ge 2 ] || fw_die "--overlay requires a value"; OVERLAY_POLICY=$2; shift 2 ;;
         --version) [ "$#" -ge 2 ] || fw_die "--version requires a value"; VERSION=$2; shift 2 ;;
         --source) [ "$#" -ge 2 ] || fw_die "--source requires a value"; SOURCE=$2; shift 2 ;;
+        --manifest) [ "$#" -ge 2 ] || fw_die "--manifest requires a value"; MANIFEST=$2; shift 2 ;;
+        --accept-untested) ACCEPT_UNTESTED=1; shift ;;
         --yes) ASSUME_YES=1; shift ;;
         --force) FORCE=1; shift ;;
         --verify-only) VERIFY_ONLY=1; shift ;;
@@ -103,16 +109,48 @@ else
     fw_die "a matching SHA-256 sidecar or --sha256 value is required"
 fi
 
-status_write validating platform 10 "Checking board and MTD layout"
+status_write validating platform 10 "Checking board, release metadata, and MTD layout"
 check_board
+led_detect
 check_mtd_layout
 
-CURRENT_VERSION=""
-if [ -f /etc/lsb-release ]; then
-    CURRENT_VERSION=$(awk -F= '/^DISTRIB_RELEASE=/{gsub(/"/, "", $2); print $2; exit}' /etc/lsb-release)
+FWUPDATE_CURRENT_VERSION=$(installed_version)
+[ -n "$FWUPDATE_CURRENT_VERSION" ] || FWUPDATE_CURRENT_VERSION=unknown
+if [ -n "$MANIFEST" ]; then
+    [ -f "$MANIFEST" ] || fw_die "candidate manifest not found: $MANIFEST"
+    CANDIDATE_MANIFEST=$MANIFEST
+    FWUPDATE_TARGET_VERSION=$(json_value version "$MANIFEST")
+elif read_candidate_manifest "$FIRMWARE"; then
+    :
+elif [ -n "$VERSION" ]; then
+    FWUPDATE_TARGET_VERSION=$VERSION
+elif [ "$FORCE" -ne 1 ]; then
+    fw_die "firmware release metadata is missing; use --force only for recovery/development images"
+else
+    FWUPDATE_TARGET_VERSION=unknown
 fi
-if [ -n "$VERSION" ] && [ "$VERSION" = "$CURRENT_VERSION" ] && [ "$FORCE" -ne 1 ]; then
-    fw_die "firmware version $VERSION is already installed; use --force to reinstall"
+[ -n "$VERSION" ] && FWUPDATE_TARGET_VERSION=$VERSION
+export FWUPDATE_CURRENT_VERSION FWUPDATE_TARGET_VERSION
+
+if [ "$FWUPDATE_TARGET_VERSION" = "$FWUPDATE_CURRENT_VERSION" ] && [ "$FORCE" -ne 1 ]; then
+    fw_die "firmware version $FWUPDATE_TARGET_VERSION is already installed; use --force to reinstall"
+fi
+if [ "$FWUPDATE_TARGET_VERSION" != unknown ] && [ "$FWUPDATE_CURRENT_VERSION" != unknown ] &&    [ "$FWUPDATE_TARGET_VERSION" \< "$FWUPDATE_CURRENT_VERSION" ] && [ "$FORCE" -ne 1 ]; then
+    fw_die "firmware version $FWUPDATE_TARGET_VERSION is older than installed version $FWUPDATE_CURRENT_VERSION; use --force to downgrade"
+fi
+if [ "$FWUPDATE_COMPATIBILITY" = untested ] && [ "$ACCEPT_UNTESTED" -ne 1 ]; then
+    if [ "$ASSUME_YES" -eq 1 ]; then
+        fw_die "model $FWUPDATE_MODEL is untested; explicit --accept-untested acknowledgement is required"
+    fi
+    printf '
+WARNING: %s is currently marked untested with this firmware family.
+' "$FWUPDATE_MODEL"
+    printf 'Port mapping, PoE, LEDs, and update behavior may not have been verified.
+'
+    printf 'Type ACCEPT-UNTESTED to continue: '
+    read -r untested_answer
+    [ "$untested_answer" = ACCEPT-UNTESTED ] || fw_die "untested-model update cancelled"
+    ACCEPT_UNTESTED=1
 fi
 
 AVAILABLE_KB=$(df -Pk "$FWUPDATE_WORK_BASE" | awk 'NR == 2 {print $4}')
@@ -149,7 +187,7 @@ if [ "$IMAGE_SIZE" -eq "$FWUPDATE_FULL_IMAGE_SIZE" ] && \
         fw_die "extracted SquashFS region has the wrong size"
 else
     [ "$(read_magic "$FIRMWARE" 0 4)" = "hsqs" ] || \
-        fw_die "input is neither a valid full MS42/MS42P image nor a SquashFS"
+        fw_die "input is neither a valid full postmerkOS image nor a SquashFS"
     [ "$IMAGE_SIZE" -gt 0 ] && [ "$IMAGE_SIZE" -le "$FWUPDATE_ROOTFS_SIZE" ] || \
         fw_die "SquashFS exceeds the 8 MiB partition"
     IMAGE_TYPE=squashfs
@@ -222,9 +260,13 @@ case "$OVERLAY_POLICY" in
         ;;
 esac
 
-# Transport wrappers place downloads in their own tmpfs directory. All required
-# bytes have now been copied/extracted into this updater's private work area.
+# Transport wrappers and web uploads are no longer needed after staging.
 cleanup_transport_work
+if [ "$VERIFY_ONLY" -ne 1 ]; then
+    case "$FIRMWARE" in
+        /run/fwupdate/uploads/*|/tmp/postmerkos-upload-*) rm -f "$FIRMWARE" 2>/dev/null || true ;;
+    esac
+fi
 
 ROOT_BACKUP="$WORK/rootfs.backup"
 OVERLAY_BACKUP=""
@@ -259,6 +301,8 @@ if [ "$ASSUME_YES" -ne 1 ]; then
     [ "$answer" = UPGRADE ] || fw_die "upgrade cancelled"
 fi
 
+history_prepare
+status_write starting acknowledged 34 "Starting firmware update; management services will stop shortly"
 status_write preparing quiesce 35 "Stopping services and unmounting the writable overlay"
 trap '' HUP
 cd /tmp || fw_die "cannot change directory to /tmp"
@@ -342,7 +386,8 @@ set -- "$WORK/fwflash" \
     --status-file "$FWUPDATE_STATUS_FILE" \
     --log-file /run/fwupdate/flash.log \
     --source "$SOURCE" \
-    --firmware "$FWUPDATE_FIRMWARE"
+    --firmware "$FWUPDATE_FIRMWARE" \
+    --target-version "${FWUPDATE_TARGET_VERSION:-unknown}"
 if [ -n "$OVERLAY_IMAGE" ]; then
     set -- "$@" \
         --overlay-image "$OVERLAY_IMAGE" \

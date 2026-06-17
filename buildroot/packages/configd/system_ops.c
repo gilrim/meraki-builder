@@ -151,6 +151,10 @@ struct json_object *firmware_status_json(void) {
   json_object_object_add(status, "progress", json_object_new_int(0));
   json_object_object_add(status, "message",
                          json_object_new_string("No update is active"));
+  struct json_object *last = json_object_from_file("/config/postmerkos/update-history/last.json");
+  if (last && json_object_is_type(last, json_type_object))
+    json_object_object_add(status, "last_update", last);
+  else if (last) json_object_put(last);
   return status;
 }
 
@@ -209,8 +213,9 @@ static int calculate_sha256(const char *path, char output[65],
   return 0;
 }
 
-int firmware_start_update(const char *path, const char *overlay, bool force,
-                          char *error, size_t error_size) {
+static int run_fw_update(const char *path, const char *overlay, bool force,
+                         bool accept_untested, bool verify_only, bool detached,
+                         char *error, size_t error_size) {
   struct stat st;
   if (!path || stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
     set_error(error, error_size, "uploaded firmware is unavailable");
@@ -225,37 +230,99 @@ int firmware_start_update(const char *path, const char *overlay, bool force,
   char sha256[65];
   int rc = calculate_sha256(path, sha256, error, error_size);
   if (rc != 0) return rc;
-
   pid_t child = fork();
   if (child < 0) {
     set_error(error, error_size, strerror(errno));
     return -errno;
   }
   if (child == 0) {
-    setsid();
-    sleep(1);
+    if (detached) setsid();
+    if (detached) sleep(1);
     mkdir("/run/fwupdate", 0700);
-    int logfd = open("/run/fwupdate/web-update.log",
+    int logfd = open(verify_only ? "/run/fwupdate/web-verify.log" :
+                                  "/run/fwupdate/web-update.log",
                      O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (logfd >= 0) {
-      dup2(logfd, STDOUT_FILENO);
-      dup2(logfd, STDERR_FILENO);
+      dup2(logfd, STDOUT_FILENO); dup2(logfd, STDERR_FILENO);
       if (logfd > STDERR_FILENO) close(logfd);
     }
     int nullfd = open("/dev/null", O_RDONLY);
-    if (nullfd >= 0) {
-      dup2(nullfd, STDIN_FILENO);
-      if (nullfd > STDERR_FILENO) close(nullfd);
-    }
-    if (force) {
-      execl(program, "fw_update", "--sha256", sha256, "--overlay", overlay,
-            "--source", "web-upload", "--yes", "--force", path,
-            (char *)NULL);
-    } else {
-      execl(program, "fw_update", "--sha256", sha256, "--overlay", overlay,
-            "--source", "web-upload", "--yes", path, (char *)NULL);
-    }
-    _exit(127);
+    if (nullfd >= 0) { dup2(nullfd, STDIN_FILENO); if (nullfd > STDERR_FILENO) close(nullfd); }
+    char *args[18]; int n = 0;
+    args[n++] = "fw_update"; args[n++] = "--sha256"; args[n++] = sha256;
+    args[n++] = "--overlay"; args[n++] = (char *)overlay;
+    args[n++] = "--source"; args[n++] = "web-upload"; args[n++] = "--yes";
+    if (verify_only) args[n++] = "--verify-only";
+    if (force) args[n++] = "--force";
+    if (accept_untested) args[n++] = "--accept-untested";
+    args[n++] = (char *)path; args[n] = NULL;
+    execv(program, args); _exit(127);
+  }
+  if (detached) return 0;
+  int status = 0;
+  if (waitpid(child, &status, 0) < 0) {
+    set_error(error, error_size, strerror(errno)); return -errno;
+  }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    FILE *file = fopen("/run/fwupdate/web-verify.log", "r");
+    char line[256] = "firmware validation failed";
+    if (file) { while (fgets(line, sizeof(line), file)) {} fclose(file); line[strcspn(line, "\r\n")] = '\0'; }
+    set_error(error, error_size, line[0] ? line : "firmware validation failed");
+    return -EINVAL;
   }
   return 0;
+}
+
+int firmware_validate_update(const char *path, const char *overlay, bool force,
+                             bool accept_untested, char *error, size_t error_size) {
+  return run_fw_update(path, overlay, force, accept_untested, true, false,
+                       error, error_size);
+}
+
+int firmware_start_update(const char *path, const char *overlay, bool force,
+                          bool accept_untested, char *error, size_t error_size) {
+  return run_fw_update(path, overlay, force, accept_untested, false, true,
+                       error, error_size);
+}
+
+struct json_object *firmware_repositories_json(void) {
+  const char *path = "/config/postmerkos/firmware-repositories.json";
+  struct json_object *value = json_object_from_file(path);
+  if (value && json_object_is_type(value, json_type_object)) return value;
+  if (value) json_object_put(value);
+  value = json_object_new_object();
+  struct json_object *sources = json_object_new_array();
+  struct json_object *source = json_object_new_object();
+  json_object_object_add(source, "name", json_object_new_string("default"));
+  json_object_object_add(source, "url", json_object_new_string(""));
+  json_object_object_add(source, "channel", json_object_new_string("stable"));
+  json_object_array_add(sources, source);
+  json_object_object_add(value, "sources", sources);
+  return value;
+}
+
+int firmware_repositories_save(struct json_object *repositories,
+                               char *error, size_t error_size) {
+  if (!repositories || !json_object_is_type(repositories, json_type_object)) {
+    set_error(error, error_size, "repository configuration must be an object"); return -EINVAL;
+  }
+  mkdir("/config/postmerkos", 0700);
+  const char *path = "/config/postmerkos/firmware-repositories.json";
+  if (json_object_to_file_ext(path, repositories, JSON_C_TO_STRING_PRETTY) != 0) {
+    set_error(error, error_size, "unable to save repository configuration"); return -EIO;
+  }
+  chmod(path, 0600); return 0;
+}
+
+struct json_object *firmware_repository_check(const char *source) {
+  struct json_object *result = json_object_new_object();
+  if (!source || !*source) {
+    json_object_object_add(result, "ok", json_object_new_boolean(false));
+    json_object_object_add(result, "message", json_object_new_string("repository URL is required"));
+    return result;
+  }
+  struct json_object *exec = terminal_execute(source);
+  json_object_object_add(result, "command", json_object_new_string(source));
+  json_object_object_add(result, "result", exec);
+  return result;
 }

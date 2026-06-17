@@ -17,12 +17,16 @@ FWUPDATE_CFLAGS = $(TARGET_CFLAGS) -Os -Wall -Wextra -Werror -std=c99
 define FWUPDATE_BUILD_CMDS
 	$(TARGET_CC) $(FWUPDATE_CFLAGS) -static \
 		-o $(@D)/fwflash $(@D)/fwflash.c
-	$(TARGET_STRIP) $(@D)/fwflash
+	$(TARGET_CC) $(FWUPDATE_CFLAGS) -static \
+		-o $(@D)/fwstatus $(@D)/fwstatus.c
+	$(TARGET_STRIP) $(@D)/fwflash $(@D)/fwstatus
 endef
 
 define FWUPDATE_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/fwflash \
 		$(TARGET_DIR)/usr/libexec/fwupdate/fwflash
+	$(INSTALL) -D -m 0755 $(@D)/fwstatus \
+		$(TARGET_DIR)/usr/libexec/fwupdate/fwstatus
 	$(INSTALL) -D -m 0644 $(@D)/files/common.sh \
 		$(TARGET_DIR)/usr/lib/fwupdate/common.sh
 	$(INSTALL) -D -m 0755 $(@D)/files/fw_update \
@@ -35,6 +39,10 @@ define FWUPDATE_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/bin/fw_update_sftp
 	$(INSTALL) -D -m 0755 $(@D)/files/fw_update_status \
 		$(TARGET_DIR)/bin/fw_update_status
+	$(INSTALL) -D -m 0755 $(@D)/files/fwupdate-finalize \
+		$(TARGET_DIR)/usr/sbin/fwupdate-finalize
+	$(INSTALL) -D -m 0755 $(@D)/files/S05fwupdate-finalize \
+		$(TARGET_DIR)/etc/init.d/S05fwupdate-finalize
 	$(INSTALL) -D -m 0644 $(@D)/files/sources.conf \
 		$(TARGET_DIR)/etc/fwupdate/sources.conf
 	$(INSTALL) -D -m 0644 $(@D)/files/preserve.list \

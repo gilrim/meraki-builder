@@ -37,6 +37,7 @@ static const char *status_path = DEFAULT_STATUS;
 static const char *log_path = DEFAULT_LOG;
 static const char *status_source = "";
 static const char *status_firmware = "";
+static const char *status_target_version = "unknown";
 static FILE *log_file;
 static bool reboot_after = true;
 
@@ -70,6 +71,7 @@ static void write_status(const char *state, const char *stage, int progress,
         json_escape(f, message);
         fputs("\",\"source\":\"", f); json_escape(f, status_source);
         fputs("\",\"firmware\":\"", f); json_escape(f, status_firmware);
+        fputs("\",\"target_version\":\"", f); json_escape(f, status_target_version);
         fputs("\"}\n", f);
         if (fflush(f) == 0) (void)fsync(fileno(f));
         fclose(f);
@@ -80,6 +82,12 @@ static void write_status(const char *state, const char *stage, int progress,
                 progress, message ? message : "");
         fflush(log_file);
         (void)fsync(fileno(log_file));
+    }
+    int console = open("/dev/console", O_WRONLY | O_NOCTTY);
+    if (console >= 0) {
+        dprintf(console, "\r\nFWUPDATE [%s %d%%] %s\r\n", stage,
+                progress, message ? message : "");
+        close(console);
     }
 }
 
@@ -454,7 +462,7 @@ static void usage(FILE *f) {
         "  --rootfs-backup FILE\n"
         "  --overlay-image FILE --overlay-mtd DEV [--overlay-backup FILE]\n"
         "  --status-file FILE --log-file FILE\n"
-        "  --source TEXT --firmware NAME --no-reboot\n");
+        "  --source TEXT --firmware NAME --target-version VERSION --no-reboot\n");
 }
 
 int main(int argc, char **argv) {
@@ -482,6 +490,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--log-file") && ++i < argc) log_path = argv[i];
         else if (!strcmp(argv[i], "--source") && ++i < argc) status_source = argv[i];
         else if (!strcmp(argv[i], "--firmware") && ++i < argc) status_firmware = argv[i];
+        else if (!strcmp(argv[i], "--target-version") && ++i < argc) status_target_version = argv[i];
         else if (!strcmp(argv[i], "--no-reboot")) reboot_after = false;
         else if (!strcmp(argv[i], "--help")) { usage(stdout); return 0; }
         else { usage(stderr); return 2; }

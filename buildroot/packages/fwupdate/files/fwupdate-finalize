@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+history=/config/postmerkos/update-history
+pending="$history/pending.json"
+[ -f "$pending" ] || exit 0
+mkdir -p "$history"
+installed=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /etc/postmerkos-release.json 2>/dev/null | head -n1)
+target=$(sed -n 's/.*"target_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pending" | head -n1)
+started=$(sed -n 's/.*"started"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$pending" | head -n1)
+result=interrupted
+message='Firmware update did not reach the requested release'
+[ -n "$target" ] && [ "$installed" = "$target" ] && { result=success; message='Firmware update completed and the target release booted'; }
+cat > "$history/last.json.tmp" <<EOF_LAST
+{"result":"$result","started":${started:-0},"completed":$(date +%s 2>/dev/null || echo 0),"target_version":"${target:-unknown}","installed_version":"${installed:-unknown}","message":"$message"}
+EOF_LAST
+mv -f "$history/last.json.tmp" "$history/last.json"
+[ -f /run/fwupdate/live.log ] && cp -f /run/fwupdate/live.log "$history/last.log" || true
+rm -f "$pending"
+exit 0

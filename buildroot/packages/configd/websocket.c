@@ -12,7 +12,9 @@
 #include "validation.h"
 
 #include <libpostmerkos.h>
+#include <dirent.h>
 #include <errno.h>
+#include <time.h>
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -46,14 +48,17 @@ struct per_session_data {
   size_t receive_length;
 
   bool upload_active;
+  bool upload_ready;
   bool upload_handed_off;
   int upload_fd;
   char upload_path[256];
   char upload_name[128];
   char upload_overlay[16];
+  char upload_token[40];
   size_t upload_expected;
   size_t upload_received;
   bool upload_force;
+  bool upload_accept_untested;
 };
 
 static struct lws *clients[MAX_CLIENTS];
@@ -327,12 +332,29 @@ static bool valid_overlay(const char *value) {
                    !strcmp(value, "reset") || !strcmp(value, "image"));
 }
 
+static void purge_upload_cache(const char *keep) {
+  const char *directory_path = "/run/fwupdate/uploads";
+  mkdir("/run/fwupdate", 0700);
+  mkdir(directory_path, 0700);
+  DIR *directory = opendir(directory_path);
+  if (!directory) return;
+  struct dirent *entry;
+  while ((entry = readdir(directory)) != NULL) {
+    if (entry->d_name[0] == '.') continue;
+    char path[320];
+    snprintf(path, sizeof(path), "%s/%s", directory_path, entry->d_name);
+    if (!keep || strcmp(path, keep)) unlink(path);
+  }
+  closedir(directory);
+}
+
 static void cleanup_upload(struct lws *wsi, struct per_session_data *session) {
   if (session->upload_fd >= 0) close(session->upload_fd);
   session->upload_fd = -1;
   if (session->upload_path[0] && !session->upload_handed_off)
     unlink(session->upload_path);
   session->upload_active = false;
+  session->upload_ready = false;
   session->upload_expected = 0;
   session->upload_received = 0;
   session->upload_path[0] = '\0';
@@ -344,6 +366,10 @@ static struct json_object *upload_status_json(
   struct json_object *data = json_object_new_object();
   json_object_object_add(data, "active",
                          json_object_new_boolean(session->upload_active));
+  json_object_object_add(data, "ready",
+                         json_object_new_boolean(session->upload_ready));
+  json_object_object_add(data, "token",
+                         json_object_new_string(session->upload_token));
   json_object_object_add(data, "name",
                          json_object_new_string(session->upload_name));
   json_object_object_add(data, "received",
@@ -521,6 +547,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     const char *overlay = object_string(data, "overlay");
     struct json_object *size_object = NULL;
     struct json_object *force_object = NULL;
+    struct json_object *accept_object = NULL;
     if (!data || !json_object_object_get_ex(data, "size", &size_object)) {
       queue_bad_request(wsi, session, request_id, "firmware size is required");
       return 0;
@@ -528,6 +555,8 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     int64_t size_value = json_object_get_int64(size_object);
     bool force = json_object_object_get_ex(data, "force", &force_object) &&
                  json_object_get_boolean(force_object);
+    bool accept_untested = json_object_object_get_ex(data, "accept_untested", &accept_object) &&
+                           json_object_get_boolean(accept_object);
     if (size_value <= 0 || size_value > MAX_FIRMWARE_UPLOAD ||
         !valid_overlay(overlay)) {
       queue_bad_request(wsi, session, request_id,
@@ -540,10 +569,12 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
       return 0;
     }
     cleanup_upload(wsi, session);
+    purge_upload_cache(NULL);
     session->upload_handed_off = false;
+    snprintf(session->upload_token, sizeof(session->upload_token), "%08lx%08lx",
+             (unsigned long)time(NULL), (unsigned long)((uintptr_t)wsi ^ (uintptr_t)getpid()));
     snprintf(session->upload_path, sizeof(session->upload_path),
-             "/tmp/postmerkos-upload-%ld-%lx.bin", (long)getpid(),
-             (unsigned long)wsi);
+             "/run/fwupdate/uploads/%s.bin", session->upload_token);
     session->upload_fd = open(session->upload_path,
                               O_WRONLY | O_CREAT | O_EXCL, 0600);
     if (session->upload_fd < 0) {
@@ -559,7 +590,9 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     session->upload_expected = (size_t)size_value;
     session->upload_received = 0;
     session->upload_force = force;
+    session->upload_accept_untested = accept_untested;
     session->upload_active = true;
+    session->upload_ready = false;
     upload_owner = wsi;
     struct json_object *ready = upload_status_json(session);
     queue_response(wsi, session, "firmware_upload_ready", ready, request_id);
@@ -587,23 +620,75 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
       return 0;
     }
     char error[256] = {0};
+    if (firmware_validate_update(session->upload_path, session->upload_overlay,
+                                 session->upload_force,
+                                 session->upload_accept_untested,
+                                 error, sizeof(error)) != 0) {
+      queue_error(wsi, session, request_id, 400,
+                  "Firmware validation failed", error);
+      cleanup_upload(wsi, session);
+      return 0;
+    }
+    session->upload_ready = true;
+    struct json_object *ready = upload_status_json(session);
+    json_object_object_add(ready, "message", json_object_new_string(
+        "Firmware is validated and ready. Confirm the final update prompt to begin flashing."));
+    queue_response(wsi, session, "firmware_ready", ready, request_id);
+    json_object_put(ready);
+    return 0;
+  }
+
+  if (!strcmp(type, "firmware_begin_flash")) {
+    if (!require_capability(wsi, session, request_id, "firmware.update")) return 0;
+    struct json_object *data = request_data_object(message);
+    const char *token = object_string(data, "token");
+    if (!session->upload_ready || !session->upload_path[0] || !token ||
+        strcmp(token, session->upload_token)) {
+      queue_bad_request(wsi, session, request_id,
+                        "firmware upload token is stale or not ready");
+      return 0;
+    }
+    char error[256] = {0};
     if (firmware_start_update(session->upload_path, session->upload_overlay,
-                              session->upload_force, error, sizeof(error)) != 0) {
+                              session->upload_force,
+                              session->upload_accept_untested,
+                              error, sizeof(error)) != 0) {
       queue_error(wsi, session, request_id, 500,
                   "Firmware update could not be started", error);
       cleanup_upload(wsi, session);
       return 0;
     }
     session->upload_active = false;
+    session->upload_ready = false;
     session->upload_handed_off = true;
     upload_owner = NULL;
     struct json_object *started = json_object_new_object();
     json_object_object_add(started, "message", json_object_new_string(
-        "Firmware update started. The management connection will close while flash is written and the switch reboots."));
-    json_object_object_add(started, "name",
-                           json_object_new_string(session->upload_name));
-    queue_response(wsi, session, "firmware_started", started, request_id);
+        "Starting firmware update. Management services will stop shortly; LED progress and serial status remain available."));
+    json_object_object_add(started, "name", json_object_new_string(session->upload_name));
+    json_object_object_add(started, "token", json_object_new_string(session->upload_token));
+    queue_response(wsi, session, "firmware_starting", started, request_id);
     json_object_put(started);
+    return 0;
+  }
+
+  if (!strcmp(type, "firmware_repo_get")) {
+    if (!require_capability(wsi, session, request_id, "firmware.history.read")) return 0;
+    struct json_object *repos = firmware_repositories_json();
+    queue_response(wsi, session, "firmware_repositories", repos, request_id);
+    json_object_put(repos);
+    return 0;
+  }
+  if (!strcmp(type, "firmware_repo_set")) {
+    if (!require_capability(wsi, session, request_id, "firmware.update")) return 0;
+    struct json_object *data = request_data_object(message);
+    char error[256] = {0};
+    if (firmware_repositories_save(data, error, sizeof(error)) != 0) {
+      queue_bad_request(wsi, session, request_id, error); return 0;
+    }
+    struct json_object *ack = json_object_new_object();
+    json_object_object_add(ack, "message", json_object_new_string("Firmware repositories saved"));
+    queue_response(wsi, session, "ack", ack, request_id); json_object_put(ack);
     return 0;
   }
 

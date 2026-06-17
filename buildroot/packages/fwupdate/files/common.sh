@@ -15,8 +15,19 @@ FWUPDATE_OVERLAY_OFFSET=$((0xb00000))
 FWUPDATE_KERNEL_OFFSET=$((0x40000))
 FWUPDATE_SOURCES_FILE=${FWUPDATE_SOURCES_FILE:-/etc/fwupdate/sources.conf}
 FWUPDATE_PRESERVE_FILE=${FWUPDATE_PRESERVE_FILE:-/etc/fwupdate/preserve.list}
+FWUPDATE_HISTORY_DIR=${FWUPDATE_HISTORY_DIR:-/config/postmerkos/update-history}
+FWUPDATE_RELEASE_FILE=${FWUPDATE_RELEASE_FILE:-/etc/postmerkos-release.json}
+FWUPDATE_UPLOAD_DIR=${FWUPDATE_UPLOAD_DIR:-/run/fwupdate/uploads}
+FWUPDATE_MANIFEST_BYTES=4096
+FWUPDATE_MANIFEST_MARKER=PMOSMETA
+FWUPDATE_CURRENT_VERSION=${FWUPDATE_CURRENT_VERSION:-}
+FWUPDATE_TARGET_VERSION=${FWUPDATE_TARGET_VERSION:-}
+FWUPDATE_MODEL=${FWUPDATE_MODEL:-}
+FWUPDATE_COMPATIBILITY=${FWUPDATE_COMPATIBILITY:-untested}
+FWUPDATE_LED_MODE=${FWUPDATE_LED_MODE:-unknown}
 
-mkdir -p /run/fwupdate 2>/dev/null || true
+mkdir -p /run/fwupdate "$FWUPDATE_UPLOAD_DIR" 2>/dev/null || true
+chmod 700 "$FWUPDATE_UPLOAD_DIR" 2>/dev/null || true
 
 ts() { date +%s 2>/dev/null || echo 0; }
 
@@ -39,19 +50,37 @@ status_write() {
     {
         printf '{"state":"%s","stage":"%s","progress":%s,"timestamp":%s,' \
             "$(json_escape "$state")" "$(json_escape "$stage")" "$progress" "$(ts)"
-        printf '"message":"%s","source":"%s","firmware":"%s"}\n' \
+        printf '"message":"%s","source":"%s","firmware":"%s",' \
             "$(json_escape "$message")" "$(json_escape "$source")" \
             "$(json_escape "$firmware")"
+        printf '"current_version":"%s","target_version":"%s",' \
+            "$(json_escape "${FWUPDATE_CURRENT_VERSION:-unknown}")" \
+            "$(json_escape "${FWUPDATE_TARGET_VERSION:-unknown}")"
+        printf '"model":"%s","compatibility":"%s","led_mode":"%s"}
+' \
+            "$(json_escape "${FWUPDATE_MODEL:-unknown}")" \
+            "$(json_escape "${FWUPDATE_COMPATIBILITY:-untested}")" \
+            "$(json_escape "${FWUPDATE_LED_MODE:-unknown}")"
     } > "$tmp" && mv -f "$tmp" "$FWUPDATE_STATUS_FILE"
-    printf '%s|%s|%s|%s|%s\n' "$(ts)" "$state" "$stage" "$progress" "$message" \
+    printf '%s|%s|%s|%s|%s
+' "$(ts)" "$state" "$stage" "$progress" "$message" \
         >> "$FWUPDATE_LOG_FILE" 2>/dev/null || true
-    printf 'FWUPDATE|%s|%s|%s|%s\n' "$state" "$stage" "$progress" "$message"
+    if [ -x /usr/libexec/fwupdate/fwstatus ]; then
+        /usr/libexec/fwupdate/fwstatus "$state" "$stage" "$progress" "$message" >/dev/null 2>&1 || true
+    else
+        printf 'FWUPDATE|%s|%s|%s|%s
+' "$state" "$stage" "$progress" "$message" > /dev/console 2>/dev/null || true
+    fi
+    printf 'FWUPDATE|%s|%s|%s|%s
+' "$state" "$stage" "$progress" "$message"
 }
 
 fw_die() {
     msg=$1
     status_write error error 100 "$msg"
-    printf 'error: %s\n' "$msg" >&2
+    history_failure "$msg" 2>/dev/null || true
+    printf 'error: %s
+' "$msg" >&2
     exit 1
 }
 
@@ -140,17 +169,95 @@ check_mtd_layout() {
     export ROOT_MTD OVERLAY_MTD ROOT_MTD_SIZE OVERLAY_MTD_SIZE ROOT_MTD_LABEL OVERLAY_MTD_LABEL
 }
 
-check_board() {
+read_board_model() {
     model=""
     if command -v board_data >/dev/null 2>&1; then
         model=$(board_data model 2>/dev/null | tr -d '\r\n' || true)
     fi
-    [ -n "$model" ] || model=$(cat /etc/boardinfo 2>/dev/null | tr -d '\r\n' || true)
-    case "$model" in
-        *MS42P*|*MS42*) return 0 ;;
-        "") fw_die "could not identify the board as MS42/MS42P" ;;
-        *) fw_die "unsupported board model: $model" ;;
+    if [ -z "$model" ] && [ -f /etc/boardinfo ]; then
+        model=$(sed -n 's/^MODEL=//p' /etc/boardinfo | head -n1 | tr -d '\r\n')
+        [ -n "$model" ] || model=$(head -n1 /etc/boardinfo | tr -d '\r\n')
+    fi
+    printf '%s' "$model"
+}
+
+model_compatibility() {
+    case "$1" in
+        MS42P|MS320-24P) echo confirmed ;;
+        MS22|MS22P|MS42|MS220-*|MS320-*) echo untested ;;
+        *) echo known-incompatible ;;
     esac
+}
+
+check_board() {
+    FWUPDATE_MODEL=$(read_board_model)
+    [ -n "$FWUPDATE_MODEL" ] || fw_die "could not identify the switch model"
+    FWUPDATE_COMPATIBILITY=$(model_compatibility "$FWUPDATE_MODEL")
+    export FWUPDATE_MODEL FWUPDATE_COMPATIBILITY
+    [ "$FWUPDATE_COMPATIBILITY" != known-incompatible ] || \
+        fw_die "known-incompatible board model: $FWUPDATE_MODEL"
+}
+
+json_value() {
+    key=$1
+    file=$2
+    sed -n 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" 2>/dev/null | head -n1
+}
+
+installed_version() {
+    json_value version "$FWUPDATE_RELEASE_FILE"
+}
+
+read_candidate_manifest() {
+    image=$1
+    size=$(file_size "$image")
+    if [ "$size" -eq "$FWUPDATE_FULL_IMAGE_SIZE" ]; then
+        offset=$((FWUPDATE_ROOTFS_OFFSET + FWUPDATE_ROOTFS_SIZE - FWUPDATE_MANIFEST_BYTES))
+    elif [ "$size" -eq "$FWUPDATE_ROOTFS_SIZE" ]; then
+        offset=$((FWUPDATE_ROOTFS_SIZE - FWUPDATE_MANIFEST_BYTES))
+    else
+        return 1
+    fi
+    marker=$(dd if="$image" bs=1 skip="$offset" count=8 2>/dev/null)
+    [ "$marker" = "$FWUPDATE_MANIFEST_MARKER" ] || return 1
+    lenhex=$(dd if="$image" bs=1 skip=$((offset + 8)) count=8 2>/dev/null)
+    case "$lenhex" in ''|*[!0-9A-Fa-f]*) return 1 ;; esac
+    length=$((0x$lenhex))
+    [ "$length" -gt 0 ] && [ "$length" -le $((FWUPDATE_MANIFEST_BYTES - 16)) ] || return 1
+    CANDIDATE_MANIFEST=/run/fwupdate/candidate-manifest.$$.json
+    dd if="$image" of="$CANDIDATE_MANIFEST" bs=1 skip=$((offset + 16)) count="$length" 2>/dev/null || return 1
+    FWUPDATE_TARGET_VERSION=$(json_value version "$CANDIDATE_MANIFEST")
+    [ -n "$FWUPDATE_TARGET_VERSION" ] || return 1
+    export CANDIDATE_MANIFEST FWUPDATE_TARGET_VERSION
+    return 0
+}
+
+history_prepare() {
+    mkdir -p "$FWUPDATE_HISTORY_DIR" 2>/dev/null || return 0
+    cat > "$FWUPDATE_HISTORY_DIR/pending.json.tmp" <<EOF_HISTORY
+{"state":"pending","started":$(ts),"current_version":"$(json_escape "${FWUPDATE_CURRENT_VERSION:-unknown}")","target_version":"$(json_escape "${FWUPDATE_TARGET_VERSION:-unknown}")","model":"$(json_escape "${FWUPDATE_MODEL:-unknown}")","compatibility":"$(json_escape "${FWUPDATE_COMPATIBILITY:-untested}")","source":"$(json_escape "${FWUPDATE_SOURCE:-unknown}")","firmware":"$(json_escape "${FWUPDATE_FIRMWARE:-unknown}")","sha256":"$(json_escape "${FWUPDATE_SHA256:-unknown}")","overlay":"$(json_escape "${OVERLAY_POLICY:-preserve}")"}
+EOF_HISTORY
+    mv -f "$FWUPDATE_HISTORY_DIR/pending.json.tmp" "$FWUPDATE_HISTORY_DIR/pending.json"
+    cp -f "$FWUPDATE_LOG_FILE" "$FWUPDATE_HISTORY_DIR/pending.log" 2>/dev/null || true
+    sync
+}
+
+history_failure() {
+    mkdir -p "$FWUPDATE_HISTORY_DIR" 2>/dev/null || return 0
+    cat > "$FWUPDATE_HISTORY_DIR/last.json.tmp" <<EOF_HISTORY
+{"result":"failed","completed":$(ts),"current_version":"$(json_escape "${FWUPDATE_CURRENT_VERSION:-unknown}")","target_version":"$(json_escape "${FWUPDATE_TARGET_VERSION:-unknown}")","model":"$(json_escape "${FWUPDATE_MODEL:-unknown}")","message":"$(json_escape "$1")"}
+EOF_HISTORY
+    mv -f "$FWUPDATE_HISTORY_DIR/last.json.tmp" "$FWUPDATE_HISTORY_DIR/last.json"
+    cp -f "$FWUPDATE_LOG_FILE" "$FWUPDATE_HISTORY_DIR/last.log" 2>/dev/null || true
+}
+
+led_detect() {
+    if [ -w /click/sw0_ctrl/poe_led_state ]; then
+        FWUPDATE_LED_MODE=binary-poe-ports
+    else
+        FWUPDATE_LED_MODE=unavailable
+    fi
+    export FWUPDATE_LED_MODE
 }
 
 

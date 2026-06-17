@@ -560,12 +560,81 @@ select_overlay() {
     esac
 }
 
+display_configuration_copy() {
+    local temp=/run/postmerkos/config-copy.$$.json hash
+    mkdir -p /run/postmerkos
+    "$CTL" backup "$temp" || { echo 'Unable to export configuration.'; return 1; }
+    hash=$(sha256sum "$temp" | awk '{print $1}')
+    restore_console_chatter
+    printf '\n----- BEGIN POSTMERKOS CONFIGURATION -----\n'
+    cat "$temp"
+    printf '%s\n' '----- END POSTMERKOS CONFIGURATION -----'
+    printf 'SHA-256: %s\n' "$hash"
+    rm -f "$temp"
+    suppress_console_chatter
+}
+
+backup_to_tftp() {
+    local server remote port temp
+    printf 'TFTP server: '; read -r server
+    [ -n "$server" ] || { echo 'TFTP server is required.'; return 1; }
+    remote="postmerkos-${MODEL:-switch}-$(date +%Y%m%d-%H%M%S).json"
+    printf 'Remote filename [%s]: ' "$remote"; read -r answer; remote=${answer:-$remote}
+    printf 'TFTP port [69]: '; read -r port; port=${port:-69}
+    temp=/run/postmerkos/preupdate-config.$$.json
+    mkdir -p /run/postmerkos
+    "$CTL" backup "$temp" || return 1
+    if command -v curl >/dev/null 2>&1; then
+        curl --fail --silent --show-error --upload-file "$temp" "tftp://$server:$port/${remote#/}"
+    else
+        tftp -p -l "$temp" -r "$remote" "$server" "$port"
+    fi
+    rc=$?
+    rm -f "$temp"
+    [ "$rc" -eq 0 ] && { echo "Configuration uploaded as $remote"; return 0; }
+    echo 'TFTP backup failed.'
+    return 1
+}
+
+preupdate_backup_prompt() {
+    while :; do
+        heading 'Pre-update configuration backup'
+        cat <<'EOF_PREBACKUP'
+1) Upload configuration backup to a TFTP server
+2) Display configuration for manual copying
+3) Continue without a backup
+4) Cancel firmware update
+EOF_PREBACKUP
+        read_choice 'backup> '
+        case "$CHOICE" in
+            1) backup_to_tftp && return 0; pause ;;
+            2) display_configuration_copy; printf '\nPress Enter after copying, or enter c to cancel the update: '; read -r answer; [ "$answer" = c ] && return 1; return 0 ;;
+            3) confirm_word CONTINUE 'Type CONTINUE to proceed without an external backup: ' && return 0 ;;
+            4|b|B|0|'') return 1 ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+select_overlay() {
+    echo 'Overlay policy:' >&2
+    echo '  1) preserve - keep settings byte-for-byte' >&2
+    echo '  2) migrate  - copy selected settings into a clean overlay' >&2
+    echo '  3) reset    - erase settings' >&2
+    echo '  4) image    - use overlay embedded in a full firmware image' >&2
+    printf 'Selection [1]: ' >&2
+    read -r selection
+    case "${selection:-1}" in
+        1) echo preserve ;; 2) echo migrate ;; 3) echo reset ;; 4) echo image ;; *) echo preserve ;;
+    esac
+}
+
 firmware_menu() {
-    local file hash overlay server remote port url user password
+    local file hash overlay server remote port url user password accept_arg
     while :; do
         heading 'Firmware Update'
         cat <<'EOF_FW'
-1) Show updater status
+1) Firmware update history
 2) Install a local firmware image
 3) Download and install by TFTP
 4) Download and install by HTTP/HTTPS
@@ -575,17 +644,25 @@ b) Back
 EOF_FW
         read_choice 'firmware> '
         case "$CHOICE" in
-            1) heading 'Firmware updater status'; fw_update_status 2>/dev/null || cat /run/fwupdate/status.json 2>/dev/null || echo 'No update is active.'; pause ;;
+            1) heading 'Firmware update history'; cat /config/postmerkos/update-history/last.json 2>/dev/null || echo 'No completed update record exists.'; echo; cat /config/postmerkos/update-history/last.log 2>/dev/null || true; pause ;;
             2|6)
                 heading 'Local firmware image'
                 printf 'Firmware path: '; read -r file
                 [ -f "$file" ] || { echo 'File not found.'; pause; continue; }
                 hash=$(sha256sum "$file" | awk '{print $1}') || { echo 'Unable to hash firmware.'; pause; continue; }
                 overlay=$(select_overlay)
-                if [ "$CHOICE" = 6 ]; then fw_update --sha256 "$hash" --overlay "$overlay" --verify-only "$file"; else fw_update --sha256 "$hash" --overlay "$overlay" "$file"; fi
+                accept_arg=
+                [ "$(cfg_get_device_compatibility 2>/dev/null || echo confirmed)" = untested ] && accept_arg=--accept-untested
+                if [ "$CHOICE" = 6 ]; then
+                    fw_update --sha256 "$hash" --overlay "$overlay" $accept_arg --verify-only "$file"
+                else
+                    preupdate_backup_prompt || { echo 'Firmware update cancelled.'; pause; continue; }
+                    fw_update --sha256 "$hash" --overlay "$overlay" $accept_arg "$file"
+                fi
                 pause ;;
             3)
                 heading 'TFTP firmware update'
+                preupdate_backup_prompt || { echo 'Firmware update cancelled.'; pause; continue; }
                 printf 'TFTP server: '; read -r server
                 printf 'Remote firmware path: '; read -r remote
                 printf 'TFTP port [69]: '; read -r port; port=${port:-69}
@@ -594,14 +671,16 @@ EOF_FW
                 pause ;;
             4)
                 heading 'HTTP/HTTPS firmware update'
-                if ! command -v fw_update_http >/dev/null 2>&1; then echo 'HTTP updater support is not installed in this build.'; pause; continue; fi
+                command -v fw_update_http >/dev/null 2>&1 || { echo 'HTTP updater support is not installed.'; pause; continue; }
+                preupdate_backup_prompt || { echo 'Firmware update cancelled.'; pause; continue; }
                 printf 'Direct firmware URL (blank opens configured catalog): '; read -r url
                 overlay=$(select_overlay)
                 if [ -n "$url" ]; then fw_update_http --url "$url" --overlay "$overlay"; else fw_update_http --overlay "$overlay"; fi
                 pause ;;
             5)
                 heading 'SFTP firmware update'
-                if ! command -v fw_update_sftp >/dev/null 2>&1; then echo 'SFTP updater support is not installed in this build.'; pause; continue; fi
+                command -v fw_update_sftp >/dev/null 2>&1 || { echo 'SFTP updater support is not installed.'; pause; continue; }
+                preupdate_backup_prompt || { echo 'Firmware update cancelled.'; pause; continue; }
                 printf 'SFTP server: '; read -r server
                 printf 'Remote firmware path: '; read -r remote
                 printf 'Username: '; read -r user
@@ -615,36 +694,46 @@ EOF_FW
     done
 }
 
+cfg_get_device_compatibility() {
+    "$CTL" status 2>/dev/null | sed -n 's/.*"compatibility"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
+}
+
+restore_from_tftp() {
+    local server remote port temp
+    can config.restore || { echo 'Permission denied.'; return 1; }
+    printf 'TFTP server: '; read -r server
+    printf 'Remote filename: '; read -r remote
+    printf 'TFTP port [69]: '; read -r port; port=${port:-69}
+    temp=/run/postmerkos/restore.$$.json
+    mkdir -p /run/postmerkos
+    if command -v curl >/dev/null 2>&1; then
+        curl --fail --silent --show-error --output "$temp" "tftp://$server:$port/${remote#/}" || { rm -f "$temp"; return 1; }
+    else
+        tftp -g -l "$temp" -r "$remote" "$server" "$port" || { rm -f "$temp"; return 1; }
+    fi
+    "$CTL" validate "$temp" || { rm -f "$temp"; return 1; }
+    if confirm_word RESTORE 'Type RESTORE to apply the downloaded configuration: '; then "$CTL" restore "$temp"; fi
+    rm -f "$temp"
+}
+
 backup_restore_menu() {
-    local file default
     while :; do
         heading 'Backup & Restore'
-        echo '1) Back up configuration to JSON'
-        echo '2) Display current configuration'
+        echo '1) Upload configuration backup to TFTP'
+        echo '2) Display configuration for manual copying'
         if can config.restore; then
-            echo '3) Validate a backup file'
-            echo '4) Restore and apply a backup'
+            echo '3) Restore configuration from TFTP'
+            echo '4) Validate a local backup file'
+            echo '5) Restore a local backup file'
         fi
         echo 'b) Back'
         read_choice 'backup> '
         case "$CHOICE" in
-            1)
-                default=${HOME:-/tmp}/postmerkos-config-$(date +%Y%m%d-%H%M%S).json
-                printf 'Output path [%s]: ' "$default"; read -r file; file=${file:-$default}
-                if "$CTL" backup "$file"; then echo "Backup written to $file"; else echo 'Backup failed.'; fi
-                pause ;;
-            2) "$CTL" config; pause ;;
-            3)
-                if ! can config.restore; then echo 'Permission denied.'; pause; continue; fi
-                printf 'Backup file: '; read -r file
-                if [ -f "$file" ] && "$CTL" validate "$file"; then echo 'Backup JSON is valid.'; else echo 'Backup validation failed.'; fi
-                pause ;;
-            4)
-                if ! can config.restore; then echo 'Permission denied.'; pause; continue; fi
-                printf 'Backup file: '; read -r file
-                [ -f "$file" ] || { echo 'File not found.'; pause; continue; }
-                if confirm_word RESTORE 'Type RESTORE to replace the current configuration: '; then "$CTL" restore "$file"; else echo 'Restore cancelled.'; fi
-                pause ;;
+            1) backup_to_tftp; pause ;;
+            2) display_configuration_copy; pause ;;
+            3) restore_from_tftp; pause ;;
+            4) printf 'Backup file: '; read -r file; "$CTL" validate "$file"; pause ;;
+            5) printf 'Backup file: '; read -r file; [ -f "$file" ] && confirm_word RESTORE 'Type RESTORE to apply: ' && "$CTL" restore "$file"; pause ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac
