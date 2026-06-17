@@ -1,4 +1,5 @@
 #include "auth.h"
+#include "roles.h"
 
 #include <crypt.h>
 #include <errno.h>
@@ -29,15 +30,8 @@ static bool safe_username(const char *username) {
   return true;
 }
 
-static bool user_is_admin(const struct passwd *entry) {
-  if (!entry) return false;
-  if (entry->pw_uid == 0) return true;
-  struct group *admin = getgrnam("postmerkos-admin");
-  if (!admin) return false;
-  if (entry->pw_gid == admin->gr_gid) return true;
-  for (char **member = admin->gr_mem; member && *member; member++)
-    if (!strcmp(*member, entry->pw_name)) return true;
-  return false;
+static bool user_is_authorized(const struct passwd *entry) {
+  return entry && role_for_username(entry->pw_name) != POSTMERKOS_ROLE_NONE;
 }
 
 static bool constant_time_equal(const char *left, const char *right) {
@@ -70,7 +64,7 @@ int auth_verify_user(const char *username, const char *password,
     return -EINVAL;
   }
   struct passwd *entry = getpwnam(username);
-  if (!entry || !user_is_admin(entry)) {
+  if (!entry || !user_is_authorized(entry)) {
     set_error(error, error_size,
               "invalid credentials or account is not authorized for switch management");
     return -EACCES;
@@ -94,7 +88,7 @@ struct json_object *auth_list_users(void) {
   struct passwd *entry;
   while ((entry = getpwent()) != NULL) {
     if (!entry->pw_name || !safe_username(entry->pw_name) ||
-        !user_is_admin(entry)) continue;
+        !user_is_authorized(entry)) continue;
     const char *shell = entry->pw_shell ? entry->pw_shell : "";
     if (strstr(shell, "nologin") || strstr(shell, "false")) continue;
     struct json_object *user = json_object_new_object();
@@ -105,6 +99,9 @@ struct json_object *auth_list_users(void) {
     json_object_object_add(user, "home",
                            json_object_new_string(entry->pw_dir ? entry->pw_dir : ""));
     json_object_object_add(user, "shell", json_object_new_string(shell));
+    enum postmerkos_role role = role_for_username(entry->pw_name);
+    json_object_object_add(user, "role", json_object_new_string(role_name(role)));
+    json_object_object_add(user, "capabilities", role_capabilities_json(role));
     json_object_array_add(users, user);
   }
   endpwent();
@@ -164,7 +161,7 @@ int auth_change_password(const char *actor, const char *target,
     return -ENOENT;
   }
   struct passwd *target_entry = getpwnam(target);
-  if (!target_entry || !user_is_admin(target_entry)) {
+  if (!target_entry || !user_is_authorized(target_entry)) {
     set_error(error, error_size, "unknown or unauthorized target account");
     return -ENOENT;
   }

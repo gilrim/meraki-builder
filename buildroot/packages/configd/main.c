@@ -5,6 +5,7 @@
 #include "configd.h"
 #include "console_cli.h"
 #include "network.h"
+#include "local_socket.h"
 #include "result.h"
 #include "status.h"
 #include "validation.h"
@@ -49,6 +50,7 @@ static void usage(FILE *stream, const char *program) {
       "  -d, --dry-run              log writes without changing hardware\n"
       "  -p, --status-interval SEC  status broadcast interval (1-3600)\n"
       "  -w, --websocket-port PORT  WebSocket listen port (1-65535)\n"
+      "  -s, --socket PATH          local management Unix socket\n"
       "  -N, --network-bootstrap    apply DHCP/static management IP and exit\n"
       "  -W, --network-wait SEC     DHCP wait during bootstrap (0-300, default 60)\n"
       "      --get-config           print the current persistent JSON envelope\n"
@@ -134,6 +136,7 @@ int main(int argc, char **argv) {
   int websocket_port = 4001;
   int status_interval = 3;
   int network_wait = 60;
+  const char *local_socket_path = "/run/postmerkos/configd.sock";
   enum command_mode command = COMMAND_SERVICE;
   const char *command_value = NULL;
   const char *command_value2 = NULL;
@@ -147,6 +150,7 @@ int main(int argc, char **argv) {
     {"dry-run", no_argument, NULL, 'd'},
     {"status-interval", required_argument, NULL, 'p'},
     {"websocket-port", required_argument, NULL, 'w'},
+    {"socket", required_argument, NULL, 's'},
     {"network-bootstrap", no_argument, NULL, 'N'},
     {"network-wait", required_argument, NULL, 'W'},
     {"get-config", no_argument, NULL, OPT_GET_CONFIG},
@@ -168,7 +172,7 @@ int main(int argc, char **argv) {
   };
 
   int option;
-  while ((option = getopt_long(argc, argv, "c:dp:w:NW:h", options, NULL)) != -1) {
+  while ((option = getopt_long(argc, argv, "c:dp:w:s:NW:h", options, NULL)) != -1) {
     switch (option) {
       case 'c': config_file = optarg; break;
       case 'd': dry_run = true; break;
@@ -178,6 +182,7 @@ int main(int argc, char **argv) {
           return 2;
         }
         break;
+      case 's': local_socket_path = optarg; break;
       case 'w':
         if (parse_int(optarg, 1, 65535, &websocket_port) != 0) {
           fprintf(stderr, "invalid WebSocket port\n");
@@ -477,25 +482,48 @@ int main(int argc, char **argv) {
   apply_result_cleanup(&startup);
   json_object_put(config);
 
+  int local_fd = local_socket_init(local_socket_path);
+  if (local_fd < 0) {
+    fprintf(stderr, "configd: local socket setup failed: %s\n", strerror(-local_fd));
+    i2c_close(&pd690xx);
+    return 1;
+  }
+  printf("configd: local management socket listening at %s\n", local_socket_path);
+
+#ifdef CONFIGD_ENABLE_WEBSOCKET
   struct lws_context *context = ws_init(websocket_port);
   if (!context) {
-    #ifdef CONFIGD_ENABLE_WEBSOCKET
     fprintf(stderr, "configd: WebSocket context creation failed\n");
-#else
-    fprintf(stderr, "configd: this build contains the console core without the optional WebSocket service\n");
-#endif
+    local_socket_shutdown(local_fd, local_socket_path);
     i2c_close(&pd690xx);
     return 1;
   }
   ws_schedule_timers(context, status_interval);
   printf("configd: WebSocket server listening on port %d\n", websocket_port);
+#else
+  (void)websocket_port;
+  (void)status_interval;
+#endif
 
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
-  while (running && ws_service_once(context, 100) >= 0) mark_clients_pending();
+  while (running) {
+    int local_rc = local_socket_service_once(local_fd, 50);
+    if (local_rc < 0) {
+      fprintf(stderr, "configd: local socket error: %s\n", strerror(-local_rc));
+      break;
+    }
+#ifdef CONFIGD_ENABLE_WEBSOCKET
+    if (ws_service_once(context, 0) < 0) break;
+    mark_clients_pending();
+#endif
+  }
 
   printf("configd: shutting down\n");
+#ifdef CONFIGD_ENABLE_WEBSOCKET
   ws_shutdown(context);
+#endif
+  local_socket_shutdown(local_fd, local_socket_path);
   i2c_close(&pd690xx);
   return 0;
 }

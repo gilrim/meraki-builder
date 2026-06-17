@@ -1,0 +1,5 @@
+{
+  "serial_authentication": "disabled",
+  "default_password_warning": true,
+  "compatibility_notice_ack": null
+}

@@ -2,6 +2,7 @@
 #include "config_file.h"
 #include "configd.h"
 #include "network.h"
+#include "release.h"
 
 #include <libpostmerkos.h>
 #include <libpd690xx.h>
@@ -133,6 +134,7 @@ struct json_object *get_status(void) {
   struct json_object *errors = json_object_new_array();
   json_object_object_add(root, "datetime", json_object_new_string(get_time()));
   json_object_object_add(root, "device", json_object_new_string(hardware.model));
+  json_object_object_add(root, "release", release_info_load());
   json_object_object_add(root, "capabilities",
                          hardware_capabilities_json(&hardware));
   json_object_object_add(root, "network", network_manager_status_json());
