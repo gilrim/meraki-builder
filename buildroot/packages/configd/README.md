@@ -100,3 +100,11 @@ The Buildroot package links against JSON-C, libwebsockets, `libpostmerkos`, and 
 ## Authentication and size constraints
 
 The WebSocket service authenticates root and members of `postmerkos-admin` directly against `/etc/shadow` with `crypt()`. Linux-PAM is deliberately not used because its locale, wchar, Flex, and module dependencies consume too much of the 8 MiB SquashFS region. Password updates use the existing BusyBox `chpasswd` applet.
+
+## Service and time policy
+
+The privileged core owns `/config/postmerkos/services.json` and
+`/config/postmerkos/time.json`. Administrators may control SSH, the optional web
+service and chrony through the local socket or WebSocket frontends. The system
+clock remains UTC. Local display time is calculated from a fixed offset and an
+optional compact recurring DST rule, avoiding the size of tzdata.

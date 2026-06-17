@@ -180,7 +180,7 @@ int auth_change_password(const char *actor, const char *target,
     set_error(error, error_size, "only root may change another account");
     return -EACCES;
   }
-  int rc = run_chpasswd(target, new_password, error, error_size);
+  rc = run_chpasswd(target, new_password, error, error_size);
   if (rc == 0 && !strcmp(target, "root"))
     unlink("/config/postmerkos/default-password-active");
   return rc;

@@ -207,7 +207,11 @@ static void usage(FILE *stream) {
         "  session [--json] | role | has CAPABILITY\n"
         "  status | summary | ports FIRST-LAST | port PORT\n"
         "  get PATH | set PATH VALUE | set-string PATH TEXT | apply-json JSON\n"
-        "  config | backup FILE | validate FILE | restore FILE | reboot\n", stream);
+        "  config | backup FILE | validate FILE | restore FILE | reboot\n"
+        "  services | services-set JSON | services-apply | service NAME ACTION\n"
+        "  service-get PATH | service-set PATH VALUE\n"
+        "  time | time-set JSON | time-get PATH | time-set-field PATH VALUE\n"
+        "  time-sync | time-set-clock EPOCH\n", stream);
 }
 
 static int write_config_file(const char *path, struct json_object *config) {
@@ -333,6 +337,65 @@ int main(int argc, char **argv) {
     if (!result) { if (reply) json_object_put(reply); return 1; }
     puts(string_member(result, "message", "Configuration restored"));
     json_object_put(reply); return 0;
+  }
+  if (!strcmp(command, "services") || !strcmp(command, "time")) {
+    struct json_object *reply=request(!strcmp(command,"services")?"services.get":"time.get",NULL);
+    struct json_object *data=reply_data(reply); if(!data){if(reply)json_object_put(reply);return 1;}
+    puts(json_object_to_json_string_ext(data,JSON_C_TO_STRING_PRETTY));json_object_put(reply);return 0;
+  }
+  if (!strcmp(command, "service-get") || !strcmp(command, "time-get")) {
+    if(argc!=3){usage(stderr);return 2;}struct json_object *data=json_object_new_object();json_object_object_add(data,"path",json_object_new_string(argv[2]));
+    struct json_object *reply=request(!strcmp(command,"service-get")?"services.path.get":"time.path.get",data);json_object_put(data);struct json_object *value=reply_data(reply);if(!value){if(reply)json_object_put(reply);return 1;}if(json_object_is_type(value,json_type_string))puts(json_object_get_string(value));else puts(json_object_to_json_string_ext(value,JSON_C_TO_STRING_PLAIN));json_object_put(reply);return 0;
+  }
+  if (!strcmp(command, "service-set") || !strcmp(command, "time-set-field")) {
+    if(argc!=4){usage(stderr);return 2;}struct json_object *data=json_object_new_object();json_object_object_add(data,"path",json_object_new_string(argv[2]));json_object_object_add(data,"value",json_object_new_string(argv[3]));
+    struct json_object *reply=request(!strcmp(command,"service-set")?"services.path.set":"time.path.set",data);json_object_put(data);struct json_object *result=reply_data(reply);if(!result){if(reply)json_object_put(reply);return 1;}puts(string_member(result,"message","Policy updated"));json_object_put(reply);return 0;
+  }
+  if (!strcmp(command, "services-apply")) {
+    struct json_object *reply=request("services.apply",NULL);struct json_object *result=reply_data(reply);if(!result){if(reply)json_object_put(reply);return 1;}puts(string_member(result,"message","Service policy applied"));json_object_put(reply);return 0;
+  }
+  if (!strcmp(command, "services-set") || !strcmp(command, "time-set")) {
+    if (argc != 3) { usage(stderr); return 2; }
+    struct json_object *data = json_tokener_parse(argv[2]);
+    if (!data || !json_object_is_type(data, json_type_object)) {
+      if (data) json_object_put(data);
+      fprintf(stderr, "postmerkosctl: invalid JSON policy\n");
+      return 1;
+    }
+    struct json_object *reply = request(!strcmp(command, "services-set") ?
+                                        "services.set" : "time.set", data);
+    json_object_put(data);
+    struct json_object *result = reply_data(reply);
+    if (!result) { if (reply) json_object_put(reply); return 1; }
+    puts(string_member(result, "message", "Policy saved"));
+    json_object_put(reply);
+    return 0;
+  }
+  if (!strcmp(command, "service")) {
+    if(argc!=4){usage(stderr);return 2;}struct json_object *data=json_object_new_object();
+    json_object_object_add(data,"service",json_object_new_string(argv[2]));json_object_object_add(data,"action",json_object_new_string(argv[3]));
+    struct json_object *reply=request("services.action",data);json_object_put(data);struct json_object *result=reply_data(reply);if(!result){if(reply)json_object_put(reply);return 1;}puts(string_member(result,"message","Service action completed"));json_object_put(reply);return 0;
+  }
+  if (!strcmp(command, "time-sync")) {
+    struct json_object *reply=request("time.sync",NULL);struct json_object *result=reply_data(reply);if(!result){if(reply)json_object_put(reply);return 1;}puts(string_member(result,"message","Time synchronization requested"));json_object_put(reply);return 0;
+  }
+  if (!strcmp(command, "time-set-clock")) {
+    if (argc != 3) { usage(stderr); return 2; }
+    char *end = NULL;
+    long long epoch = strtoll(argv[2], &end, 10);
+    if (!end || *end) {
+      fprintf(stderr, "postmerkosctl: invalid epoch\n");
+      return 2;
+    }
+    struct json_object *data = json_object_new_object();
+    json_object_object_add(data, "epoch", json_object_new_int64(epoch));
+    struct json_object *reply = request("time.set_clock", data);
+    json_object_put(data);
+    struct json_object *result = reply_data(reply);
+    if (!result) { if (reply) json_object_put(reply); return 1; }
+    puts(string_member(result, "message", "System clock updated"));
+    json_object_put(reply);
+    return 0;
   }
   if (!strcmp(command, "reboot")) {
     struct json_object *reply = request("system.reboot", NULL);

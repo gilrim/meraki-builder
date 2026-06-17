@@ -8,6 +8,9 @@
 #include "console_cli.h"
 #include "roles.h"
 #include "status.h"
+#include "service_ops.h"
+#include "time_ops.h"
+#include "json_util.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -212,6 +215,55 @@ static void handle_client(int fd) {
       }
       apply_result_cleanup(&result);
     }
+  } else if (!strcmp(type, "services.get") && role_has_capability(role, "status.read")) {
+    struct json_object *status = service_status_json();
+    send_json(fd, "services", status); json_object_put(status);
+  } else if (!strcmp(type, "services.path.get") && role_has_capability(role, "status.read")) {
+    struct json_object *data=request_data(request);const char *path=object_string(data,"path");struct json_object *policy=service_policy_load();struct json_object *value=policy?console_path_get(policy,path):NULL;
+    if(!value)send_error(fd,404,"service policy path not found");else send_json(fd,"value",value);if(policy)json_object_put(policy);
+  } else if (!strcmp(type, "services.path.set")) {
+    struct json_object *data=request_data(request);const char *path=object_string(data,"path"),*value=object_string(data,"value");
+    if(!role_has_capability(role,"services.manage"))send_error(fd,403,"service configuration requires administrator access");
+    else if(!path||value==NULL)send_error(fd,400,"path and value are required");
+    else {char error[256]={0};struct json_object *policy=service_policy_load();struct json_object *delta=console_delta_from_path(path,value,error,sizeof(error));if(!policy||!delta)send_error(fd,400,error[0]?error:"invalid service value");else{json_deep_merge(policy,delta);if(service_policy_save(policy,error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Service policy updated"));send_json(fd,"ack",ack);json_object_put(ack);}}if(delta)json_object_put(delta);if(policy)json_object_put(policy);}
+  } else if (!strcmp(type, "services.set")) {
+    struct json_object *data = request_data(request);
+    if (!role_has_capability(role, "services.manage")) send_error(fd, 403, "service configuration requires administrator access");
+    else {
+      char error[256] = {0};
+      if (service_policy_save(data, error, sizeof(error)) != 0) send_error(fd, 400, error[0] ? error : "service policy rejected");
+      else { struct json_object *ack=json_object_new_object(); json_object_object_add(ack,"message",json_object_new_string("Service policy saved")); send_json(fd,"ack",ack); json_object_put(ack); }
+    }
+  } else if (!strcmp(type, "services.action")) {
+    struct json_object *data=request_data(request);
+    const char *service=object_string(data,"service"), *action=object_string(data,"action");
+    if (!role_has_capability(role, "services.manage")) send_error(fd,403,"service control requires administrator access");
+    else { char error[256]={0}; if(service_action(service,action,error,sizeof(error))!=0) send_error(fd,400,error[0]?error:"service action failed"); else {struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Service action completed"));send_json(fd,"ack",ack);json_object_put(ack);} }
+  } else if (!strcmp(type, "time.get") && role_has_capability(role, "status.read")) {
+    struct json_object *status=time_status_json(); send_json(fd,"time",status); json_object_put(status);
+  } else if (!strcmp(type, "time.path.get") && role_has_capability(role, "status.read")) {
+    struct json_object *data=request_data(request);const char *path=object_string(data,"path");struct json_object *policy=time_policy_load();struct json_object *value=policy?console_path_get(policy,path):NULL;
+    if(!value)send_error(fd,404,"time policy path not found");else send_json(fd,"value",value);if(policy)json_object_put(policy);
+  } else if (!strcmp(type, "time.path.set")) {
+    struct json_object *data=request_data(request);const char *path=object_string(data,"path"),*value=object_string(data,"value");
+    if(!role_has_capability(role,"services.manage"))send_error(fd,403,"time configuration requires administrator access");
+    else if(!path||value==NULL)send_error(fd,400,"path and value are required");
+    else {char error[256]={0};struct json_object *policy=time_policy_load();struct json_object *delta=console_delta_from_path(path,value,error,sizeof(error));if(!policy||!delta)send_error(fd,400,error[0]?error:"invalid time value");else{json_deep_merge(policy,delta);if(time_policy_save(policy,error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Time policy updated"));send_json(fd,"ack",ack);json_object_put(ack);}}if(delta)json_object_put(delta);if(policy)json_object_put(policy);}
+  } else if (!strcmp(type, "time.set")) {
+    struct json_object *data=request_data(request);
+    if(!role_has_capability(role,"services.manage")) send_error(fd,403,"time configuration requires administrator access");
+    else {char error[256]={0};if(time_policy_save(data,error,sizeof(error))!=0)send_error(fd,400,error[0]?error:"time policy rejected");else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Time policy saved"));send_json(fd,"ack",ack);json_object_put(ack);}}
+  } else if (!strcmp(type, "time.set_clock")) {
+    struct json_object *data=request_data(request), *epoch=NULL;
+    if(!role_has_capability(role,"services.manage")) send_error(fd,403,"setting the clock requires administrator access");
+    else if(!data || !json_object_object_get_ex(data,"epoch",&epoch) || !json_object_is_type(epoch,json_type_int)) send_error(fd,400,"epoch is required");
+    else {char error[256]={0};if(time_set_epoch((time_t)json_object_get_int64(epoch),error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("System clock updated"));send_json(fd,"ack",ack);json_object_put(ack);}}
+  } else if (!strcmp(type, "time.sync")) {
+    if(!role_has_capability(role,"services.manage")) send_error(fd,403,"time synchronization requires administrator access");
+    else {char error[256]={0};if(time_force_sync(error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Time synchronization requested"));send_json(fd,"ack",ack);json_object_put(ack);}}
+  } else if (!strcmp(type, "services.apply")) {
+    if(!role_has_capability(role,"services.manage"))send_error(fd,403,"service configuration requires administrator access");
+    else{char error[256]={0};if(service_policy_apply(error,sizeof(error))!=0)send_error(fd,400,error[0]?error:"service policy apply failed");else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Service policy applied"));send_json(fd,"ack",ack);json_object_put(ack);}}
   } else if (!strcmp(type, "snapshot.get") && role_has_capability(role, "status.read")) {
     struct json_object *snapshot = json_object_new_object();
     struct json_object *status = get_status();
