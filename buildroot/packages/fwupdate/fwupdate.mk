@@ -39,6 +39,8 @@ define FWUPDATE_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/bin/fw_update_sftp
 	$(INSTALL) -D -m 0755 $(@D)/files/fw_update_status \
 		$(TARGET_DIR)/bin/fw_update_status
+	$(INSTALL) -D -m 0755 $(@D)/files/fw_factory_reset \
+		$(TARGET_DIR)/bin/fw_factory_reset
 	$(INSTALL) -D -m 0755 $(@D)/files/fwupdate-finalize \
 		$(TARGET_DIR)/usr/sbin/fwupdate-finalize
 	$(INSTALL) -D -m 0755 $(@D)/files/S05fwupdate-finalize \

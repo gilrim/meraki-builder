@@ -156,6 +156,10 @@ struct json_object *hardware_capabilities_json(const struct hardware_info *info)
   json_object_array_add(modes, json_object_new_string("af"));
   json_object_array_add(modes, json_object_new_string("at"));
   json_object_object_add(poe, "modes", modes);
+  struct json_object *policies = json_object_new_array();
+  json_object_array_add(policies, json_object_new_string("normal"));
+  json_object_array_add(policies, json_object_new_string("boot-prune"));
+  json_object_object_add(poe, "policies", policies);
   json_object_object_add(caps, "poe", poe);
   return caps;
 }

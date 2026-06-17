@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+mkdir -p /run/postmerkos/poe-pruned
+rm -f /run/postmerkos/poe-pruned/* 2>/dev/null || true
+count=$(postmerkosctl status 2>/dev/null | sed -n 's/.*"ports"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -n1)
+[ -n "$count" ] || count=0
+ports=""; wait_seconds=0; port=1
+while [ "$port" -le "$count" ]; do
+    policy=$(postmerkosctl get "ports.$port.poe.policy" 2>/dev/null || true)
+    if [ "$policy" = boot-prune ]; then
+        enabled=$(postmerkosctl get "ports.$port.poe.enabled" 2>/dev/null || echo false)
+        if [ "$enabled" = true ]; then
+            seconds=$(postmerkosctl get "ports.$port.poe.observation_seconds" 2>/dev/null || echo 300)
+            case "$seconds" in ''|*[!0-9]*) seconds=300 ;; esac
+            [ "$seconds" -gt "$wait_seconds" ] && wait_seconds=$seconds
+            ports="$ports $port:$seconds"
+        fi
+    fi
+    port=$((port+1))
+done
+[ -n "$ports" ] || exit 0
+sleep "$wait_seconds"
+for item in $ports; do
+    port=${item%%:*}; seconds=${item#*:}; [ "$seconds" -le "$wait_seconds" ] || continue
+    watts=$(pd690xx -p "$port" 2>/dev/null | awk 'match($0,/[0-9]+([.][0-9]+)?/){print substr($0,RSTART,RLENGTH); exit}')
+    active=$(awk -v w="${watts:-0}" 'BEGIN { print (w > 0.2) ? 1 : 0 }')
+    if [ "$active" -eq 0 ]; then
+        pd690xx -d "$port" >/dev/null 2>&1 || true
+        printf 'boot-pruned at %s\n' "$(date +%s 2>/dev/null || echo 0)" > "/run/postmerkos/poe-pruned/$port"
+    fi
+done

@@ -188,16 +188,28 @@ static int validate_port_stp(struct json_object *stp, const char *path,
 
 static int validate_poe(struct json_object *poe, unsigned int port,
                         const char *path, char *error, size_t error_size) {
-  const char *keys[] = {"enabled", "mode"};
+  const char *keys[] = {"enabled", "mode", "policy", "observation_seconds"};
   if (!hardware_port_supports_poe(&hardware, port))
     return bad(error, error_size, "%s is not supported by port %u", path, port);
-  if (reject_unknown(poe, keys, 2, path, error, error_size) != 0) return -EINVAL;
+  if (reject_unknown(poe, keys, 4, path, error, error_size) != 0) return -EINVAL;
   if (require_bool(poe, "enabled", path, true, error, error_size) != 0 ||
       require_string(poe, "mode", path, true, 2, error, error_size) != 0)
     return -EINVAL;
   const char *mode = json_object_get_string(json_object_object_get(poe, "mode"));
   if (strcmp(mode, "af") && strcmp(mode, "at"))
     return bad(error, error_size, "%s.mode must be af or at", path);
+  struct json_object *policy = NULL;
+  if (json_object_object_get_ex(poe, "policy", &policy)) {
+    if (!json_object_is_type(policy, json_type_string))
+      return bad(error, error_size, "%s.policy must be a string", path);
+    const char *value = json_object_get_string(policy);
+    if (strcmp(value, "normal") && strcmp(value, "boot-prune"))
+      return bad(error, error_size, "%s.policy must be normal or boot-prune", path);
+  }
+  if (json_object_object_get_ex(poe, "observation_seconds", &policy) &&
+      (!json_object_is_type(policy, json_type_int) ||
+       json_object_get_int(policy) < 30 || json_object_get_int(policy) > 3600))
+    return bad(error, error_size, "%s.observation_seconds must be 30-3600", path);
   return 0;
 }
 

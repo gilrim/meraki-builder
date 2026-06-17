@@ -38,6 +38,8 @@ static const char *log_path = DEFAULT_LOG;
 static const char *status_source = "";
 static const char *status_firmware = "";
 static const char *status_target_version = "unknown";
+static const char *led_handler = NULL;
+static unsigned int led_ports = 0;
 static FILE *log_file;
 static bool reboot_after = true;
 
@@ -55,6 +57,18 @@ static void json_escape(FILE *f, const char *s) {
             else fputc(*p, f);
         }
     }
+}
+
+static void update_leds(int progress, bool error) {
+    if (!led_handler || !led_ports) return;
+    unsigned int lit = error ? led_ports :
+        (unsigned int)(((uint64_t)led_ports * (unsigned int)progress + 50U) / 100U);
+    FILE *led = fopen(led_handler, "w");
+    if (!led) return;
+    for (unsigned int port = 1; port <= led_ports; port++)
+        fprintf(led, "PORT %u, STATE %u\n", port,
+                error ? 1U : (port <= lit ? 1U : 0U));
+    fclose(led);
 }
 
 static void write_status(const char *state, const char *stage, int progress,
@@ -83,6 +97,7 @@ static void write_status(const char *state, const char *stage, int progress,
         fflush(log_file);
         (void)fsync(fileno(log_file));
     }
+    update_leds(progress, !strcmp(state, "error"));
     int console = open("/dev/console", O_WRONLY | O_NOCTTY);
     if (console >= 0) {
         dprintf(console, "\r\nFWUPDATE [%s %d%%] %s\r\n", stage,
@@ -462,7 +477,8 @@ static void usage(FILE *f) {
         "  --rootfs-backup FILE\n"
         "  --overlay-image FILE --overlay-mtd DEV [--overlay-backup FILE]\n"
         "  --status-file FILE --log-file FILE\n"
-        "  --source TEXT --firmware NAME --target-version VERSION --no-reboot\n");
+        "  --source TEXT --firmware NAME --target-version VERSION\n"
+        "  --led-handler PATH --led-ports COUNT --no-reboot\n");
 }
 
 int main(int argc, char **argv) {
@@ -491,6 +507,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--source") && ++i < argc) status_source = argv[i];
         else if (!strcmp(argv[i], "--firmware") && ++i < argc) status_firmware = argv[i];
         else if (!strcmp(argv[i], "--target-version") && ++i < argc) status_target_version = argv[i];
+        else if (!strcmp(argv[i], "--led-handler") && ++i < argc) led_handler = argv[i];
+        else if (!strcmp(argv[i], "--led-ports") && ++i < argc) led_ports = (unsigned int)strtoul(argv[i], NULL, 10);
         else if (!strcmp(argv[i], "--no-reboot")) reboot_after = false;
         else if (!strcmp(argv[i], "--help")) { usage(stdout); return 0; }
         else { usage(stderr); return 2; }

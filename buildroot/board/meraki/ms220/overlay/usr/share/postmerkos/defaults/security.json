@@ -1,5 +1,7 @@
 {
   "serial_authentication": "disabled",
   "default_password_warning": true,
-  "compatibility_notice_ack": null
+  "compatibility_notice_ack": null,
+  "reset_button_path": "",
+  "reset_button_active": 0
 }
