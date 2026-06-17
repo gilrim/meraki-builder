@@ -5,6 +5,7 @@
 #include "release.h"
 #include "service_ops.h"
 #include "time_ops.h"
+#include "compatibility.h"
 
 #include <libpostmerkos.h>
 #include <libpd690xx.h>
@@ -146,6 +147,7 @@ struct json_object *get_status(void) {
   json_object_object_add(root, "services", service_status_json());
   json_object_object_add(root, "capabilities",
                          hardware_capabilities_json(&hardware));
+  json_object_object_add(root, "compatibility_notice", compatibility_notice_json());
   json_object_object_add(root, "network", network_manager_status_json());
   struct json_object *security = json_object_new_object();
   const char *default_marker = getenv("POSTMERKOS_DEFAULT_PASSWORD_MARKER");

@@ -316,13 +316,58 @@ int firmware_repositories_save(struct json_object *repositories,
 
 struct json_object *firmware_repository_check(const char *source) {
   struct json_object *result = json_object_new_object();
-  if (!source || !*source) {
+  if (!source || (strncmp(source, "http://", 7) && strncmp(source, "https://", 8)) ||
+      strlen(source) > 512 || strchr(source, '\n') || strchr(source, '\r')) {
     json_object_object_add(result, "ok", json_object_new_boolean(false));
-    json_object_object_add(result, "message", json_object_new_string("repository URL is required"));
+    json_object_object_add(result, "message",
+                           json_object_new_string("a valid HTTP or HTTPS repository URL is required"));
     return result;
   }
-  struct json_object *exec = terminal_execute(source);
-  json_object_object_add(result, "command", json_object_new_string(source));
-  json_object_object_add(result, "result", exec);
+  const char *program = access("/usr/bin/fw_update_http", X_OK) == 0
+      ? "/usr/bin/fw_update_http" : "/bin/fw_update_http";
+  if (access(program, X_OK) != 0) {
+    json_object_object_add(result, "ok", json_object_new_boolean(false));
+    json_object_object_add(result, "message",
+                           json_object_new_string("HTTP firmware support is not installed"));
+    return result;
+  }
+  int pipefd[2];
+  if (pipe(pipefd) != 0) {
+    json_object_object_add(result, "ok", json_object_new_boolean(false));
+    json_object_object_add(result, "message", json_object_new_string(strerror(errno)));
+    return result;
+  }
+  pid_t child = fork();
+  if (child == 0) {
+    dup2(pipefd[1], STDOUT_FILENO);
+    dup2(pipefd[1], STDERR_FILENO);
+    close(pipefd[0]); close(pipefd[1]);
+    execl(program, "fw_update_http", "--list", "--source", source,
+          (char *)NULL);
+    _exit(127);
+  }
+  close(pipefd[1]);
+  if (child < 0) {
+    int saved = errno; close(pipefd[0]);
+    json_object_object_add(result, "ok", json_object_new_boolean(false));
+    json_object_object_add(result, "message", json_object_new_string(strerror(saved)));
+    return result;
+  }
+  char output[32768];
+  size_t used = 0;
+  while (used < sizeof(output) - 1) {
+    ssize_t got = read(pipefd[0], output + used, sizeof(output) - 1 - used);
+    if (got < 0 && errno == EINTR) continue;
+    if (got <= 0) break;
+    used += (size_t)got;
+  }
+  close(pipefd[0]); output[used] = '\0';
+  int status = 0; waitpid(child, &status, 0);
+  bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  json_object_object_add(result, "ok", json_object_new_boolean(ok));
+  json_object_object_add(result, "source", json_object_new_string(source));
+  json_object_object_add(result, "output", json_object_new_string(output));
+  json_object_object_add(result, "message", json_object_new_string(
+      ok ? "Repository catalog loaded" : "Repository catalog check failed"));
   return result;
 }

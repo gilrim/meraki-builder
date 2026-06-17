@@ -154,28 +154,47 @@ show_range() {
     "$CTL" ports "$first-$last" || echo 'Port status is unavailable.'
 }
 
+port_status_pager() {
+    local page=0 first last pages answer
+    pages=$(( (COPPER_PORTS + 11) / 12 ))
+    [ "$SFP_FIRST" -le "$SFP_LAST" ] && pages=$((pages + 1))
+    while [ "$page" -lt "$pages" ]; do
+        if [ "$page" -lt $(( (COPPER_PORTS + 11) / 12 )) ]; then
+            first=$((page * 12 + 1)); last=$((first + 11)); [ "$last" -gt "$COPPER_PORTS" ] && last=$COPPER_PORTS
+            heading "Port Status — Copper $first-$last"
+        else
+            first=$SFP_FIRST; last=$SFP_LAST
+            heading "Port Status — SFP/SFP+ $first-$last"
+        fi
+        show_range "$first" "$last"
+        printf '\nEnter: next page   p: previous page   c: configure a port   b: back\nports> '
+        IFS= read -r answer || return
+        case "$answer" in
+            b|B) return ;;
+            p|P) [ "$page" -gt 0 ] && page=$((page - 1)) ;;
+            c|C) printf 'Port number: '; read -r answer; valid_port "$answer" && port_menu "$answer" ;;
+            '') page=$((page + 1)); [ "$page" -ge "$pages" ] && return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
 system_status_menu() {
     while :; do
         heading 'Status'
-        cat <<EOF_STATUS
-1) System overview
-2) All ports
-3) Copper RJ45 ports (1-$COPPER_PORTS)
-EOF_STATUS
-        [ "$SFP_FIRST" -le "$SFP_LAST" ] && printf '4) SFP/SFP+ ports (%s-%s)\n' "$SFP_FIRST" "$SFP_LAST"
         cat <<'EOF_STATUS'
-5) Firmware updater status
-6) Current complete configuration
+1) System overview
+2) Paged port status
+3) Firmware update history
+4) Current complete configuration
 b) Back
 EOF_STATUS
         read_choice 'status> '
         case "$CHOICE" in
             1) heading 'System overview'; "$CTL" summary; pause ;;
-            2) heading 'All ports'; show_range 1 "$TOTAL_PORTS"; pause ;;
-            3) heading 'Copper RJ45 ports'; show_range 1 "$COPPER_PORTS"; pause ;;
-            4) if [ "$SFP_FIRST" -le "$SFP_LAST" ]; then heading 'SFP/SFP+ ports'; show_range "$SFP_FIRST" "$SFP_LAST"; pause; else echo 'No separate SFP range is defined.'; pause; fi ;;
-            5) heading 'Firmware updater status'; fw_update_status 2>/dev/null || cat /run/fwupdate/status.json 2>/dev/null || echo 'No update status is available.'; pause ;;
-            6) heading 'Persistent switch configuration'; "$CTL" config; pause ;;
+            2) port_status_pager ;;
+            3) heading 'Firmware update history'; fw_update_status 2>/dev/null || cat /config/postmerkos/update-history/last.json 2>/dev/null || echo 'No firmware update history is available.'; pause ;;
+            4) heading 'Persistent switch configuration'; "$CTL" config; pause ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac
@@ -761,30 +780,29 @@ backup_restore_menu() {
 }
 
 list_users() {
-    awk -F: '$3 == 0 || $3 >= 1000 {printf "%-20s uid=%-5s home=%-20s shell=%s\\n", $1, $3, $6, $7}' /etc/passwd
-    echo
-    echo 'Web-management administrators:'
-    echo '  root'
-    awk -F: '$1 == "postmerkos-admin" {gsub(/,/, "\\n  ", $4); if ($4 != "") print "  "$4}' /etc/group
-}
-
-ensure_admin_group() {
-    grep -q '^postmerkos-admin:' /etc/group 2>/dev/null && return 0
-    command -v addgroup >/dev/null 2>&1 || return 1
-    addgroup postmerkos-admin >/dev/null 2>&1
+    printf '%-20s %-10s %s\n' USER ROLE SHELL
+    printf '%-20s %-10s %s\n' '--------------------' '----------' '--------------------'
+    while IFS=: read -r user _ uid _ _ home shell; do
+        [ "$uid" = 0 ] || [ "$uid" -ge 1000 ] 2>/dev/null || continue
+        role=none
+        [ "$user" = root ] && role=admin
+        grep -q "^postmerkos-admin:.*\(^\|,\)$user\(,\|$\)" /etc/group 2>/dev/null && role=admin
+        [ "$role" = none ] && grep -q "^postmerkos-operator:.*\(^\|,\)$user\(,\|$\)" /etc/group 2>/dev/null && role=operator
+        [ "$role" = none ] && grep -q "^postmerkos-viewer:.*\(^\|,\)$user\(,\|$\)" /etc/group 2>/dev/null && role=viewer
+        printf '%-20s %-10s %s\n' "$user" "$role" "$shell"
+    done </etc/passwd
 }
 
 user_management_menu() {
-    local user
+    local user password role
     while :; do
         heading 'User Management'
         cat <<'EOF_USER'
-1) List login and administrator accounts
+1) List management accounts
 2) Change an account password
-3) Create a management administrator
-4) Grant web-management access
-5) Revoke web-management access
-6) Delete a non-root account
+3) Create account
+4) Change account role
+5) Delete a non-root account
 b) Back
 EOF_USER
         read_choice 'users> '
@@ -792,13 +810,27 @@ EOF_USER
             1) heading 'Accounts'; list_users; pause ;;
             2) printf 'Account [root]: '; read -r user; user=${user:-root}; passwd "$user"; pause ;;
             3)
-                command -v adduser >/dev/null 2>&1 || { echo 'adduser is not installed.'; pause; continue; }
-                printf 'New administrator username: '; read -r user
-                if valid_username "$user" && ensure_admin_group; then adduser "$user" && addgroup "$user" postmerkos-admin; else echo 'Unable to create administrator.'; fi
+                printf 'Username: '; read -r user
+                password=$(read_secret 'Initial password: ')
+                printf 'Role (admin/operator/viewer) [viewer]: '; read -r role; role=${role:-viewer}
+                case "$role" in admin|operator|viewer) ;; *) echo 'Invalid role.'; pause; continue ;; esac
+                if valid_username "$user" && [ ${#password} -ge 8 ]; then
+                    "$CTL" user-create "$user" "$password" "$role"
+                else echo 'Username is invalid or password is shorter than 8 characters.'; fi
+                password=
                 pause ;;
-            4) printf 'Username: '; read -r user; if valid_username "$user" && ensure_admin_group; then addgroup "$user" postmerkos-admin; else echo 'Invalid username or group operation failed.'; fi; pause ;;
-            5) printf 'Username: '; read -r user; if [ "$user" = root ]; then echo 'Root authorization cannot be revoked.'; elif valid_username "$user" && command -v delgroup >/dev/null 2>&1; then delgroup "$user" postmerkos-admin; else echo 'Unable to revoke access.'; fi; pause ;;
-            6) printf 'Username: '; read -r user; if [ "$user" = root ]; then echo 'Root cannot be deleted.'; elif valid_username "$user" && confirm_word DELETE "Type DELETE to remove $user: "; then deluser "$user"; else echo 'Deletion cancelled.'; fi; pause ;;
+            4)
+                printf 'Username: '; read -r user
+                [ "$user" = root ] && { echo 'Root must remain an administrator.'; pause; continue; }
+                printf 'Role (admin/operator/viewer): '; read -r role
+                case "$role" in admin|operator|viewer) "$CTL" user-role "$user" "$role" ;; *) echo 'Invalid role.' ;; esac
+                pause ;;
+            5)
+                printf 'Username: '; read -r user
+                if [ "$user" = root ]; then echo 'Root cannot be deleted.'
+                elif valid_username "$user" && confirm_word DELETE "Type DELETE to remove $user: "; then "$CTL" user-delete "$user"
+                else echo 'Deletion cancelled.'; fi
+                pause ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac
@@ -991,20 +1023,46 @@ Scriptable compatibility:
 EOF_USAGE
 }
 
+compatibility_first_access() {
+    local answer
+    [ "$("$CTL" compatibility-needed 2>/dev/null || echo no)" = yes ] || return 0
+    while :; do
+        heading 'Untested Switch Model'
+        cat <<'EOF_COMPAT'
+This switch model is currently marked as untested.
+
+postmerkOS has booted successfully, but port mapping, PoE, LED control, and
+firmware update behavior may not have been confirmed on this exact model.
+Please consider opening an issue in the project repository with a compatibility
+report and any errors you observe.
+
+1) Display diagnostic compatibility report
+2) Display issue-report information
+3) Dismiss for this firmware version
+4) Remind me next time
+EOF_COMPAT
+        read_choice 'compatibility> '
+        case "$CHOICE" in
+            1) heading 'Compatibility Report'; "$CTL" compatibility-report; pause ;;
+            2) heading 'Compatibility Reporting'; echo 'Project issues: https://github.com/Gadorach/meraki-builder/issues'; echo; echo 'Include the diagnostic report, model, port/PoE behavior, and any boot or update errors.'; pause ;;
+            3) "$CTL" compatibility-ack; pause; return ;;
+            4|b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
 main_menu() {
     suppress_console_chatter
+    compatibility_first_access
     while :; do
         heading ''
         echo '- type the preferred option to continue'
         echo
-        echo '1) Status'
-        echo '2) Port Configuration'
-        can firmware.update && echo '3) Firmware Update'
-        echo '4) Backup & Restore'
-        can users.manage && echo '5) User Management'
-        can services.manage && echo '6) Service Management'
-        can system.reboot && echo '7) Power Control'
-        can terminal.exec && echo '8) Shell'
+        printf '%-34s %s\n' '1) Status' '5) User Management'
+        printf '%-34s %s\n' '2) Port Configuration' '6) Service Management'
+        printf '%-34s %s\n' '3) Firmware Update' '7) Power Control'
+        printf '%-34s %s\n' '4) Backup & Restore' '8) Shell'
         echo '0) Log out'
         read_choice 'postmerkOS> '
         case "$CHOICE" in

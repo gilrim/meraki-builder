@@ -185,3 +185,88 @@ int auth_change_password(const char *actor, const char *target,
     unlink("/config/postmerkos/default-password-active");
   return rc;
 }
+
+
+static int run_command(char *const argv[], char *error, size_t error_size) {
+  pid_t child = fork();
+  if (child < 0) { set_error(error, error_size, strerror(errno)); return -errno; }
+  if (child == 0) {
+    int nullfd = open("/dev/null", O_RDWR);
+    if (nullfd >= 0) {
+      dup2(nullfd, STDIN_FILENO); dup2(nullfd, STDOUT_FILENO); dup2(nullfd, STDERR_FILENO);
+      if (nullfd > STDERR_FILENO) close(nullfd);
+    }
+    setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin", 1);
+    execvp(argv[0], argv); _exit(127);
+  }
+  int status = 0;
+  while (waitpid(child, &status, 0) < 0) if (errno != EINTR) { set_error(error, error_size, strerror(errno)); return -errno; }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) { set_error(error, error_size, "account operation failed"); return -EIO; }
+  return 0;
+}
+
+static const char *role_group(const char *role) {
+  if (role && !strcmp(role, "admin")) return "postmerkos-admin";
+  if (role && !strcmp(role, "operator")) return "postmerkos-operator";
+  if (role && !strcmp(role, "viewer")) return "postmerkos-viewer";
+  return NULL;
+}
+
+static int ensure_group(const char *group, char *error, size_t error_size) {
+  if (getgrnam(group)) return 0;
+  char *args[] = {"addgroup", (char *)group, NULL};
+  return run_command(args, error, error_size);
+}
+
+static int group_membership(const char *username, const char *group, bool add,
+                            char *error, size_t error_size) {
+  char *add_args[] = {"addgroup", (char *)username, (char *)group, NULL};
+  char *remove_args[] = {"delgroup", (char *)username, (char *)group, NULL};
+  return run_command(add ? add_args : remove_args, error, error_size);
+}
+
+int auth_set_role(const char *username, const char *role,
+                  char *error, size_t error_size) {
+  if (!safe_username(username) || !getpwnam(username)) { set_error(error, error_size, "unknown user"); return -ENOENT; }
+  if (!strcmp(username, "root")) {
+    if (!role || strcmp(role, "admin")) { set_error(error, error_size, "root must remain an administrator"); return -EPERM; }
+    return 0;
+  }
+  const char *target = role_group(role);
+  if (!target) { set_error(error, error_size, "role must be admin, operator, or viewer"); return -EINVAL; }
+  int rc = ensure_group(target, error, error_size); if (rc != 0) return rc;
+  const char *groups[] = {"postmerkos-admin", "postmerkos-operator", "postmerkos-viewer"};
+  for (size_t i = 0; i < 3; i++) {
+    struct group *group_entry = getgrnam(groups[i]);
+    bool member = false;
+    for (char **m = group_entry ? group_entry->gr_mem : NULL; m && *m; m++) if (!strcmp(*m, username)) member = true;
+    if (!strcmp(groups[i], target)) {
+      if (!member && group_membership(username, groups[i], true, error, error_size) != 0) return -EIO;
+    } else if (member) {
+      char ignored[64] = {0}; group_membership(username, groups[i], false, ignored, sizeof(ignored));
+    }
+  }
+  return 0;
+}
+
+int auth_create_user(const char *username, const char *password,
+                     const char *role, char *error, size_t error_size) {
+  if (!safe_username(username) || getpwnam(username)) { set_error(error, error_size, "username is invalid or already exists"); return -EINVAL; }
+  if (!password || strlen(password) < 8 || strlen(password) > 128 || strchr(password, ':') || strchr(password, '\n')) {
+    set_error(error, error_size, "password must be 8-128 characters without ':' or line breaks"); return -EINVAL;
+  }
+  if (!role_group(role)) { set_error(error, error_size, "role must be admin, operator, or viewer"); return -EINVAL; }
+  char *args[] = {"adduser", "-D", "-s", "/bin/sh", (char *)username, NULL};
+  int rc = run_command(args, error, error_size); if (rc != 0) return rc;
+  rc = run_chpasswd(username, password, error, error_size);
+  if (rc == 0) rc = auth_set_role(username, role, error, error_size);
+  if (rc != 0) { char *del[] = {"deluser", (char *)username, NULL}; char ignored[64]; run_command(del, ignored, sizeof(ignored)); }
+  return rc;
+}
+
+int auth_delete_user(const char *username, char *error, size_t error_size) {
+  if (!safe_username(username) || !getpwnam(username)) { set_error(error, error_size, "unknown user"); return -ENOENT; }
+  if (!strcmp(username, "root")) { set_error(error, error_size, "root cannot be deleted"); return -EPERM; }
+  char *args[] = {"deluser", (char *)username, NULL};
+  return run_command(args, error, error_size);
+}

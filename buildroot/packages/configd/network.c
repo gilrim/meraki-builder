@@ -491,8 +491,13 @@ static int apply_ipv4(const struct ipv4_runtime *value, const char *source,
                         strerror(-secondary));
   }
 
+  bool new_dhcp_lease = !strcmp(source, "dhcp") &&
+      (strcmp(runtime_state.source, "dhcp") ||
+       !ipv4_equal(&runtime_state.applied, value));
   runtime_state.applied = *value;
   snprintf(runtime_state.source, sizeof(runtime_state.source), "%s", source);
+  if (new_dhcp_lease) runtime_state.lease_acquired_at = (long)time(NULL);
+  else if (strcmp(source, "dhcp")) runtime_state.lease_acquired_at = 0;
   snprintf(runtime_state.state, sizeof(runtime_state.state), "%s",
            !strcmp(source, "dhcp") ? "bound" : "applied");
   runtime_state.last_error[0] = '\0';
@@ -556,6 +561,7 @@ static int configure_now(struct json_object *config,
     runtime_state.renew_in = 0;
     runtime_state.expires_in = 0;
     runtime_state.lease_expires_at = 0;
+    runtime_state.lease_acquired_at = 0;
     runtime_state.consecutive_misses = 0;
     return apply_ipv4(&static_value, "static", result);
   }
@@ -656,6 +662,7 @@ int network_manager_observe(struct json_object *config) {
     runtime_state.renew_in = lease.renew_in;
     runtime_state.expires_in = lease.expires_in;
     runtime_state.lease_expires_at = (long)time(NULL) + lease.expires_in;
+    runtime_state.lease_acquired_at = (long)time(NULL);
     snprintf(runtime_state.source, sizeof(runtime_state.source), "dhcp");
     snprintf(runtime_state.state, sizeof(runtime_state.state), "bound");
     return 0;
@@ -750,6 +757,14 @@ struct json_object *network_manager_status_json(void) {
       json_object_new_int((int)runtime_state.renew_in));
   json_object_object_add(ipv4, "expires_in",
       json_object_new_int((int)runtime_state.expires_in));
+  json_object_object_add(ipv4, "lease_acquired_at",
+      runtime_state.lease_acquired_at
+        ? json_object_new_int64(runtime_state.lease_acquired_at)
+        : json_object_new_null());
+  json_object_object_add(ipv4, "lease_expires_at",
+      runtime_state.lease_expires_at
+        ? json_object_new_int64(runtime_state.lease_expires_at)
+        : json_object_new_null());
   json_object_object_add(ipv4, "last_change",
       json_object_new_int64(runtime_state.last_change));
   json_object_object_add(ipv4, "last_error",
