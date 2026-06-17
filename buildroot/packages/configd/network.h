@@ -23,6 +23,7 @@ struct network_runtime {
   unsigned int renew_in;
   unsigned int expires_in;
   long lease_expires_at;
+  long lease_acquired_at;
   long last_change;
   unsigned int consecutive_misses;
   char last_error[192];

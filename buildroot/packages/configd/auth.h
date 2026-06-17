@@ -11,5 +11,10 @@ int auth_change_password(const char *actor, const char *target,
                          const char *actor_password,
                          const char *new_password,
                          char *error, size_t error_size);
+int auth_create_user(const char *username, const char *password,
+                     const char *role, char *error, size_t error_size);
+int auth_delete_user(const char *username, char *error, size_t error_size);
+int auth_set_role(const char *username, const char *role,
+                  char *error, size_t error_size);
 
 #endif

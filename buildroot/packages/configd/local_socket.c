@@ -1,9 +1,12 @@
 #define _GNU_SOURCE
 #include "local_socket.h"
+#include "auth.h"
 #include "config_file.h"
+#include "compatibility.h"
 #include "config_apply.h"
 #include "configd.h"
 #include "result.h"
+#include "port_clone.h"
 #include "validation.h"
 #include "console_cli.h"
 #include "roles.h"
@@ -215,6 +218,23 @@ static void handle_client(int fd) {
       }
       apply_result_cleanup(&result);
     }
+  } else if (!strcmp(type, "compatibility.notice") && role_has_capability(role, "status.read")) {
+    struct json_object *notice=compatibility_notice_json();send_json(fd,"compatibility_notice",notice);json_object_put(notice);
+  } else if (!strcmp(type, "compatibility.report") && role_has_capability(role, "status.read")) {
+    struct json_object *report=compatibility_report_json();send_json(fd,"compatibility_report",report);json_object_put(report);
+  } else if (!strcmp(type, "compatibility.ack") && role_has_capability(role, "status.read")) {
+    char error[256]={0};if(compatibility_acknowledge(error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Compatibility notice dismissed for this firmware"));send_json(fd,"ack",ack);json_object_put(ack);}
+  } else if (!strcmp(type, "users.get") && role_has_capability(role, "status.read")) {
+    struct json_object *users=auth_list_users();send_json(fd,"users",users);json_object_put(users);
+  } else if (!strcmp(type, "users.create")) {
+    struct json_object *data=request_data(request);const char *target=object_string(data,"username"),*password=object_string(data,"password"),*new_role=object_string(data,"role");
+    if(!role_has_capability(role,"users.manage"))send_error(fd,403,"account management requires administrator access");else{char error[256]={0};if(auth_create_user(target,password,new_role,error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *users=auth_list_users();send_json(fd,"users",users);json_object_put(users);}}
+  } else if (!strcmp(type, "users.delete")) {
+    struct json_object *data=request_data(request);const char *target=object_string(data,"username");
+    if(!role_has_capability(role,"users.manage"))send_error(fd,403,"account management requires administrator access");else{char error[256]={0};if(auth_delete_user(target,error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *users=auth_list_users();send_json(fd,"users",users);json_object_put(users);}}
+  } else if (!strcmp(type, "users.role")) {
+    struct json_object *data=request_data(request);const char *target=object_string(data,"username"),*new_role=object_string(data,"role");
+    if(!role_has_capability(role,"users.manage"))send_error(fd,403,"account management requires administrator access");else{char error[256]={0};if(auth_set_role(target,new_role,error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *users=auth_list_users();send_json(fd,"users",users);json_object_put(users);}}
   } else if (!strcmp(type, "services.get") && role_has_capability(role, "status.read")) {
     struct json_object *status = service_status_json();
     send_json(fd, "services", status); json_object_put(status);
@@ -264,6 +284,9 @@ static void handle_client(int fd) {
   } else if (!strcmp(type, "services.apply")) {
     if(!role_has_capability(role,"services.manage"))send_error(fd,403,"service configuration requires administrator access");
     else{char error[256]={0};if(service_policy_apply(error,sizeof(error))!=0)send_error(fd,400,error[0]?error:"service policy apply failed");else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Service policy applied"));send_json(fd,"ack",ack);json_object_put(ack);}}
+  } else if (!strcmp(type, "ports.clone")) {
+    struct json_object *data=request_data(request),*result=NULL;
+    if(!role_has_capability(role,"switching.write"))send_error(fd,403,"port cloning requires operator access");else{char error[256]={0};if(port_clone_apply(data,&result,error,sizeof(error))!=0)send_error(fd,400,error);else{send_json(fd,"ports_cloned",result);json_object_put(result);}}
   } else if (!strcmp(type, "snapshot.get") && role_has_capability(role, "status.read")) {
     struct json_object *snapshot = json_object_new_object();
     struct json_object *status = get_status();

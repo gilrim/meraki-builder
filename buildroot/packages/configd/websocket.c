@@ -3,8 +3,10 @@
 #include "auth.h"
 #include "config_apply.h"
 #include "config_file.h"
+#include "compatibility.h"
 #include "configd.h"
 #include "network.h"
+#include "port_clone.h"
 #include "result.h"
 #include "roles.h"
 #include "status.h"
@@ -19,6 +21,7 @@
 #include <time.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +32,8 @@
 #include <unistd.h>
 
 #define MAX_FIRMWARE_UPLOAD (16U * 1024U * 1024U)
+#define TERMINAL_STREAM_LIMIT (1024U * 1024U)
+#define TERMINAL_STREAM_TIMEOUT_MS 15000LL
 
 struct queued_reply {
   char *text;
@@ -61,6 +66,13 @@ struct per_session_data {
   size_t upload_received;
   bool upload_force;
   bool upload_accept_untested;
+
+  bool terminal_active;
+  int terminal_fd;
+  pid_t terminal_pid;
+  char terminal_token[40];
+  size_t terminal_bytes;
+  long long terminal_deadline_ms;
 };
 
 static struct lws *clients[MAX_CLIENTS];
@@ -74,6 +86,8 @@ static int configured_status_interval = 3;
 static struct lws_sorted_usec_list status_sul;
 static struct lws_sorted_usec_list config_sul;
 static struct lws_sorted_usec_list network_sul;
+static struct lws_sorted_usec_list terminal_sul;
+static bool terminal_poll_scheduled;
 static struct lws_context *ws_context;
 static struct lws *upload_owner;
 
@@ -305,6 +319,159 @@ static bool require_capability(struct lws *wsi,
   return false;
 }
 
+static long long terminal_monotonic_ms(void) {
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (long long)now.tv_sec * 1000LL + now.tv_nsec / 1000000LL;
+}
+
+static void terminal_stop(struct per_session_data *session, bool kill_process) {
+  if (!session) return;
+  if (kill_process && session->terminal_pid > 0) {
+    kill(-session->terminal_pid, SIGKILL);
+    kill(session->terminal_pid, SIGKILL);
+  }
+  if (session->terminal_fd >= 0) close(session->terminal_fd);
+  if (session->terminal_pid > 0) waitpid(session->terminal_pid, NULL, WNOHANG);
+  session->terminal_active = false;
+  session->terminal_fd = -1;
+  session->terminal_pid = 0;
+  session->terminal_bytes = 0;
+  session->terminal_deadline_ms = 0;
+}
+
+static void terminal_emit_exit(struct lws *wsi,
+                               struct per_session_data *session,
+                               int exit_code, bool timed_out,
+                               bool truncated) {
+  struct json_object *data = json_object_new_object();
+  json_object_object_add(data, "token",
+                         json_object_new_string(session->terminal_token));
+  json_object_object_add(data, "exit_code", json_object_new_int(exit_code));
+  json_object_object_add(data, "timed_out", json_object_new_boolean(timed_out));
+  json_object_object_add(data, "truncated", json_object_new_boolean(truncated));
+  queue_response(wsi, session, "terminal_exit", data, NULL);
+  json_object_put(data);
+}
+
+static void terminal_poll_cb(struct lws_sorted_usec_list *sul) {
+  (void)sul;
+  terminal_poll_scheduled = false;
+  bool active = false;
+  for (size_t i = 0; i < client_count; i++) {
+    struct lws *wsi = clients[i];
+    struct per_session_data *session = lws_wsi_user(wsi);
+    if (!session || !session->terminal_active) continue;
+    active = true;
+    bool truncated = false;
+    char buffer[2048];
+    for (;;) {
+      ssize_t got = read(session->terminal_fd, buffer, sizeof(buffer));
+      if (got > 0) {
+        size_t keep = (size_t)got;
+        if (session->terminal_bytes + keep > TERMINAL_STREAM_LIMIT) {
+          keep = TERMINAL_STREAM_LIMIT - session->terminal_bytes;
+          truncated = true;
+        }
+        if (keep) {
+          struct json_object *data = json_object_new_object();
+          json_object_object_add(data, "token",
+              json_object_new_string(session->terminal_token));
+          json_object_object_add(data, "output",
+              json_object_new_string_len(buffer, (int)keep));
+          queue_response(wsi, session, "terminal_output", data, NULL);
+          json_object_put(data);
+          session->terminal_bytes += keep;
+        }
+        if (truncated || session->terminal_bytes >= TERMINAL_STREAM_LIMIT) break;
+        continue;
+      }
+      if (got < 0 && errno == EINTR) continue;
+      break;
+    }
+
+    bool timed_out = terminal_monotonic_ms() >= session->terminal_deadline_ms;
+    if (truncated || timed_out) {
+      pid_t pid = session->terminal_pid;
+      if (pid > 0) { kill(-pid, SIGKILL); kill(pid, SIGKILL); }
+    }
+    int status = 0;
+    pid_t waited = waitpid(session->terminal_pid, &status, WNOHANG);
+    if (waited == session->terminal_pid || truncated || timed_out) {
+      if (waited <= 0) waitpid(session->terminal_pid, &status, 0);
+      int exit_code = 127;
+      if (WIFEXITED(status)) exit_code = WEXITSTATUS(status);
+      else if (WIFSIGNALED(status)) exit_code = 128 + WTERMSIG(status);
+      terminal_emit_exit(wsi, session, exit_code, timed_out, truncated);
+      terminal_stop(session, false);
+      active = false;
+      for (size_t n = 0; n < client_count; n++) {
+        struct per_session_data *other = lws_wsi_user(clients[n]);
+        if (other && other->terminal_active) { active = true; break; }
+      }
+    }
+  }
+  if (active && ws_context) {
+    terminal_poll_scheduled = true;
+    lws_sul_schedule(ws_context, 0, &terminal_sul, terminal_poll_cb,
+                     100000);
+  }
+}
+
+static int terminal_start(struct lws *wsi, struct per_session_data *session,
+                          const char *command, char *error,
+                          size_t error_size) {
+  if (!command || !*command || strlen(command) > 4096) {
+    snprintf(error, error_size, "command must contain 1-4096 characters");
+    return -EINVAL;
+  }
+  if (session->terminal_active) {
+    snprintf(error, error_size, "a terminal command is already running");
+    return -EBUSY;
+  }
+  int output_pipe[2];
+  if (pipe(output_pipe) != 0) {
+    snprintf(error, error_size, "%s", strerror(errno));
+    return -errno;
+  }
+  pid_t child = fork();
+  if (child == 0) {
+    setpgid(0, 0);
+    dup2(output_pipe[1], STDOUT_FILENO);
+    dup2(output_pipe[1], STDERR_FILENO);
+    int nullfd = open("/dev/null", O_RDONLY);
+    if (nullfd >= 0) {
+      dup2(nullfd, STDIN_FILENO);
+      if (nullfd > STDERR_FILENO) close(nullfd);
+    }
+    close(output_pipe[0]); close(output_pipe[1]);
+    setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin", 1);
+    setenv("TERM", "dumb", 1);
+    execl("/bin/sh", "sh", "-c", command, (char *)NULL);
+    _exit(127);
+  }
+  close(output_pipe[1]);
+  if (child < 0) {
+    int saved = errno; close(output_pipe[0]);
+    snprintf(error, error_size, "%s", strerror(saved));
+    return -saved;
+  }
+  int flags = fcntl(output_pipe[0], F_GETFL, 0);
+  if (flags >= 0) fcntl(output_pipe[0], F_SETFL, flags | O_NONBLOCK);
+  session->terminal_active = true;
+  session->terminal_fd = output_pipe[0];
+  session->terminal_pid = child;
+  session->terminal_bytes = 0;
+  session->terminal_deadline_ms = terminal_monotonic_ms() + TERMINAL_STREAM_TIMEOUT_MS;
+  snprintf(session->terminal_token, sizeof(session->terminal_token),
+           "%ld-%ld-%p", (long)time(NULL), (long)child, (void *)wsi);
+  if (!terminal_poll_scheduled && ws_context) {
+    terminal_poll_scheduled = true;
+    lws_sul_schedule(ws_context, 0, &terminal_sul, terminal_poll_cb, 100000);
+  }
+  return 0;
+}
+
 static bool delta_is_operator_safe(struct json_object *delta) {
   if (!delta || !json_object_is_type(delta, json_type_object)) return false;
   json_object_object_foreach(delta, key, value) {
@@ -449,6 +616,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     session->send_initial_status = false;
     session->send_initial_config = false;
     cleanup_upload(wsi, session);
+    terminal_stop(session, true);
     struct json_object *data = json_object_new_object();
     json_object_object_add(data, "message", json_object_new_string("Logged out"));
     queue_response(wsi, session, "auth_required", data, request_id);
@@ -479,6 +647,25 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     return 0;
   }
 
+  if (!strcmp(type, "user_create")) {
+    if (!require_capability(wsi, session, request_id, "users.manage")) return 0;
+    struct json_object *data=request_data_object(message);const char *username=object_string(data,"username"),*password=object_string(data,"password"),*role=object_string(data,"role");char error[256]={0};
+    if(auth_create_user(username,password,role,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
+    struct json_object *reply=json_object_new_object();json_object_object_add(reply,"message",json_object_new_string("Account created"));json_object_object_add(reply,"users",auth_list_users());queue_response(wsi,session,"users",reply,request_id);json_object_put(reply);return 0;
+  }
+  if (!strcmp(type, "user_delete")) {
+    if (!require_capability(wsi, session, request_id, "users.manage")) return 0;
+    struct json_object *data=request_data_object(message);const char *username=object_string(data,"username");char error[256]={0};
+    if(auth_delete_user(username,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
+    struct json_object *reply=json_object_new_object();json_object_object_add(reply,"message",json_object_new_string("Account deleted"));json_object_object_add(reply,"users",auth_list_users());queue_response(wsi,session,"users",reply,request_id);json_object_put(reply);return 0;
+  }
+  if (!strcmp(type, "user_role")) {
+    if (!require_capability(wsi, session, request_id, "users.manage")) return 0;
+    struct json_object *data=request_data_object(message);const char *username=object_string(data,"username"),*role=object_string(data,"role");char error[256]={0};
+    if(auth_set_role(username,role,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
+    struct json_object *reply=json_object_new_object();json_object_object_add(reply,"message",json_object_new_string("Account role updated"));json_object_object_add(reply,"users",auth_list_users());queue_response(wsi,session,"users",reply,request_id);json_object_put(reply);return 0;
+  }
+
   if (!strcmp(type, "password_change")) {
     struct json_object *data = request_data_object(message);
     const char *target = object_string(data, "username");
@@ -496,6 +683,25 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
                            json_object_new_string("Password updated"));
     json_object_object_add(ack, "username", json_object_new_string(target));
     queue_response(wsi, session, "ack", ack, request_id);
+    json_object_put(ack);
+    return 0;
+  }
+
+  if (!strcmp(type, "terminal_start")) {
+    if (!require_capability(wsi, session, request_id, "terminal.exec")) return 0;
+    struct json_object *data = request_data_object(message);
+    const char *command = object_string(data, "command");
+    char error[256] = {0};
+    if (terminal_start(wsi, session, command, error, sizeof(error)) != 0) {
+      queue_bad_request(wsi, session, request_id, error);
+      return 0;
+    }
+    struct json_object *ack = json_object_new_object();
+    json_object_object_add(ack, "token",
+                           json_object_new_string(session->terminal_token));
+    json_object_object_add(ack, "message",
+                           json_object_new_string("Terminal command started"));
+    queue_response(wsi, session, "terminal_started", ack, request_id);
     json_object_put(ack);
     return 0;
   }
@@ -681,6 +887,15 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     json_object_put(repos);
     return 0;
   }
+  if (!strcmp(type, "firmware_repo_check")) {
+    if (!require_capability(wsi, session, request_id, "firmware.history.read")) return 0;
+    struct json_object *data = request_data_object(message);
+    const char *url = object_string(data, "url");
+    struct json_object *result = firmware_repository_check(url);
+    queue_response(wsi, session, "firmware_repository_check", result, request_id);
+    json_object_put(result);
+    return 0;
+  }
   if (!strcmp(type, "firmware_repo_set")) {
     if (!require_capability(wsi, session, request_id, "firmware.update")) return 0;
     struct json_object *data = request_data_object(message);
@@ -694,6 +909,15 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     return 0;
   }
 
+  if (!strcmp(type, "compatibility_report")) {
+    if (!require_capability(wsi, session, request_id, "status.read")) return 0;
+    struct json_object *report=compatibility_report_json();queue_response(wsi,session,"compatibility_report",report,request_id);json_object_put(report);return 0;
+  }
+  if (!strcmp(type, "compatibility_ack")) {
+    if (!require_capability(wsi, session, request_id, "status.read")) return 0;
+    char error[256]={0};if(compatibility_acknowledge(error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
+    struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Compatibility notice dismissed for this firmware"));queue_response(wsi,session,"ack",ack,request_id);json_object_put(ack);refresh_status_cache(true);return 0;
+  }
   if (!strcmp(type, "services_get")) {
     if (!require_capability(wsi, session, request_id, "status.read")) return 0;
     struct json_object *data=service_status_json(); queue_response(wsi,session,"services",data,request_id); json_object_put(data); return 0;
@@ -723,6 +947,12 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     if (!require_capability(wsi, session, request_id, "services.manage")) return 0;
     char error[256]={0};if(time_force_sync(error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
     struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Time synchronization requested"));queue_response(wsi,session,"ack",ack,request_id);json_object_put(ack);return 0;
+  }
+  if (!strcmp(type, "ports_clone")) {
+    if (!require_capability(wsi, session, request_id, "switching.write")) return 0;
+    struct json_object *data=request_data_object(message),*result=NULL;char error[256]={0};
+    if(port_clone_apply(data,&result,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
+    queue_response(wsi,session,"ports_cloned",result,request_id);json_object_put(result);refresh_status_cache(true);struct json_object *updated=load_config_file();if(updated){refresh_config_cache(updated,true);json_object_put(updated);}return 0;
   }
   if (!strcmp(type, "get_status")) {
     if (!require_capability(wsi, session, request_id, "status.read")) return 0;
@@ -908,6 +1138,7 @@ static int configd_ws_callback(struct lws *wsi,
       if (client_count >= MAX_CLIENTS) return -1;
       memset(session, 0, sizeof(*session));
       session->upload_fd = -1;
+      session->terminal_fd = -1;
       add_client(wsi);
       struct json_object *data = json_object_new_object();
       json_object_object_add(data, "message", json_object_new_string(
@@ -920,6 +1151,7 @@ static int configd_ws_callback(struct lws *wsi,
     case LWS_CALLBACK_CLOSED:
       remove_client(wsi);
       cleanup_upload(wsi, session);
+      terminal_stop(session, true);
       reset_receive(session);
       free_replies(session);
       printf("ws: client disconnected (%zu total)\n", client_count);
@@ -1024,6 +1256,12 @@ void ws_shutdown(struct lws_context *context) {
   lws_sul_cancel(&status_sul);
   lws_sul_cancel(&config_sul);
   lws_sul_cancel(&network_sul);
+  lws_sul_cancel(&terminal_sul);
+  terminal_poll_scheduled = false;
+  for (size_t i = 0; i < client_count; i++) {
+    struct per_session_data *session = lws_wsi_user(clients[i]);
+    if (session) terminal_stop(session, true);
+  }
   free(cached_status_json);
   free(cached_config_json);
   cached_status_json = NULL;

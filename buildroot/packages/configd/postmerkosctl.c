@@ -208,6 +208,8 @@ static void usage(FILE *stream) {
         "  status | summary | ports FIRST-LAST | port PORT\n"
         "  get PATH | set PATH VALUE | set-string PATH TEXT | apply-json JSON\n"
         "  config | backup FILE | validate FILE | restore FILE | reboot\n"
+        "  compatibility-needed | compatibility-report | compatibility-ack\n"
+        "  users | user-create USER PASSWORD ROLE | user-role USER ROLE | user-delete USER\n"
         "  services | services-set JSON | services-apply | service NAME ACTION\n"
         "  service-get PATH | service-set PATH VALUE\n"
         "  time | time-set JSON | time-get PATH | time-set-field PATH VALUE\n"
@@ -336,6 +338,53 @@ int main(int argc, char **argv) {
     struct json_object *result = reply_data(reply);
     if (!result) { if (reply) json_object_put(reply); return 1; }
     puts(string_member(result, "message", "Configuration restored"));
+    json_object_put(reply); return 0;
+  }
+  if (!strcmp(command, "compatibility-needed") ||
+      !strcmp(command, "compatibility-report") ||
+      !strcmp(command, "compatibility-ack")) {
+    const char *type = !strcmp(command, "compatibility-needed") ? "compatibility.notice" :
+                       !strcmp(command, "compatibility-report") ? "compatibility.report" :
+                                                                  "compatibility.ack";
+    struct json_object *reply = request(type, NULL);
+    struct json_object *data = reply_data(reply);
+    if (!data) { if (reply) json_object_put(reply); return 1; }
+    if (!strcmp(command, "compatibility-needed"))
+      puts(bool_member(data, "required", false) ? "yes" : "no");
+    else if (!strcmp(command, "compatibility-ack"))
+      puts(string_member(data, "message", "Compatibility notice acknowledged"));
+    else
+      puts(json_object_to_json_string_ext(data, JSON_C_TO_STRING_PRETTY));
+    json_object_put(reply);
+    return 0;
+  }
+  if (!strcmp(command, "users")) {
+    struct json_object *reply = request("users.get", NULL);
+    struct json_object *data = reply_data(reply);
+    if (!data) { if (reply) json_object_put(reply); return 1; }
+    puts(json_object_to_json_string_ext(data, JSON_C_TO_STRING_PRETTY));
+    json_object_put(reply); return 0;
+  }
+  if (!strcmp(command, "user-create") || !strcmp(command, "user-role") ||
+      !strcmp(command, "user-delete")) {
+    int needed = !strcmp(command, "user-create") ? 5 :
+                 !strcmp(command, "user-role") ? 4 : 3;
+    if (argc != needed) { usage(stderr); return 2; }
+    struct json_object *data = json_object_new_object();
+    json_object_object_add(data, "username", json_object_new_string(argv[2]));
+    const char *type = NULL;
+    if (!strcmp(command, "user-create")) {
+      json_object_object_add(data, "password", json_object_new_string(argv[3]));
+      json_object_object_add(data, "role", json_object_new_string(argv[4]));
+      type = "users.create";
+    } else if (!strcmp(command, "user-role")) {
+      json_object_object_add(data, "role", json_object_new_string(argv[3]));
+      type = "users.role";
+    } else type = "users.delete";
+    struct json_object *reply = request(type, data); json_object_put(data);
+    struct json_object *result = reply_data(reply);
+    if (!result) { if (reply) json_object_put(reply); return 1; }
+    puts(json_object_to_json_string_ext(result, JSON_C_TO_STRING_PRETTY));
     json_object_put(reply); return 0;
   }
   if (!strcmp(command, "services") || !strcmp(command, "time")) {
