@@ -29,6 +29,7 @@ endef
 
 define CONFIGD_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/configd $(TARGET_DIR)/bin/configd
+	$(INSTALL) -D -m 0755 $(@D)/postmerkosctl $(TARGET_DIR)/usr/bin/postmerkosctl
 endef
 
 $(eval $(generic-package))

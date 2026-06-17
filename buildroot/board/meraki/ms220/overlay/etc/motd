@@ -3,4 +3,8 @@
 | '_ \ / _ \/ __| __| '_ ` _ \ / _ \ '__| |/ / | | \___ \ 
 | |_) | (_) \__ \ |_| | | | | |  __/ |  |   <| |_| |___) |
 | .__/ \___/|___/\__|_| |_| |_|\___|_|  |_|\_\\___/|____/ 
-|_|                                                       
+|_|
+
+postmerkOS local management firmware
+Run "pmc" to enter the management console.
+WARNING: If the default password warning is shown, change the root password when practical.

@@ -138,6 +138,13 @@ struct json_object *get_status(void) {
   json_object_object_add(root, "capabilities",
                          hardware_capabilities_json(&hardware));
   json_object_object_add(root, "network", network_manager_status_json());
+  struct json_object *security = json_object_new_object();
+  const char *default_marker = getenv("POSTMERKOS_DEFAULT_PASSWORD_MARKER");
+  if (!default_marker || !*default_marker)
+    default_marker = "/config/postmerkos/default-password-active";
+  json_object_object_add(security, "default_password_active",
+                         json_object_new_boolean(access(default_marker, F_OK) == 0));
+  json_object_object_add(root, "security", security);
   add_temperatures(root, errors);
   add_port_status(root, errors);
 

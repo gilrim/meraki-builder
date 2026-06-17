@@ -11,18 +11,24 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 printf '52\n' >/tmp/NUM_PORTS
-cat >"$TMP/configd" <<'MOCK'
+cat >"$TMP/postmerkosctl" <<'MOCK'
 #!/bin/sh
 printf '%s\n' "$*" >>"$POSTMERKOS_TEST_LOG"
+role=${POSTMERKOS_TEST_ROLE:-administrator}
 case "$1" in
-  --show-ports) printf 'PORT LINK SPEED ADMIN POE VLAN MODE NAME\n1 down 0 enabled at 10 access test\n' ;;
-  --show-port)
-    if [ "$2" = 49 ]; then
-      printf 'Port 49\n  Administrative: enabled\n  PoE: not supported\n'
-    else
-      printf 'Port %s\n  Administrative: enabled\n  PoE: enabled (at)\n' "$2"
-    fi ;;
-  --get-path)
+  role) echo "$role" ;;
+  has)
+    case "$role:$2" in
+      administrator:*) exit 0 ;;
+      operator:status.read|operator:config.read|operator:ports.write|operator:switching.write|operator:backup.create|operator:system.reboot) exit 0 ;;
+      viewer:status.read|viewer:config.read|viewer:firmware.history.read) exit 0 ;;
+      *) exit 1 ;;
+    esac ;;
+  ports) printf 'PORT LINK SPEED ADMIN POE VLAN MODE NAME\n1 down 0 enabled at 10 access test\n' ;;
+  port)
+    if [ "$2" = 49 ]; then printf 'Port 49\n  Administrative: enabled\n  PoE: not supported\n';
+    else printf 'Port %s\n  Administrative: enabled\n  PoE: enabled (at)\n' "$2"; fi ;;
+  get)
     case "$2" in
       ports.49.poe.*) exit 2 ;;
       ports.*.enabled|ports.*.poe.enabled) echo true ;;
@@ -34,24 +40,32 @@ case "$1" in
       ports.*.vlan.ingress_filter) echo true ;;
       *) echo false ;;
     esac ;;
-  --set-path|--set-string|--apply-json) printf '%s\n' '{"type":"ack","data":{"message":"ok"}}' ;;
-  *) printf '%s\n' '{}' ;;
+  set|set-string|apply-json) echo 'Configuration accepted' ;;
+  summary) echo 'Model: MS42P' ;;
+  config) echo '{}' ;;
+  *) echo '{}' ;;
 esac
 MOCK
-chmod +x "$TMP/configd"
+chmod +x "$TMP/postmerkosctl"
 export POSTMERKOS_TEST_LOG="$TMP/calls"
 export TERM=dumb
-# Port Configuration -> Copper -> first 12-port section -> port 1 -> toggle admin.
+# Administrator: Port Configuration -> Copper -> first section -> port 1 -> toggle admin.
 printf '2\n1\n1\n1\n1\n\nb\nb\nb\n0\n' |
-  CONFIGD="$TMP/configd" "$CONSOLE" menu >"$TMP/copper.out"
+  POSTMERKOSCTL="$TMP/postmerkosctl" "$CONSOLE" menu >"$TMP/copper.out"
 grep -q 'Copper RJ45 port sections' "$TMP/copper.out"
 grep -q 'Ports 1-12' "$TMP/copper.out"
-grep -q -- '--set-path ports.1.enabled false' "$TMP/calls"
-# Port Configuration -> SFP/SFP+ -> port 49 -> PoE must not be offered.
+grep -q -- 'set ports.1.enabled false' "$TMP/calls"
+# SFP port has no PoE menu.
 : >"$TMP/calls"
 printf '2\n2\n49\nb\nb\nb\n0\n' |
-  CONFIGD="$TMP/configd" "$CONSOLE" menu >"$TMP/sfp.out"
+  POSTMERKOSCTL="$TMP/postmerkosctl" "$CONSOLE" menu >"$TMP/sfp.out"
 grep -q 'Ports 49-52' "$TMP/sfp.out"
 grep -q 'Port 49 configuration' "$TMP/sfp.out"
 ! grep -q '9) Power over Ethernet' "$TMP/sfp.out"
-printf 'postmerkOS console navigation tests passed\n'
+# Viewer gets read-only port screen and no privileged top-level entries.
+POSTMERKOS_TEST_ROLE=viewer printf '2\n1\n1\n1\nb\nb\nb\nb\n0\n' |
+  POSTMERKOS_TEST_ROLE=viewer POSTMERKOSCTL="$TMP/postmerkosctl" "$CONSOLE" menu >"$TMP/viewer.out"
+grep -q 'Read-only access' "$TMP/viewer.out"
+! grep -q '3) Firmware Update' "$TMP/viewer.out"
+! grep -q '8) Shell' "$TMP/viewer.out"
+printf 'postmerkOS console role/navigation tests passed\n'
