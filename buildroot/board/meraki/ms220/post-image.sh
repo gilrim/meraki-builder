@@ -66,6 +66,25 @@ cat "$WORK/boot1-header.bin" "$MS42P_KERNEL_BIN" > "$WORK/kernel.region"
 truncate -s "$KERNEL_REGION" "$WORK/kernel.region"
 cp "$ROOTFS" "$WORK/rootfs.region"
 truncate -s "$ROOTFS_REGION" "$WORK/rootfs.region"
+# Store the release manifest in the final 4 KiB of otherwise-unused SquashFS
+# partition padding. SquashFS ignores trailing bytes, while fwupdate can inspect
+# the candidate without mounting or executing it.
+if [[ -n "${TARGET_DIR:-}" && -f "$TARGET_DIR/etc/postmerkos-release.json" ]]; then
+    python3 - "$WORK/rootfs.region" "$TARGET_DIR/etc/postmerkos-release.json" "$ROOTFS_REGION" <<'PYMETA'
+from pathlib import Path
+import sys
+image = Path(sys.argv[1])
+manifest = Path(sys.argv[2]).read_bytes()
+region = int(sys.argv[3])
+slot = 4096
+if len(manifest) > slot - 16:
+    raise SystemExit("postmerkOS release manifest exceeds metadata slot")
+payload = b"PMOSMETA" + f"{len(manifest):08x}".encode() + manifest
+with image.open("r+b") as stream:
+    stream.seek(region - slot)
+    stream.write(payload)
+PYMETA
+fi
 "$MKFS_JFFS2" --pad="$JFFS2_REGION" -l -n -X lzo -x zlib -y 40:lzo \
     -r "$WORK/jffs2-root" -o "$WORK/overlay.region"
 

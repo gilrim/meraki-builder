@@ -28,7 +28,16 @@ cat > "$TARGET_DIR/etc/postmerkos-release.json" <<EOF_POSTMERKOS_RELEASE
   "image_format": 2,
   "config_schema": 3,
   "fwupdate_api": 2,
-  "web_api": 2
+  "web_api": 2,
+  "models": {
+    "MS42P": "confirmed",
+    "MS320-24P": "confirmed",
+    "MS22": "untested",
+    "MS22P": "untested",
+    "MS42": "untested",
+    "MS220": "untested",
+    "MS320": "untested"
+  }
 }
 EOF_POSTMERKOS_RELEASE
 
