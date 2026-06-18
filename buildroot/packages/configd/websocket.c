@@ -9,6 +9,7 @@
 #include "port_clone.h"
 #include "result.h"
 #include "roles.h"
+#include "release.h"
 #include "status.h"
 #include "system_ops.h"
 #include "service_ops.h"
@@ -22,6 +23,7 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,6 +92,26 @@ static struct lws_sorted_usec_list terminal_sul;
 static bool terminal_poll_scheduled;
 static struct lws_context *ws_context;
 static struct lws *upload_owner;
+
+
+static void websocket_log(const char *format, ...) {
+  char message[512];
+  va_list arguments;
+  va_start(arguments, format);
+  vsnprintf(message, sizeof(message), format, arguments);
+  va_end(arguments);
+  fprintf(stderr, "%s websocket: %s\n", get_time(), message);
+
+  const char *path = getenv("POSTMERKOS_WEBSOCKET_LOG");
+  if (!path || !*path) path = "/run/postmerkos/websocket.log";
+  struct stat status;
+  const char *mode = stat(path, &status) == 0 && status.st_size > 65536 ? "w" : "a";
+  FILE *file = fopen(path, mode);
+  if (file) {
+    fprintf(file, "%s websocket: %s\n", get_time(), message);
+    fclose(file);
+  }
+}
 
 static bool management_address_changed(const struct network_runtime *before,
                                        const struct network_runtime *after) {
@@ -582,6 +604,29 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
   const char *type = json_object_get_string(type_object);
 
+  if (!strcmp(type, "hello")) {
+    struct json_object *data = json_object_new_object();
+    json_object_object_add(data, "service", json_object_new_string("configd"));
+    json_object_object_add(data, "protocol", json_object_new_int(2));
+    json_object_object_add(data, "websocket_protocol",
+                           json_object_new_string("configd-ws"));
+    json_object_object_add(data, "authentication_required",
+                           json_object_new_boolean(!session->authenticated));
+    json_object_object_add(data, "firmware",
+                           json_object_new_string(release_version()));
+    queue_response(wsi, session, "hello", data, request_id);
+    json_object_put(data);
+    return 0;
+  }
+
+  if (!strcmp(type, "ping")) {
+    struct json_object *data = json_object_new_object();
+    json_object_object_add(data, "message", json_object_new_string("pong"));
+    queue_response(wsi, session, "pong", data, request_id);
+    json_object_put(data);
+    return 0;
+  }
+
   if (!strcmp(type, "auth")) {
     struct json_object *data = request_data_object(message);
     const char *username = object_string(data, "username");
@@ -596,14 +641,22 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
       queue_error(wsi, session, request_id, 401, "Unauthorized", error);
       return 0;
     }
-    session->authenticated = true;
     session->role = role_for_username(username);
+    if (session->role == POSTMERKOS_ROLE_NONE) {
+      session->authenticated = false;
+      session->username[0] = '\0';
+      queue_error(wsi, session, request_id, 403, "Forbidden",
+                  "account has no postmerkOS management role");
+      return 0;
+    }
+    session->authenticated = true;
     session->auth_failures = 0;
     snprintf(session->username, sizeof(session->username), "%s", username);
     session->send_initial_status = true;
     session->send_initial_config = true;
     struct json_object *auth = role_identity_json(username);
-    json_object_object_add(auth, "users", auth_list_users());
+    if (role_has_capability(session->role, "users.manage"))
+      json_object_object_add(auth, "users", auth_list_users());
     queue_response(wsi, session, "auth", auth, request_id);
     json_object_put(auth);
     return 0;
@@ -632,7 +685,8 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
 
   if (!strcmp(type, "get_auth")) {
     struct json_object *data = role_identity_json(session->username);
-    json_object_object_add(data, "users", auth_list_users());
+    if (role_has_capability(session->role, "users.manage"))
+      json_object_object_add(data, "users", auth_list_users());
     queue_response(wsi, session, "auth", data, request_id);
     json_object_put(data);
     return 0;
@@ -1143,9 +1197,12 @@ static int configd_ws_callback(struct lws *wsi,
       struct json_object *data = json_object_new_object();
       json_object_object_add(data, "message", json_object_new_string(
           "Local Linux account authentication is required"));
+      json_object_object_add(data, "protocol", json_object_new_int(2));
+      json_object_object_add(data, "websocket_protocol",
+                             json_object_new_string("configd-ws"));
       queue_response(wsi, session, "auth_required", data, NULL);
       json_object_put(data);
-      printf("ws: client connected (%zu total)\n", client_count);
+      websocket_log("client connected (%zu total)", client_count);
       break;
     }
     case LWS_CALLBACK_CLOSED:
@@ -1154,7 +1211,7 @@ static int configd_ws_callback(struct lws *wsi,
       terminal_stop(session, true);
       reset_receive(session);
       free_replies(session);
-      printf("ws: client disconnected (%zu total)\n", client_count);
+      websocket_log("client disconnected (%zu total)", client_count);
       break;
     case LWS_CALLBACK_RECEIVE:
       receive_fragment(wsi, session, input, length);
@@ -1228,6 +1285,8 @@ struct lws_context *ws_init(int port) {
                  LWS_SERVER_OPTION_ALLOW_LISTEN_SHARE;
   lws_set_log_level(LLL_ERR | LLL_WARN, NULL);
   ws_context = lws_create_context(&info);
+  if (!ws_context) websocket_log("context creation failed on port %d", port);
+  else websocket_log("listener initialized on port %d using protocol configd-ws", port);
   return ws_context;
 }
 

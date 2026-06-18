@@ -2,8 +2,9 @@
 DAEMON=/bin/configd
 PIDFILE=/run/configd.pid
 SOCKET=/run/postmerkos/configd.sock
-LOGFILE=/tmp/configd.log
+LOGFILE=/run/postmerkos/configd.log
 CONFIG=/etc/switch.json
+WEBSOCKET_PORT=4001
 
 is_running() {
     [ -s "$PIDFILE" ] || return 1
@@ -11,11 +12,29 @@ is_running() {
     kill -0 "$pid" 2>/dev/null
 }
 
+websocket_enabled() {
+    "$DAEMON" --features 2>/dev/null | grep -q '^websocket: enabled$'
+}
+
+port_listening() {
+    hex=$(printf '%04X' "$WEBSOCKET_PORT")
+    for table in /proc/net/tcp /proc/net/tcp6; do
+        [ -r "$table" ] || continue
+        awk -v suffix=":$hex" '$4 == "0A" && substr($2, length($2)-length(suffix)+1) == suffix { found=1 } END { exit found ? 0 : 1 }' "$table" && return 0
+    done
+    return 1
+}
+
 wait_ready() {
     attempts=0
+    need_websocket=0
+    websocket_enabled && need_websocket=1
     while [ "$attempts" -lt 30 ]; do
         is_running || return 1
-        [ -S "$SOCKET" ] && return 0
+        if [ -S "$SOCKET" ]; then
+            [ "$need_websocket" -eq 0 ] && return 0
+            port_listening && return 0
+        fi
         attempts=$((attempts + 1))
         sleep 1
     done
@@ -29,11 +48,15 @@ start() {
     mkdir -p /run/postmerkos
     rm -f "$SOCKET"
     if is_running; then echo 'already running'; return 0; fi
-    touch "$LOGFILE"
+    : >"$LOGFILE"
+    "$DAEMON" --features >>"$LOGFILE" 2>&1 || true
     start-stop-daemon -S -q -b -m -p "$PIDFILE" -x "$DAEMON" -- \
-        -c "$CONFIG" -s "$SOCKET" -w 4001 -p 3 >>"$LOGFILE" 2>&1
+        -c "$CONFIG" -s "$SOCKET" -w "$WEBSOCKET_PORT" -p 3 >>"$LOGFILE" 2>&1
     if ! wait_ready; then
         echo FAIL
+        if websocket_enabled && ! port_listening; then
+            echo "configd WebSocket listener did not become ready on port $WEBSOCKET_PORT"
+        fi
         tail -n 80 "$LOGFILE"
         stop >/dev/null 2>&1 || true
         return 1
@@ -48,10 +71,15 @@ stop() {
     echo OK
 }
 
+status() {
+    is_running && [ -S "$SOCKET" ] || return 1
+    websocket_enabled && port_listening || ! websocket_enabled
+}
+
 case "$1" in
     start) start ;;
     stop) stop ;;
     restart|reload) stop; sleep 1; start ;;
-    status) is_running && [ -S "$SOCKET" ] ;;
+    status) status ;;
     *) echo "Usage: $0 {start|stop|restart|reload|status}"; exit 1 ;;
 esac

@@ -19,7 +19,15 @@ Desired configuration is persistent state; status is observed state and may omit
 
 ## Interfaces
 
-The local socket is used by `postmerkosctl` and the role-aware console. Web builds additionally compile the WebSocket, authentication, terminal, and firmware-upload frontend. Both paths use the same operation handlers and capability checks.
+The local socket is used by `postmerkosctl` and the role-aware console. Peer identity is resolved once from `SO_PEERCRED`; UID 0 is always administrator, and passwd/group data is copied into owned buffers rather than retained from libc static lookup storage. Web builds additionally compile the WebSocket, authentication, terminal, and firmware-upload frontend. Both paths use the same operation handlers and capability checks.
+
+Runtime feature discovery is available with:
+
+```sh
+configd --features
+```
+
+A web build reports the `configd-ws` subprotocol and port 4001. Its init script requires both the Unix socket and the TCP listener before declaring configd ready.
 
 One-shot recovery/automation examples:
 
@@ -35,7 +43,7 @@ configd --replace-file /tmp/switch.json
 configd --network-bootstrap --network-wait 60
 ```
 
-Responses are JSON envelopes with `ack`, `error`, or operation-specific types. See [the protocol](docs/PROTOCOL.md).
+Responses are JSON envelopes with `ack`, `error`, or operation-specific types. An unauthenticated WebSocket may use only `hello`, `ping`, `auth`, and `logout`; all status and management operations require a resolved role. See [the protocol](docs/PROTOCOL.md).
 
 ## Configuration
 
@@ -69,7 +77,10 @@ The core links JSON-C, `libpostmerkos`, and `libpd690xx`. Console-only builds co
 Run:
 
 ```sh
+make -C buildroot/packages/configd ENABLE_WEBSOCKET=0
 make -C buildroot/packages/configd test-host
 ```
+
+The host suite includes repeated root/admin/operator/viewer lookups to catch account-storage corruption and role instability.
 
 Module responsibilities are documented under [docs/modules](docs/modules/README.md). The Click graph is documented in [the repository architecture guide](../../../docs/architecture/click-system.md).

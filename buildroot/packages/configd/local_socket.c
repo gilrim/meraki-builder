@@ -19,7 +19,6 @@
 #include <fcntl.h>
 #include <json-c/json.h>
 #include <poll.h>
-#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -119,10 +118,17 @@ static void handle_client(int fd) {
   if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &credentials_length) != 0) {
     send_error(fd, 500, "unable to identify local client"); return;
   }
-  struct passwd *passwd = getpwuid(credentials.uid);
-  const char *username = passwd && passwd->pw_name ? passwd->pw_name : "";
-  enum postmerkos_role role = role_for_username(username);
-  if (role == POSTMERKOS_ROLE_NONE) { send_error(fd, 403, "account has no management role"); return; }
+  char username[128] = {0};
+  if (account_username_for_uid(credentials.uid, username, sizeof(username)) != 0) {
+    send_error(fd, 403, "local account could not be resolved");
+    return;
+  }
+  enum postmerkos_role role = credentials.uid == 0
+      ? POSTMERKOS_ROLE_ADMIN : role_for_username(username);
+  if (role == POSTMERKOS_ROLE_NONE) {
+    send_error(fd, 403, "account has no management role");
+    return;
+  }
 
   char buffer[LOCAL_REQUEST_MAX + 1];
   ssize_t got = read(fd, buffer, LOCAL_REQUEST_MAX);
@@ -137,7 +143,7 @@ static void handle_client(int fd) {
     json_object_object_add(data, "message", json_object_new_string("pong"));
     send_json(fd, "ack", data); json_object_put(data);
   } else if (!strcmp(type, "session")) {
-    struct json_object *identity = role_identity_json(username);
+    struct json_object *identity = role_identity_json_for_uid(credentials.uid);
     send_json(fd, "session", identity); json_object_put(identity);
   } else if (!strcmp(type, "status.get") && role_has_capability(role, "status.read")) {
     struct json_object *status = get_status();
@@ -224,7 +230,7 @@ static void handle_client(int fd) {
     struct json_object *report=compatibility_report_json();send_json(fd,"compatibility_report",report);json_object_put(report);
   } else if (!strcmp(type, "compatibility.ack") && role_has_capability(role, "status.read")) {
     char error[256]={0};if(compatibility_acknowledge(error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Compatibility notice dismissed for this firmware"));send_json(fd,"ack",ack);json_object_put(ack);}
-  } else if (!strcmp(type, "users.get") && role_has_capability(role, "status.read")) {
+  } else if (!strcmp(type, "users.get") && role_has_capability(role, "users.manage")) {
     struct json_object *users=auth_list_users();send_json(fd,"users",users);json_object_put(users);
   } else if (!strcmp(type, "users.create")) {
     struct json_object *data=request_data(request);const char *target=object_string(data,"username"),*password=object_string(data,"password"),*new_role=object_string(data,"role");

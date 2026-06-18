@@ -252,8 +252,14 @@ EOF_HISTORY
 }
 
 led_detect() {
-    if [ -w /click/sw0_ctrl/poe_led_state ]; then
+    command -v postmerkos-hwprobe >/dev/null 2>&1 && postmerkos-hwprobe refresh >/dev/null 2>&1 || true
+    if [ -r /run/postmerkos/led-capabilities.env ]; then
+        . /run/postmerkos/led-capabilities.env
+    fi
+    if [ "${PORT_LED_AVAILABLE:-0}" = 1 ] && [ "${PORT_LED_VERIFIED:-0}" = 1 ]; then
         FWUPDATE_LED_MODE=binary-poe-ports
+    elif [ "${STATUS_LED_AVAILABLE:-0}" = 1 ] && [ "${STATUS_LED_VERIFIED:-0}" = 1 ]; then
+        FWUPDATE_LED_MODE=binary-status-led
     else
         FWUPDATE_LED_MODE=unavailable
     fi

@@ -51,9 +51,17 @@ static void trim(char *value) {
     value[--len] = '\0';
 }
 
+static void copy_model(char *model, size_t size, const char *value) {
+  if (!model || !size) return;
+  size_t length = value ? strlen(value) : 0;
+  if (length >= size) length = size - 1;
+  if (length) memcpy(model, value, length);
+  model[length] = '\0';
+}
+
 static int read_model(char *model, size_t size) {
   const char *override = getenv("CONFIGD_MODEL");
-  if (override && *override) { snprintf(model, size, "%s", override); return 0; }
+  if (override && *override) { copy_model(model, size, override); return 0; }
   const char *path = env_or_default("CONFIGD_BOARDINFO", "/etc/boardinfo");
   FILE *file = fopen(path, "r");
   if (!file) return -errno;
@@ -62,7 +70,7 @@ static int read_model(char *model, size_t size) {
     trim(line);
     const char *value = !strncmp(line, "MODEL=", 6) ? line + 6 : line;
     if (!strncmp(value, "MS", 2)) {
-      snprintf(model, size, "%s", value);
+      copy_model(model, size, value);
       fclose(file);
       return 0;
     }
@@ -161,5 +169,13 @@ struct json_object *hardware_capabilities_json(const struct hardware_info *info)
   json_object_array_add(policies, json_object_new_string("boot-prune"));
   json_object_object_add(poe, "policies", policies);
   json_object_object_add(caps, "poe", poe);
+  const char *controls_path = getenv("POSTMERKOS_HARDWARE_CONTROLS");
+  if (!controls_path || !*controls_path)
+    controls_path = "/run/postmerkos/hardware-controls.json";
+  struct json_object *controls = json_object_from_file(controls_path);
+  if (controls && json_object_is_type(controls, json_type_object))
+    json_object_object_add(caps, "controls", controls);
+  else if (controls)
+    json_object_put(controls);
   return caps;
 }

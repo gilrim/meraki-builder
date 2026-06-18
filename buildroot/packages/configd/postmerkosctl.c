@@ -117,6 +117,36 @@ static bool capability_present(struct json_object *identity, const char *name) {
   return false;
 }
 
+static void print_session_shell(struct json_object *identity) {
+  const char *username = string_member(identity, "username", "");
+  const char *role = string_member(identity, "role", "none");
+  struct json_object *caps = member(identity, "capabilities");
+  printf("POSTMERKOS_USERNAME='%s'\n", username);
+  printf("POSTMERKOS_ROLE='%s'\n", role);
+  fputs("POSTMERKOS_CAPABILITIES='", stdout);
+  for (size_t i = 0; caps && json_object_is_type(caps, json_type_array) &&
+       i < json_object_array_length(caps); i++) {
+    struct json_object *cap = json_object_array_get_idx(caps, i);
+    if (cap && json_object_is_type(cap, json_type_string))
+      printf("%s%s", i ? " " : "", json_object_get_string(cap));
+  }
+  puts("'");
+}
+
+static void print_service_summary(struct json_object *data) {
+  puts("SERVICE       STATE       ENABLED     AUTOSTART");
+  puts("------------- ----------- ----------- -----------");
+  const char *names[] = {"ssh", "web", "chrony"};
+  const char *labels[] = {"SSH", "Web UI", "Chrony"};
+  for (size_t i = 0; i < 3; i++) {
+    struct json_object *service = member(data, names[i]);
+    printf("%-13s %-11s %-11s %-11s\n", labels[i],
+           bool_member(service, "running", false) ? "running" : "stopped",
+           bool_member(service, "enabled", false) ? "yes" : "no",
+           bool_member(service, "autostart", false) ? "yes" : "no");
+  }
+}
+
 static struct json_object *session_data(void) {
   struct json_object *reply = request("session", NULL);
   struct json_object *data = reply_data(reply);
@@ -204,13 +234,13 @@ static void print_port(struct json_object *snapshot, unsigned int port) {
 
 static void usage(FILE *stream) {
   fputs("usage: postmerkosctl COMMAND [arguments]\n"
-        "  session [--json] | role | has CAPABILITY\n"
+        "  session [--json|--shell] | role | has CAPABILITY\n"
         "  status | summary | ports FIRST-LAST | port PORT\n"
         "  get PATH | set PATH VALUE | set-string PATH TEXT | apply-json JSON\n"
         "  config | backup FILE | validate FILE | restore FILE | reboot\n"
         "  compatibility-needed | compatibility-report | compatibility-ack\n"
         "  users | user-create USER PASSWORD ROLE | user-role USER ROLE | user-delete USER\n"
-        "  services | services-set JSON | services-apply | service NAME ACTION\n"
+        "  services | services-summary | services-set JSON | services-apply | service NAME ACTION\n"
         "  service-get PATH | service-set PATH VALUE\n"
         "  time | time-set JSON | time-get PATH | time-set-field PATH VALUE\n"
         "  time-sync | time-set-clock EPOCH\n", stream);
@@ -237,6 +267,8 @@ int main(int argc, char **argv) {
       else rc = capability_present(identity, argv[2]) ? 0 : 1;
     } else if (argc > 2 && !strcmp(argv[2], "--json"))
       puts(json_object_to_json_string_ext(identity, JSON_C_TO_STRING_PRETTY));
+    else if (argc > 2 && !strcmp(argv[2], "--shell"))
+      print_session_shell(identity);
     else printf("%s (%s)\n", string_member(identity, "username", ""), string_member(identity, "role", "none"));
     json_object_put(identity); return rc;
   }
@@ -387,10 +419,14 @@ int main(int argc, char **argv) {
     puts(json_object_to_json_string_ext(result, JSON_C_TO_STRING_PRETTY));
     json_object_put(reply); return 0;
   }
-  if (!strcmp(command, "services") || !strcmp(command, "time")) {
-    struct json_object *reply=request(!strcmp(command,"services")?"services.get":"time.get",NULL);
+  if (!strcmp(command, "services") || !strcmp(command, "services-summary") ||
+      !strcmp(command, "time")) {
+    bool service_command = strcmp(command, "time") != 0;
+    struct json_object *reply=request(service_command ? "services.get" : "time.get",NULL);
     struct json_object *data=reply_data(reply); if(!data){if(reply)json_object_put(reply);return 1;}
-    puts(json_object_to_json_string_ext(data,JSON_C_TO_STRING_PRETTY));json_object_put(reply);return 0;
+    if (!strcmp(command, "services-summary")) print_service_summary(data);
+    else puts(json_object_to_json_string_ext(data,JSON_C_TO_STRING_PRETTY));
+    json_object_put(reply);return 0;
   }
   if (!strcmp(command, "service-get") || !strcmp(command, "time-get")) {
     if(argc!=3){usage(stderr);return 2;}struct json_object *data=json_object_new_object();json_object_object_add(data,"path",json_object_new_string(argv[2]));

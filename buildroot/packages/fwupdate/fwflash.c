@@ -6,6 +6,7 @@
 #include <mtd/mtd-user.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,7 @@
 #include <sys/reboot.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -40,6 +42,9 @@ static const char *status_firmware = "";
 static const char *status_target_version = "unknown";
 static const char *led_handler = NULL;
 static unsigned int led_ports = 0;
+static const char *status_led_path = NULL;
+static int status_led_active = 1;
+static pid_t status_led_animator = -1;
 static FILE *log_file;
 static bool reboot_after = true;
 
@@ -59,6 +64,83 @@ static void json_escape(FILE *f, const char *s) {
     }
 }
 
+
+static void sleep_milliseconds(unsigned int milliseconds) {
+    struct timespec delay = {
+        .tv_sec = (time_t)(milliseconds / 1000U),
+        .tv_nsec = (long)(milliseconds % 1000U) * 1000000L
+    };
+    while (nanosleep(&delay, &delay) != 0 && errno == EINTR) {}
+}
+
+static void write_status_led(int active) {
+    if (!status_led_path || !*status_led_path) return;
+    FILE *led = fopen(status_led_path, "w");
+    if (!led) return;
+    fprintf(led, "%d\n", active ? status_led_active : !status_led_active);
+    fclose(led);
+}
+
+static void read_animation_state(int *progress, bool *error) {
+    *progress = 0;
+    *error = false;
+    FILE *file = fopen(status_path, "r");
+    if (!file) return;
+    char buffer[1024];
+    size_t count = fread(buffer, 1, sizeof(buffer) - 1, file);
+    fclose(file);
+    buffer[count] = '\0';
+    char *progress_text = strstr(buffer, "\"progress\":");
+    if (progress_text) {
+        long value = strtol(progress_text + strlen("\"progress\":"), NULL, 10);
+        if (value < 0) value = 0;
+        if (value > 100) value = 100;
+        *progress = (int)value;
+    }
+    *error = strstr(buffer, "\"state\":\"error\"") != NULL;
+}
+
+static void animate_status_led(void) {
+    for (;;) {
+        int progress = 0;
+        bool error = false;
+        read_animation_state(&progress, &error);
+        if (error) {
+            for (int pulse = 0; pulse < 3; pulse++) {
+                write_status_led(1); sleep_milliseconds(250);
+                write_status_led(0); sleep_milliseconds(150);
+            }
+            sleep_milliseconds(1000);
+            continue;
+        }
+        unsigned int cycle = 2000U - (1200U * (unsigned int)progress / 100U);
+        unsigned int on = 500U - (200U * (unsigned int)progress / 100U);
+        write_status_led(1);
+        sleep_milliseconds(on);
+        write_status_led(0);
+        sleep_milliseconds(cycle - on);
+    }
+}
+
+static void start_status_led_animator(void) {
+    if (!status_led_path || !*status_led_path || status_led_animator > 0) return;
+    status_led_animator = fork();
+    if (status_led_animator == 0) {
+        animate_status_led();
+        _exit(0);
+    }
+    if (status_led_animator < 0) status_led_animator = -1;
+}
+
+static void stop_status_led_animator(bool leave_on) {
+    if (status_led_animator > 0) {
+        kill(status_led_animator, SIGTERM);
+        (void)waitpid(status_led_animator, NULL, 0);
+        status_led_animator = -1;
+    }
+    if (status_led_path) write_status_led(leave_on ? 1 : 0);
+}
+
 static void update_leds(int progress, bool error) {
     if (!led_handler || !led_ports) return;
     unsigned int lit = error ? led_ports :
@@ -69,6 +151,23 @@ static void update_leds(int progress, bool error) {
         fprintf(led, "PORT %u, STATE %u\n", port,
                 error ? 1U : (port <= lit ? 1U : 0U));
     fclose(led);
+}
+
+static void show_error_pattern(void) {
+    if (status_led_path && *status_led_path) {
+        /* The animator reads the error state written immediately before this
+         * function and renders the triple-pulse pattern. */
+        sleep(10);
+        return;
+    }
+    if (led_handler && led_ports) {
+        for (int pulse = 0; pulse < 10; pulse++) {
+            update_leds(100, true);
+            sleep_milliseconds(500);
+            update_leds(0, false);
+            sleep_milliseconds(500);
+        }
+    }
 }
 
 static void write_status(const char *state, const char *stage, int progress,
@@ -135,6 +234,8 @@ static void fatal(const char *stage, const char *fmt, ...) {
     va_end(ap);
     write_status("error", stage, 100, msg);
     fprintf(stderr, "fwflash: %s\n", msg);
+    show_error_pattern();
+    stop_status_led_animator(false);
     if (reboot_after) reboot_system();
     exit(EXIT_FAILURE);
 }
@@ -466,7 +567,9 @@ static void rollback_and_reboot(const struct image_job *root,
                  "Upgrade and rollback were not fully successful (rootfs=%s, overlay=%s). Hardware recovery may be required; rebooting.",
                  root_ok ? "ok" : "failed", overlay_ok ? "ok" : "failed");
         write_status("error", "recovery_required", 100, msg);
+        show_error_pattern();
     }
+    stop_status_led_animator(false);
     if (reboot_after) reboot_system();
     exit(EXIT_FAILURE);
 }
@@ -478,7 +581,8 @@ static void usage(FILE *f) {
         "  --overlay-image FILE --overlay-mtd DEV [--overlay-backup FILE]\n"
         "  --status-file FILE --log-file FILE\n"
         "  --source TEXT --firmware NAME --target-version VERSION\n"
-        "  --led-handler PATH --led-ports COUNT --no-reboot\n");
+        "  --led-handler PATH --led-ports COUNT\n"
+        "  --status-led PATH [--status-led-active 0|1] --no-reboot\n");
 }
 
 int main(int argc, char **argv) {
@@ -509,6 +613,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--target-version") && ++i < argc) status_target_version = argv[i];
         else if (!strcmp(argv[i], "--led-handler") && ++i < argc) led_handler = argv[i];
         else if (!strcmp(argv[i], "--led-ports") && ++i < argc) led_ports = (unsigned int)strtoul(argv[i], NULL, 10);
+        else if (!strcmp(argv[i], "--status-led") && ++i < argc) status_led_path = argv[i];
+        else if (!strcmp(argv[i], "--status-led-active") && ++i < argc) {
+            status_led_active = atoi(argv[i]) ? 1 : 0;
+        }
         else if (!strcmp(argv[i], "--no-reboot")) reboot_after = false;
         else if (!strcmp(argv[i], "--help")) { usage(stdout); return 0; }
         else { usage(stderr); return 2; }
@@ -524,6 +632,7 @@ int main(int argc, char **argv) {
     }
 
     log_file = fopen(log_path, "a");
+    start_status_led_animator();
     write_status("flashing", "begin", 1,
                  "RAM-resident flashing helper started");
     if (overlay.image && !strcmp(overlay.device, root.device))
@@ -555,6 +664,7 @@ int main(int argc, char **argv) {
     write_status("success", reboot_after ? "reboot" : "complete", 100,
                  reboot_after ? "Firmware verified; rebooting"
                               : "Firmware verified");
+    stop_status_led_animator(true);
     if (!reboot_after) return 0;
     reboot_system();
     fatal("reboot", "reboot failed: %s", strerror(errno));

@@ -156,6 +156,32 @@ struct json_object *get_status(void) {
   json_object_object_add(security, "default_password_active",
                          json_object_new_boolean(access(default_marker, F_OK) == 0));
   json_object_object_add(root, "security", security);
+  struct json_object *hardware_policy = json_object_new_object();
+  struct json_object *button_status = json_object_from_file(
+      "/run/postmerkos/button-status.json");
+  if (button_status && json_object_is_type(button_status, json_type_object)) {
+    json_object_object_add(hardware_policy, "reset_button", button_status);
+    struct json_object *state = NULL;
+    if (json_object_object_get_ex(button_status, "state", &state) &&
+        json_object_is_type(state, json_type_string) &&
+        (!strcmp(json_object_get_string(state), "unidentified") ||
+         !strcmp(json_object_get_string(state), "unavailable")))
+      add_error(errors, "reset-button",
+                "physical reset-button input has not been mapped; run postmerkos-hwprobe reset-button --watch");
+  } else if (button_status) {
+    json_object_put(button_status);
+  }
+  FILE *led_owner = fopen("/run/postmerkos/led-owner", "r");
+  if (led_owner) {
+    char owner[64] = {0};
+    if (fgets(owner, sizeof(owner), led_owner)) {
+      owner[strcspn(owner, "\r\n")] = '\0';
+      json_object_object_add(hardware_policy, "led_owner",
+                             json_object_new_string(owner));
+    }
+    fclose(led_owner);
+  }
+  json_object_object_add(root, "hardware_policy", hardware_policy);
   add_temperatures(root, errors);
   add_port_status(root, errors);
 
