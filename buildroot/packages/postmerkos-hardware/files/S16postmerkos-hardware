@@ -1,9 +1,29 @@
 #!/bin/sh
+PIDFILE=/run/postmerkos/buttond.pid
+LOG=/run/postmerkos/buttond.log
+
+start_buttond() {
+    mkdir -p /run/postmerkos
+    /usr/sbin/postmerkos-hwprobe refresh >>"$LOG" 2>&1 || true
+    if [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then return 0; fi
+    : >"$LOG"
+    start-stop-daemon -S -q -b -m -p "$PIDFILE" -x /usr/sbin/postmerkos-buttond -- >>"$LOG" 2>&1
+}
+
 case "${1:-start}" in
   start)
-    /usr/sbin/postmerkos-buttond >/run/postmerkos/buttond.log 2>&1 &
+    start_buttond
     /usr/sbin/postmerkos-poe-prune >/run/postmerkos/poe-prune.log 2>&1 &
     ;;
-  stop) killall postmerkos-buttond postmerkos-poe-prune >/dev/null 2>&1 || true ;;
-  restart) "$0" stop; "$0" start ;;
+  stop)
+    [ -s "$PIDFILE" ] && start-stop-daemon -K -q -p "$PIDFILE" -x /usr/sbin/postmerkos-buttond 2>/dev/null || true
+    rm -f "$PIDFILE"
+    killall postmerkos-poe-prune >/dev/null 2>&1 || true
+    /usr/sbin/postmerkos-ledctl release reset >/dev/null 2>&1 || true
+    ;;
+  restart) "$0" stop; sleep 1; "$0" start ;;
+  status)
+    [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+    ;;
+  *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
 esac

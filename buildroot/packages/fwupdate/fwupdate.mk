@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-FWUPDATE_VERSION = 1.0
+FWUPDATE_VERSION = 1.1
 FWUPDATE_SITE = package/fwupdate
 FWUPDATE_SITE_METHOD = local
 FWUPDATE_LICENSE = GPL-2.0-or-later

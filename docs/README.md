@@ -35,6 +35,7 @@
 - [Click graph](architecture/click-system.md)
 - [Adding a model](development/adding-model.md)
 - [Compatibility testing](development/compatibility-testing.md)
+- [Runtime stabilization hardware testing](development/runtime-stabilization-testing.md)
 
 ## Hardware and research
 

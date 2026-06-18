@@ -302,11 +302,24 @@ if [ "$ASSUME_YES" -ne 1 ]; then
 fi
 
 history_prepare
+LED_HANDLER=
+LED_PORTS=0
+STATUS_LED_PATH=
+STATUS_LED_ACTIVE=1
 if command -v postmerkos-ledctl >/dev/null 2>&1; then
-    postmerkos-ledctl acquire firmware || true
-    LED_PORTS=$(postmerkosctl status 2>/dev/null | sed -n 's/.*"copper_ports"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -n1)
-else
-    LED_PORTS=0
+    command -v postmerkos-hwprobe >/dev/null 2>&1 && postmerkos-hwprobe refresh >/dev/null 2>&1 || true
+    LED_ACQUIRED=0
+    postmerkos-ledctl acquire firmware >/dev/null 2>&1 && LED_ACQUIRED=1 || true
+    if [ "$LED_ACQUIRED" = 1 ] && [ -r /run/postmerkos/led-capabilities.env ]; then
+        . /run/postmerkos/led-capabilities.env
+    fi
+    if [ "${LED_ACQUIRED:-0}" = 1 ] && [ "${PORT_LED_AVAILABLE:-0}" = 1 ] && [ "${PORT_LED_VERIFIED:-0}" = 1 ]; then
+        LED_HANDLER=${PORT_LED_HANDLER:-/click/sw0_ctrl/poe_led_state}
+        LED_PORTS=$(postmerkosctl status 2>/dev/null | sed -n 's/.*"copper_ports"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | sed -n '1p')
+    elif [ "${STATUS_LED_AVAILABLE:-0}" = 1 ] && [ "${STATUS_LED_VERIFIED:-0}" = 1 ]; then
+        STATUS_LED_PATH=${STATUS_LED_PATH:-}
+        STATUS_LED_ACTIVE=${STATUS_LED_ACTIVE:-1}
+    fi
 fi
 status_write starting acknowledged 34 "Starting firmware update; management services will stop shortly"
 status_write preparing quiesce 35 "Stopping services and unmounting the writable overlay"
@@ -393,9 +406,12 @@ set -- "$WORK/fwflash" \
     --log-file /run/fwupdate/flash.log \
     --source "$SOURCE" \
     --firmware "$FWUPDATE_FIRMWARE" \
-    --target-version "${FWUPDATE_TARGET_VERSION:-unknown}" \
-    --led-handler /click/sw0_ctrl/poe_led_state \
-    --led-ports "${LED_PORTS:-0}"
+    --target-version "${FWUPDATE_TARGET_VERSION:-unknown}"
+if [ -n "$LED_HANDLER" ] && [ "${LED_PORTS:-0}" -gt 0 ] 2>/dev/null; then
+    set -- "$@" --led-handler "$LED_HANDLER" --led-ports "$LED_PORTS"
+elif [ -n "$STATUS_LED_PATH" ]; then
+    set -- "$@" --status-led "$STATUS_LED_PATH" --status-led-active "$STATUS_LED_ACTIVE"
+fi
 if [ -n "$OVERLAY_IMAGE" ]; then
     set -- "$@" \
         --overlay-image "$OVERLAY_IMAGE" \

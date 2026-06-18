@@ -6,7 +6,9 @@
 
 ## Session behavior
 
-The hardware serial path uses getty and `postmerkos-serial-login`. JFFS2 security policy selects direct console, root-only login, or normal role-aware user login. SSH users can run `pmc` to open the same interface.
+The hardware serial path uses getty and a persistent `postmerkos-serial-login` supervisor. JFFS2 security policy selects direct console, root-only login, or normal role-aware user login. Logging out returns to the serial `pmc:` prompt; entering a raw shell and exiting returns to the console. Interactive SSH users are launched into the same interface, while non-interactive SSH commands are left untouched.
+
+The console obtains one stable session record at launch and caches its role/capability list for menu presentation. Configd still enforces every operation independently.
 
 Aliases:
 
@@ -26,7 +28,7 @@ Non-interactive SSH, SCP/SFTP, and automation are not intercepted. Entering the 
 4) Backup & Restore               8) Shell
 ```
 
-Choices are filtered by configd capabilities. Operators can manage switching and reboot; viewers receive read-only status.
+Choices are filtered by configd capabilities. Administrators see every entry, operators can manage switching, create backups, and reboot, and viewers receive read-only status. Raw service JSON is available only as an explicit diagnostic action; the normal Service Management entry uses a compact status table.
 
 ## Port handling
 

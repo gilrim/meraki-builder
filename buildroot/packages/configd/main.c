@@ -130,6 +130,7 @@ enum command_mode {
   COMMAND_APPLY_FILE,
   COMMAND_APPLY_JSON,
   COMMAND_REPLACE_FILE,
+  COMMAND_FEATURES,
 };
 
 int main(int argc, char **argv) {
@@ -144,7 +145,7 @@ int main(int argc, char **argv) {
   enum { OPT_GET_CONFIG = 1000, OPT_GET_CONFIG_RAW, OPT_GET_STATUS,
          OPT_GET_PATH, OPT_SET_PATH, OPT_SET_STRING, OPT_SHOW_SUMMARY, OPT_SHOW_PORTS,
          OPT_SHOW_PORT, OPT_EXPORT_CONFIG, OPT_VALIDATE,
-         OPT_APPLY_FILE, OPT_APPLY_JSON, OPT_REPLACE_FILE };
+         OPT_APPLY_FILE, OPT_APPLY_JSON, OPT_REPLACE_FILE, OPT_FEATURES };
   static const struct option options[] = {
     {"config", required_argument, NULL, 'c'},
     {"dry-run", no_argument, NULL, 'd'},
@@ -167,6 +168,7 @@ int main(int argc, char **argv) {
     {"apply-file", required_argument, NULL, OPT_APPLY_FILE},
     {"apply-json", required_argument, NULL, OPT_APPLY_JSON},
     {"replace-file", required_argument, NULL, OPT_REPLACE_FILE},
+    {"features", no_argument, NULL, OPT_FEATURES},
     {"help", no_argument, NULL, 'h'},
     {NULL, 0, NULL, 0},
   };
@@ -210,6 +212,7 @@ int main(int argc, char **argv) {
       case OPT_APPLY_FILE: command = COMMAND_APPLY_FILE; command_value = optarg; break;
       case OPT_APPLY_JSON: command = COMMAND_APPLY_JSON; command_value = optarg; break;
       case OPT_REPLACE_FILE: command = COMMAND_REPLACE_FILE; command_value = optarg; break;
+      case OPT_FEATURES: command = COMMAND_FEATURES; break;
       case 'h': usage(stdout, argv[0]); return 0;
       default: usage(stderr, argv[0]); return 2;
     }
@@ -225,6 +228,19 @@ int main(int argc, char **argv) {
   if (optind != argc) {
     usage(stderr, argv[0]);
     return 2;
+  }
+
+  if (command == COMMAND_FEATURES) {
+    puts("core: enabled");
+    puts("unix-socket: enabled");
+#ifdef CONFIGD_ENABLE_WEBSOCKET
+    puts("websocket: enabled");
+    printf("websocket-port: %d\n", websocket_port);
+    puts("websocket-protocol: configd-ws");
+#else
+    puts("websocket: disabled");
+#endif
+    return 0;
   }
 
   /* S10 invokes bootstrap before the PoE init script. Keep this path

@@ -8,6 +8,8 @@ CONFIGD=${CONFIGD:-/bin/configd}
 CTL=${POSTMERKOSCTL:-/usr/bin/postmerkosctl}
 [ -x "$CTL" ] || CTL=postmerkosctl
 ROLE=none
+USERNAME=
+CAPABILITIES=
 KERNEL_PRINTK=
 TMP_RESPONSE=/tmp/postmerkos-console.$$.out
 restore_console_chatter() {
@@ -80,8 +82,24 @@ valid_mtu() { is_number "$1" && [ "$1" -ge 576 ] && [ "$1" -le 9216 ]; }
 valid_vlan_list() { [ -n "$1" ] && ! printf '%s' "$1" | grep -q '[^0-9,-]'; }
 valid_ipv4_text() { [ -n "$1" ] && ! printf '%s' "$1" | grep -q '[^0-9./]'; }
 valid_username() { [ -n "$1" ] && ! printf '%s' "$1" | grep -q '[^A-Za-z0-9_.-]'; }
-can() { "$CTL" has "$1" >/dev/null 2>&1; }
-refresh_role() { ROLE=$("$CTL" role 2>/dev/null || echo none); }
+refresh_session() {
+    local session
+    session=$("$CTL" session --shell 2>/dev/null) || session=
+    POSTMERKOS_USERNAME= POSTMERKOS_ROLE=none POSTMERKOS_CAPABILITIES=
+    case "$session" in
+        *POSTMERKOS_ROLE=*POSTMERKOS_CAPABILITIES=*) eval "$session" ;;
+    esac
+    USERNAME=${POSTMERKOS_USERNAME:-}
+    ROLE=${POSTMERKOS_ROLE:-none}
+    CAPABILITIES=${POSTMERKOS_CAPABILITIES:-}
+}
+can() {
+    case " $CAPABILITIES " in
+        *" $1 "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+refresh_role() { refresh_session; }
 
 cfg_get() { "$CTL" get "$1" 2>/dev/null; }
 
@@ -945,7 +963,7 @@ EOF_TIME
 service_management_menu() {
     while :; do
         heading 'Service Management'
-        "$CTL" services 2>/dev/null || true
+        "$CTL" services-summary 2>/dev/null || echo 'Service status is unavailable.'
         cat <<'EOF_SERVICE'
 
 1) SSH configuration
@@ -963,7 +981,7 @@ EOF_SERVICE
             3) service_action_menu chrony Chrony ;;
             4) time_configuration_menu ;;
             5) "$CTL" services-apply; pause ;;
-            6) heading 'Management service logs'; for file in /tmp/configd.log /tmp/uhttpd.log /var/log/messages; do [ -f "$file" ] && { echo "--- $file ---"; tail -n 60 "$file"; }; done; pause ;;
+            6) heading 'Management service logs'; for file in /run/postmerkos/configd.log /run/postmerkos/websocket.log /run/postmerkos/buttond.log /run/postmerkos/serial-session.log /run/postmerkos/ledctl.log /tmp/uhttpd.log /var/log/messages; do [ -f "$file" ] && { echo "--- $file ---"; tail -n 60 "$file"; }; done; pause ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac
@@ -1023,6 +1041,16 @@ Scriptable compatibility:
 EOF_USAGE
 }
 
+default_password_warning() {
+    [ -e /config/postmerkos/default-password-active ] || return 0
+    cat <<'EOF_PASSWORD'
+
+WARNING: The root password is still the switch serial number.
+Change it from User Management or with the passwd command.
+EOF_PASSWORD
+    pause
+}
+
 compatibility_first_access() {
     local answer
     [ "$("$CTL" compatibility-needed 2>/dev/null || echo no)" = yes ] || return 0
@@ -1054,22 +1082,30 @@ EOF_COMPAT
 
 main_menu() {
     suppress_console_chatter
+    default_password_warning
     compatibility_first_access
     while :; do
         heading ''
         echo '- type the preferred option to continue'
         echo
-        printf '%-34s %s\n' '1) Status' '5) User Management'
-        printf '%-34s %s\n' '2) Port Configuration' '6) Service Management'
-        printf '%-34s %s\n' '3) Firmware Update' '7) Power Control'
-        printf '%-34s %s\n' '4) Backup & Restore' '8) Shell'
+        menu5= menu6= menu7= menu8= menu3= menu4=
+        can users.manage && menu5='5) User Management'
+        can services.manage && menu6='6) Service Management'
+        can system.reboot && menu7='7) Power Control'
+        can terminal.exec && menu8='8) Shell'
+        can firmware.update && menu3='3) Firmware Update'
+        can backup.create && menu4='4) Backup & Restore'
+        printf '%-34s %s\n' '1) Status' "$menu5"
+        printf '%-34s %s\n' '2) Port Configuration' "$menu6"
+        printf '%-34s %s\n' "$menu3" "$menu7"
+        printf '%-34s %s\n' "$menu4" "$menu8"
         echo '0) Log out'
         read_choice 'postmerkOS> '
         case "$CHOICE" in
             1) system_status_menu ;;
             2) port_configuration_menu ;;
             3) if can firmware.update; then firmware_menu; else echo 'Permission denied.'; pause; fi ;;
-            4) backup_restore_menu ;;
+            4) if can backup.create; then backup_restore_menu; else echo 'Permission denied.'; pause; fi ;;
             5) if can users.manage; then user_management_menu; else echo 'Permission denied.'; pause; fi ;;
             6) if can services.manage; then service_management_menu; else echo 'Permission denied.'; pause; fi ;;
             7) if can system.reboot; then power_control_menu; else echo 'Permission denied.'; pause; fi ;;
@@ -1093,7 +1129,7 @@ main_menu() {
 
 main() {
     local command sub port path
-    refresh_role
+    refresh_session
     if [ "$ROLE" = none ]; then
         echo 'This account has no postmerkOS management role.' >&2
         return 1
@@ -1130,8 +1166,12 @@ main() {
             sub=${2:-}
             case "$sub" in
                 show) "$CTL" config ;;
-                backup) [ "$#" -eq 3 ] && "$CTL" backup "$3" || { usage >&2; return 2; } ;;
+                backup)
+                    can backup.create || { echo 'Permission denied.' >&2; return 1; }
+                    [ "$#" -eq 3 ] && "$CTL" backup "$3" || { usage >&2; return 2; }
+                    ;;
                 restore)
+                    can config.restore || { echo 'Permission denied.' >&2; return 1; }
                     [ "$#" -eq 3 ] || { usage >&2; return 2; }
                     "$CTL" restore "$3"
                     ;;
@@ -1142,15 +1182,23 @@ main() {
             sub=${2:-status}; shift 2 2>/dev/null || shift 1
             case "$sub" in
                 status) fw_update_status "$@" ;;
-                local) exec fw_update "$@" ;;
-                tftp) exec fw_update_tftp "$@" ;;
-                http) exec fw_update_http "$@" ;;
-                sftp) exec fw_update_sftp "$@" ;;
+                local|tftp|http|sftp)
+                    can firmware.update || { echo 'Permission denied.' >&2; return 1; }
+                    case "$sub" in
+                        local) exec fw_update "$@" ;;
+                        tftp) exec fw_update_tftp "$@" ;;
+                        http) exec fw_update_http "$@" ;;
+                        sftp) exec fw_update_sftp "$@" ;;
+                    esac
+                    ;;
                 *) usage >&2; return 2 ;;
             esac
             ;;
         password) passwd "${2:-root}" ;;
-        shell) POSTMERKOS_RAW_SHELL=1 exec /bin/sh -l ;;
+        shell)
+            can terminal.exec || { echo 'Permission denied.' >&2; return 1; }
+            POSTMERKOS_RAW_SHELL=1 exec /bin/sh -l
+            ;;
         help|-h|--help) usage ;;
         *) usage >&2; return 2 ;;
     esac
