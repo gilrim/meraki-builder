@@ -1,3 +1,14 @@
+# 2026-06-20 management startup, console, and verified PoE corrections
+
+- Replace cross-process loader source variables with durable JSON provenance records consumed by the loader build.
+- Normalize future-dated tracked files after authoritative Git checkout without changing upstream content.
+- Build the production web UI with an explicit configd WebSocket endpoint and reject inherited host `VITE_*` contamination.
+- Replace the raw network-bootstrap JSON serial dump with concise PASS/WARN/FAIL boot lines while retaining the complete response under `/run/postmerkos/network-bootstrap.json`.
+- Move hardware-verified PoE GPIO mappings into the exact-model board profile and enable the original reset/enable sequence on all supported PoE variants.
+- Add configd exit records, WebSocket `configd-ws`/protocol-2 health probing, bounded restart supervision, and retained runtime logs.
+- Distinguish management-service failure from genuine role denial in PMC and login-shell startup.
+- Add serial `status`, `logs`, `login`, `retry`, `reboot`, and `help` recovery commands with audit logging.
+
 # 2026-06-20 authoritative upstream main policy
 
 - Make `Gadorach/meraki-redboot:main` and `Gadorach/postmerkos-ui:main` the default authoritative sources.

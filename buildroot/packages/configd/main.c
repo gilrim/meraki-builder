@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -39,6 +40,23 @@ struct pd690xx_cfg pd690xx = {
 };
 
 static volatile sig_atomic_t running = 1;
+static time_t service_started_at;
+
+static void write_exit_record(const char *reason, int exit_code) {
+  const char *path = getenv("POSTMERKOS_CONFIGD_EXIT");
+  if (!path || !*path) path = "/run/postmerkos/configd.exit";
+  mkdir("/run/postmerkos", 0755);
+  char temporary[256];
+  snprintf(temporary, sizeof(temporary), "%s.tmp.%ld", path, (long)getpid());
+  FILE *file = fopen(temporary, "w");
+  if (!file) return;
+  time_t now = time(NULL);
+  fprintf(file, "exit_code=%d\nreason=%s\ntimestamp=%ld\nuptime_seconds=%ld\n",
+          exit_code, reason ? reason : "unknown", (long)now,
+          service_started_at ? (long)(now - service_started_at) : 0L);
+  if (fclose(file) == 0) rename(temporary, path);
+  else unlink(temporary);
+}
 
 static void signal_handler(int signal_number) {
   (void)signal_number;
@@ -113,6 +131,7 @@ static void usage(FILE *stream, const char *program) {
       "  -s, --socket PATH          local management Unix socket\n"
       "  -N, --network-bootstrap    apply DHCP/static management IP and exit\n"
       "  -W, --network-wait SEC     DHCP wait during bootstrap (0-300, default 60)\n"
+      "      --boot-output          concise bootstrap output; save JSON under /run\n"
       "      --get-config           print the current persistent JSON envelope\n"
       "      --get-config-raw       print only the current configuration object\n"
       "      --get-status           print current status JSON\n"
@@ -153,6 +172,13 @@ static void read_meraki_mac(void) {
     }
     fclose(file);
   }
+}
+
+static struct json_object *make_envelope(const char *type, struct json_object *data) {
+  struct json_object *message = json_object_new_object();
+  json_object_object_add(message, "type", json_object_new_string(type));
+  json_object_object_add(message, "data", json_object_get(data));
+  return message;
 }
 
 static void print_envelope(const char *type, struct json_object *data) {
@@ -197,6 +223,7 @@ int main(int argc, char **argv) {
   int websocket_port = 4001;
   int status_interval = 3;
   int network_wait = 60;
+  bool boot_output = false;
   const char *local_socket_path = "/run/postmerkos/configd.sock";
   enum command_mode command = COMMAND_SERVICE;
   const char *command_value = NULL;
@@ -205,7 +232,8 @@ int main(int argc, char **argv) {
   enum { OPT_GET_CONFIG = 1000, OPT_GET_CONFIG_RAW, OPT_GET_STATUS,
          OPT_GET_PATH, OPT_SET_PATH, OPT_SET_STRING, OPT_SHOW_SUMMARY, OPT_SHOW_PORTS,
          OPT_SHOW_PORT, OPT_EXPORT_CONFIG, OPT_VALIDATE,
-         OPT_APPLY_FILE, OPT_APPLY_JSON, OPT_REPLACE_FILE, OPT_FEATURES };
+         OPT_APPLY_FILE, OPT_APPLY_JSON, OPT_REPLACE_FILE, OPT_FEATURES,
+         OPT_BOOT_OUTPUT };
   static const struct option options[] = {
     {"config", required_argument, NULL, 'c'},
     {"dry-run", no_argument, NULL, 'd'},
@@ -214,6 +242,7 @@ int main(int argc, char **argv) {
     {"socket", required_argument, NULL, 's'},
     {"network-bootstrap", no_argument, NULL, 'N'},
     {"network-wait", required_argument, NULL, 'W'},
+    {"boot-output", no_argument, NULL, OPT_BOOT_OUTPUT},
     {"get-config", no_argument, NULL, OPT_GET_CONFIG},
     {"get-config-raw", no_argument, NULL, OPT_GET_CONFIG_RAW},
     {"get-status", no_argument, NULL, OPT_GET_STATUS},
@@ -258,6 +287,7 @@ int main(int argc, char **argv) {
           return 2;
         }
         break;
+      case OPT_BOOT_OUTPUT: boot_output = true; break;
       case OPT_GET_CONFIG: command = COMMAND_GET_CONFIG; break;
       case OPT_GET_CONFIG_RAW: command = COMMAND_GET_CONFIG_RAW; break;
       case OPT_GET_STATUS: command = COMMAND_GET_STATUS; break;
@@ -315,29 +345,34 @@ int main(int argc, char **argv) {
       config = json_object_new_object();
       json_object_object_add(config, "network", network_default_config());
     }
+    if (boot_output) setenv("POSTMERKOS_BOOT_OUTPUT", "1", 1);
     network_manager_observe(config);
     const struct network_runtime *observed = network_manager_runtime();
     if (!strcmp(observed->configured_mode, "dhcp") &&
         strcmp(observed->source, "dhcp") && network_wait > 0) {
-      fprintf(stderr, "Waiting up to %d seconds for a DHCP lease", network_wait);
-      fflush(stderr);
+      if (boot_output) {
+        fprintf(stdout, "postmerkOS network: WAIT source=dhcp timeout=%ds\n", network_wait);
+        fflush(stdout);
+      } else {
+        fprintf(stderr, "Waiting up to %d seconds for a DHCP lease", network_wait);
+        fflush(stderr);
+      }
       for (int elapsed = 0; elapsed < network_wait; elapsed++) {
         sleep(1);
         network_manager_observe(config);
         observed = network_manager_runtime();
         if (!strcmp(observed->source, "dhcp")) break;
-        fputc('.', stderr);
-        fflush(stderr);
+        if (!boot_output) { fputc('.', stderr); fflush(stderr); }
       }
-      fputc('\n', stderr);
+      if (!boot_output) fputc('\n', stderr);
       observed = network_manager_runtime();
-      if (!strcmp(observed->source, "dhcp")) {
-        fprintf(stderr, "DHCP lease detected: %s/%u via %s\n",
-                observed->applied.address, observed->applied.prefix,
-                observed->applied.gateway);
-      } else {
-        fprintf(stderr,
-                "No DHCP lease detected during bootstrap; applying fallback\n");
+      if (!boot_output) {
+        if (!strcmp(observed->source, "dhcp"))
+          fprintf(stderr, "DHCP lease detected: %s/%u via %s\n",
+                  observed->applied.address, observed->applied.prefix,
+                  observed->applied.gateway);
+        else
+          fprintf(stderr, "No DHCP lease detected during bootstrap; applying fallback\n");
       }
     }
 
@@ -345,16 +380,40 @@ int main(int argc, char **argv) {
     apply_result_init(&result);
     int network_rc = network_manager_init(config, &result);
     const struct network_runtime *runtime = network_manager_runtime();
-    if (runtime->applied.address[0]) {
-      fprintf(stderr,
-              "Management IPv4 configured: source=%s address=%s/%u gateway=%s broadcast=%s mtu=%u\n",
-              runtime->source, runtime->applied.address,
-              runtime->applied.prefix, runtime->applied.gateway,
-              runtime->applied.broadcast, runtime->applied.mtu);
-    }
     struct json_object *data = apply_result_json(&result,
                                                  "Network bootstrap complete");
-    print_envelope("ack", data);
+    if (boot_output) {
+      struct json_object *envelope = make_envelope("ack", data);
+      const char *record_path = getenv("POSTMERKOS_NETWORK_BOOTSTRAP_RECORD");
+      if (!record_path || !*record_path) {
+        mkdir("/run/postmerkos", 0755);
+        record_path = "/run/postmerkos/network-bootstrap.json";
+      }
+      json_object_to_file_ext(record_path, envelope, JSON_C_TO_STRING_PRETTY);
+      json_object_put(envelope);
+      size_t warnings = json_object_array_length(result.warnings);
+      size_t failed = json_object_array_length(result.failures);
+      const char *state = network_rc != 0 || failed ? "FAIL" : warnings ? "WARN" : "PASS";
+      printf("postmerkOS network: %s source=%s address=%s/%u gateway=%s broadcast=%s mtu=%u applied=%u warnings=%zu failed=%zu\n",
+             state, runtime->source[0] ? runtime->source : "unknown",
+             runtime->applied.address[0] ? runtime->applied.address : "0.0.0.0",
+             runtime->applied.prefix,
+             runtime->applied.gateway[0] ? runtime->applied.gateway : "0.0.0.0",
+             runtime->applied.broadcast[0] ? runtime->applied.broadcast : "0.0.0.0",
+             runtime->applied.mtu, result.applied, warnings, failed);
+      for (size_t i = 0; i < warnings; i++)
+        printf("postmerkOS network: WARN: %s\n",
+               json_object_get_string(json_object_array_get_idx(result.warnings, i)));
+      for (size_t i = 0; i < failed; i++)
+        printf("postmerkOS network: FAIL: %s\n",
+               json_object_get_string(json_object_array_get_idx(result.failures, i)));
+    } else {
+      if (runtime->applied.address[0])
+        fprintf(stderr, "Management IPv4 configured: source=%s address=%s/%u gateway=%s broadcast=%s mtu=%u\n",
+                runtime->source, runtime->applied.address, runtime->applied.prefix,
+                runtime->applied.gateway, runtime->applied.broadcast, runtime->applied.mtu);
+      print_envelope("ack", data);
+    }
     json_object_put(data);
     apply_result_cleanup(&result);
     json_object_put(config);
@@ -557,9 +616,12 @@ int main(int argc, char **argv) {
   apply_result_cleanup(&startup);
   json_object_put(config);
 
+  service_started_at = time(NULL);
+  unlink("/run/postmerkos/configd.exit");
   int local_fd = local_socket_init(local_socket_path);
   if (local_fd < 0) {
     fprintf(stderr, "configd: local socket setup failed: %s\n", strerror(-local_fd));
+    write_exit_record("local-socket-setup-failed", 1);
     i2c_close(&pd690xx);
     return 1;
   }
@@ -569,6 +631,7 @@ int main(int argc, char **argv) {
   struct lws_context *context = ws_init(websocket_port);
   if (!context) {
     fprintf(stderr, "configd: WebSocket context creation failed\n");
+    write_exit_record("websocket-context-creation-failed", 1);
     local_socket_shutdown(local_fd, local_socket_path);
     i2c_close(&pd690xx);
     return 1;
@@ -583,6 +646,8 @@ int main(int argc, char **argv) {
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
   long network_poll_due = 0;
+  int service_exit_code = 0;
+  const char *service_exit_reason = "signal-requested";
   while (running) {
     long now = time(NULL);
     if (now >= network_poll_due) {
@@ -593,20 +658,31 @@ int main(int argc, char **argv) {
     }
     int local_rc = local_socket_service_once(local_fd, 50);
     if (local_rc < 0) {
-      fprintf(stderr, "configd: local socket error: %s\n", strerror(-local_rc));
+      fprintf(stderr, "configd: FAIL local-socket-service rc=%d error=%s\n",
+              local_rc, strerror(-local_rc));
+      service_exit_code = 1;
+      service_exit_reason = "local-socket-service-error";
       break;
     }
 #ifdef CONFIGD_ENABLE_WEBSOCKET
-    if (ws_service_once(context, 0) < 0) break;
+    int ws_rc = ws_service_once(context, 0);
+    if (ws_rc < 0) {
+      fprintf(stderr, "configd: FAIL websocket-service rc=%d\n", ws_rc);
+      service_exit_code = 1;
+      service_exit_reason = "websocket-service-error";
+      break;
+    }
     mark_clients_pending();
 #endif
   }
 
-  printf("configd: shutting down\n");
+  fprintf(stderr, "configd: shutting down reason=%s exit_code=%d\n",
+          service_exit_reason, service_exit_code);
+  write_exit_record(service_exit_reason, service_exit_code);
 #ifdef CONFIGD_ENABLE_WEBSOCKET
   ws_shutdown(context);
 #endif
   local_socket_shutdown(local_fd, local_socket_path);
   i2c_close(&pd690xx);
-  return 0;
+  return service_exit_code;
 }

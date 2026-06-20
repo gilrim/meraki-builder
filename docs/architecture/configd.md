@@ -13,3 +13,11 @@ Service status reports desired policy, observed process state, and whether they 
 The console communicates through `/run/postmerkos/configd.sock`. One-shot CLI commands remain available for recovery and automation. Web builds add libwebsockets and uhttpd without changing the configuration core.
 
 See the package [README](../../buildroot/packages/configd/README.md) and [protocol](../../buildroot/packages/configd/docs/PROTOCOL.md).
+
+## Runtime health and supervision
+
+`S15configd` starts configd through a bounded supervisor. Readiness requires the local Unix socket plus an actual WebSocket upgrade, `configd-ws` subprotocol selection, and protocol-2 `hello` response. Unexpected exits are recorded in `/run/postmerkos/configd.exit`, detailed daemon output remains in `/run/postmerkos/configd.log`, and WebSocket connection events remain in `/run/postmerkos/websocket.log`. The supervisor retries only a bounded number of times to avoid a silent or unbounded crash loop.
+
+Use `postmerkosctl management-health` to test the process, local socket/session path, WebSocket upgrade, subprotocol, and `hello` exchange.
+
+Boot-time network initialization uses `configd --network-bootstrap --boot-output`. Serial receives concise `postmerkOS network: PASS|WARN|FAIL ...` records, while the complete JSON result is retained at `/run/postmerkos/network-bootstrap.json`.

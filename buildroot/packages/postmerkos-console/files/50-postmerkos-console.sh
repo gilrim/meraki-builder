@@ -8,20 +8,35 @@ case "$-" in *i*) ;; *) return 0 2>/dev/null || exit 0 ;; esac
 
 if ! command -v postmerkosctl >/dev/null 2>&1; then
     [ "$(id -u 2>/dev/null)" = 0 ] && {
-        echo 'WARNING: configd is unavailable; entering the root recovery shell.'
+        echo 'WARNING: postmerkOS management tools are unavailable; entering the root recovery shell.'
         return 0 2>/dev/null || exit 0
     }
-    echo 'postmerkOS management is unavailable.' >&2
+    echo 'postmerkOS management tools are unavailable.' >&2
     exit 1
 fi
 
-role=$(postmerkosctl role 2>/dev/null || echo none)
-if [ "$role" = none ]; then
+session_error=$(mktemp /tmp/postmerkos-session.XXXXXX 2>/dev/null || echo /tmp/postmerkos-session.$$)
+if session=$(postmerkosctl session --shell 2>"$session_error"); then
+    POSTMERKOS_USERNAME= POSTMERKOS_ROLE=none POSTMERKOS_CAPABILITIES=
+    case "$session" in
+      *POSTMERKOS_USERNAME=*POSTMERKOS_ROLE=*POSTMERKOS_CAPABILITIES=*) eval "$session" ;;
+      *) POSTMERKOS_ROLE=none ;;
+    esac
+    rm -f "$session_error"
+    if [ "${POSTMERKOS_ROLE:-none}" = none ]; then
+        echo 'This account has no postmerkOS management role.' >&2
+        exit 1
+    fi
+else
+    detail=$(cat "$session_error" 2>/dev/null || true)
+    rm -f "$session_error"
     if [ "$(id -u 2>/dev/null)" = 0 ]; then
-        echo 'WARNING: management role lookup failed; entering the root recovery shell.'
+        echo 'WARNING: the postmerkOS management service is unavailable; entering the root recovery shell.'
+        [ -n "$detail" ] && echo "Reason: $detail"
         return 0 2>/dev/null || exit 0
     fi
-    echo 'This account has no postmerkOS management role.' >&2
+    echo 'The postmerkOS management service is unavailable.' >&2
+    [ -n "$detail" ] && echo "Reason: $detail" >&2
     exit 1
 fi
 

@@ -39,26 +39,25 @@ chmod 0755 "$ARTIFACTS_DIR/tools/mkvcoreiii_payload.py"
 write_sha256_sidecar "$LOADER_ARTIFACT"
 write_sha256_sidecar "$LOADER_MANIFEST"
 write_sha256_sidecar "$ARTIFACTS_DIR/tools/mkvcoreiii_payload.py"
-source_describe="$(git -C "$LOADER_SOURCE_DIR" describe --tags --always --dirty)"
-python3 - "$LOADER_BUILD_SOURCE_RECORD" "$LOADER_REPO_URL" "$LOADER_SOURCE_VERSION_FILE" \
-  "$LOADER_SOURCE_REVISION_FILE" "$variant" "$LOADER_REF" "$RESOLVED_GIT_SYMBOLIC_REF" "$source_describe" <<'PY_SOURCE'
-import json
+[[ -f "$LOADER_SOURCE_SELECTION_RECORD" ]] || die "meraki-redboot source provenance record is missing: $LOADER_SOURCE_SELECTION_RECORD"
+python3 - "$LOADER_BUILD_SOURCE_RECORD" "$LOADER_SOURCE_SELECTION_RECORD" \
+  "$LOADER_SOURCE_VERSION_FILE" "$LOADER_SOURCE_REVISION_FILE" "$variant" <<'PY_SOURCE'
+import json, sys
 from pathlib import Path
-import sys
-
-out, repo, version, revision, variant, requested_ref, resolved_ref, describe = sys.argv[1:]
-record = {
-    "project": "Gadorach/meraki-redboot",
-    "repository": repo,
-    "version": Path(version).read_text().strip(),
-    "revision": Path(revision).read_text().strip(),
-    "requested_ref": requested_ref,
-    "resolved_ref": resolved_ref,
-    "describe": describe,
-    "resolution": "authoritative-git",
+out, selection_path, version_path, revision_path, variant = sys.argv[1:]
+selection = json.loads(Path(selection_path).read_text())
+required = ("repository", "requested_ref", "resolved_ref", "revision", "describe", "resolution")
+missing = [key for key in required if not selection.get(key)]
+if missing:
+    raise SystemExit("meraki-redboot source provenance record is missing: " + ", ".join(missing))
+revision = Path(revision_path).read_text().strip()
+if selection["revision"] != revision:
+    raise SystemExit("meraki-redboot source provenance revision does not match selected source")
+selection.update({
+    "version": Path(version_path).read_text().strip(),
     "variant": variant,
-}
-Path(out).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+})
+Path(out).write_text(json.dumps(selection, indent=2, sort_keys=True) + "\n")
 PY_SOURCE
 write_sha256_sidecar "$LOADER_BUILD_SOURCE_RECORD"
 

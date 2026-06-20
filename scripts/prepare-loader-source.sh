@@ -48,5 +48,20 @@ require_source_marker "$structural_stage_test" 'PMOSRECOVERY3;SOC=jaguar1;STRUCT
 
 printf '%s\n' "$selected_revision" > "$LOADER_SOURCE_REVISION_FILE"
 cat "$LOADER_SOURCE_DIR/VERSION" > "$LOADER_SOURCE_VERSION_FILE"
+python3 - "$LOADER_SOURCE_SELECTION_RECORD" "$LOADER_REPO_URL" "$LOADER_REF" \
+  "$RESOLVED_GIT_SYMBOLIC_REF" "$selected_revision" "$RESOLVED_GIT_DESCRIBE" <<'PY_SOURCE'
+import json, sys
+from pathlib import Path
+out, repository, requested, resolved, revision, describe = sys.argv[1:]
+Path(out).write_text(json.dumps({
+    "project": "Gadorach/meraki-redboot",
+    "repository": repository,
+    "requested_ref": requested,
+    "resolved_ref": resolved,
+    "revision": revision,
+    "describe": describe,
+    "resolution": "authoritative-git",
+}, indent=2, sort_keys=True) + "\n")
+PY_SOURCE
 log "meraki-redboot $(cat "$LOADER_SOURCE_VERSION_FILE") selected from authoritative origin/$RESOLVED_GIT_SYMBOLIC_REF at $selected_revision"
 log "meraki-redboot source contract validated; checkout left unmodified"

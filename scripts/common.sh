@@ -30,7 +30,7 @@ KERNEL_HEADERS_TARBALL="$BUILD_DIR/linux-3.18.123.tar.bz2"
 KERNEL_ARTIFACT_DIR="$ARTIFACTS_DIR/kernel"
 
 UI_REPO_URL="${UI_REPO_URL:-https://github.com/Gadorach/postmerkos-ui.git}"
-UI_REF="${UI_REF:-ms42p-dev}"
+UI_REF="${UI_REF:-main}"
 UI_DIR="${UI_DIR:-$SOURCES_DIR/postmerkos-ui}"
 NODE_VERSION="${NODE_VERSION:-22.14.0}"
 
@@ -54,6 +54,7 @@ LOADER_ARTIFACT="$ARTIFACTS_DIR/loader1.bin"
 LOADER_MANIFEST="$ARTIFACTS_DIR/loader1.bin.manifest.json"
 LOADER_PAYLOAD_PACKER="$LOADER_SOURCE_DIR/tools/mkvcoreiii_payload.py"
 LOADER_SOURCE_REVISION_FILE="$ARTIFACTS_DIR/meraki-redboot-source-revision.txt"
+LOADER_SOURCE_SELECTION_RECORD="$ARTIFACTS_DIR/meraki-redboot-source.json"
 LOADER_SOURCE_VERSION_FILE="$ARTIFACTS_DIR/meraki-redboot-version.txt"
 LOADER_BUILD_SOURCE_RECORD="$ARTIFACTS_DIR/loader1.bin.source.json"
 RECOVERY_ARTIFACT_DIR="$ARTIFACTS_DIR/recovery"
@@ -193,9 +194,35 @@ clone_or_update_git_ref() {
     git -C "$dir" reset --hard "origin/$ref"
   fi
 
+  normalize_future_git_timestamps "$dir" "$label"
   RESOLVED_GIT_SYMBOLIC_REF="$ref"
   RESOLVED_GIT_REF="$(git -C "$dir" rev-parse HEAD)"
   RESOLVED_GIT_DESCRIBE="$(git -C "$dir" describe --tags --always --dirty)"
+}
+
+normalize_future_git_timestamps() {
+  local dir="$1" label="${2:-repository}" count
+  count="$(python3 - "$dir" <<'PY_TIMESTAMPS'
+import os, subprocess, sys, time
+from pathlib import Path
+root=Path(sys.argv[1])
+now=time.time()
+raw=subprocess.check_output(["git","-C",str(root),"ls-files","-z"])
+count=0
+for item in raw.split(b"\0"):
+    if not item: continue
+    path=root/os.fsdecode(item)
+    try: st=path.stat()
+    except FileNotFoundError: continue
+    if st.st_mtime > now + 30:
+        os.utime(path, (min(st.st_atime, now), now), follow_symlinks=False)
+        count += 1
+print(count)
+PY_TIMESTAMPS
+)"
+  if [[ "$count" != 0 ]]; then
+    log "Normalized $count future-dated tracked files in $label"
+  fi
 }
 
 sha256_record() {

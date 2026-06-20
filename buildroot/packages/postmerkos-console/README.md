@@ -6,9 +6,9 @@
 
 ## Session behavior
 
-The hardware serial path uses getty and a persistent `postmerkos-serial-login` supervisor. JFFS2 security policy selects direct console, root-only login, or normal role-aware user login. Logging out returns to the serial `pmc:` prompt; entering a raw shell and exiting returns to the console. Interactive SSH users are launched into the same interface, while non-interactive SSH commands are left untouched.
+The hardware serial path uses getty and a persistent `postmerkos-serial-login` supervisor. JFFS2 security policy selects direct console, root-only login, or normal role-aware user login. Logging out returns to the serial `pmc:` prompt; entering a raw shell and exiting returns to the console. The direct serial prompt also supports `login`, `status`, `logs`, `retry`, `shell`, `reboot`, and `help`. Interactive SSH users are launched into the same interface, while non-interactive SSH commands are left untouched.
 
-The console obtains one stable session record at launch and caches its role/capability list for menu presentation. Configd still enforces every operation independently.
+The console obtains one stable session record at launch and caches its role/capability list for menu presentation. Configd still enforces every operation independently. A failed local-socket request is reported as management-service unavailability; only a successful session explicitly returning role `none` is reported as a role denial. Menu startup retries the service for a bounded interval.
 
 Aliases:
 

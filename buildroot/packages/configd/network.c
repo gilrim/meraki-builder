@@ -464,8 +464,9 @@ static int apply_ipv4(const struct ipv4_runtime *value, const char *source,
   snprintf(command, sizeof(command), "%s %u %s %u %s 1",
            value->address, value->prefix, value->gateway,
            value->mtu, value->broadcast);
-  printf("%s network source=%s set_host_ip=%s%s\n", get_time(), source,
-         command, dry_run ? " dry_run=true" : "");
+  if (!getenv("POSTMERKOS_BOOT_OUTPUT"))
+    printf("%s network source=%s set_host_ip=%s%s\n", get_time(), source,
+           command, dry_run ? " dry_run=true" : "");
 
   int rc = dry_run ? 0 : click_write("/click/set_host_ip/run", command);
   if (rc != 0) {
