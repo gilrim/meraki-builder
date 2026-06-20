@@ -36,7 +36,7 @@ Status is paged in twelve-port copper groups followed by detected uplink/SFP por
 
 ## Updates and backups
 
-Before firmware installation, the console recommends a TFTP configuration backup, offers a copyable JSON display with SHA-256, allows an explicit skip, or cancels. Update history is read from the persistent post-reboot record rather than a transient process check.
+Before firmware installation, the console recommends a TFTP configuration backup, offers a copyable JSON display with SHA-256, allows an explicit skip, or cancels. The Firmware Update menu can receive a framed firmware image and optional manifest over hardware UART through `postmerkos-console firmware uart`. Untested artifacts require explicit acknowledgement; known-incompatible artifacts are identified separately and cannot be acknowledged. Update history is read from the persistent post-reboot record rather than a transient process check.
 
 ## Console output
 

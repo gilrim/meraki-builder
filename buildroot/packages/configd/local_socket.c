@@ -214,9 +214,8 @@ static void handle_client(int fd) {
       char error[256] = {0};
       struct apply_result result;
       apply_result_init(&result);
-      int rc = validate_configuration(candidate, error, sizeof(error));
-      if (rc == 0) rc = save_config_file(candidate, error, sizeof(error));
-      if (rc == 0) rc = config_apply_full(candidate, &result);
+      int rc = config_replace_validate_save_apply(candidate, &result,
+                                                  error, sizeof(error));
       if (rc != 0) send_error(fd, 400, error[0] ? error : "configuration restore failed");
       else {
         struct json_object *ack = apply_result_json(&result, "Configuration restored");

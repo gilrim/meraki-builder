@@ -1,3 +1,15 @@
+# 2026-06-19 integrated VCore-III stabilization
+
+- Restore platform-agnostic inclusion and hash verification of common, Luton26, Jaguar1, Jaguar Dual, and auxiliary donor kernel modules.
+- Generate exact runtime board identity under `/run/postmerkos/boardinfo`; unknown identity fails closed.
+- Align exact model families and logical port counts across module loading, Click, configd, hardware policy, updater, and documentation.
+- Add framed, acknowledged, CRC-32 and SHA-256 verified UART firmware transport with optional manifest and host flasher support.
+- Preserve the full 8 MiB SquashFS region and use sidecar metadata when no safe trailer padding exists.
+- Restore apply-before-persist configuration transactions, runtime rollback, known-good recovery, and desired/observed service reporting.
+- Add capability schema v2, dual green/orange named-state LED ownership, read-only reset discovery, and fail-closed PoE GPIO policy.
+- Preserve browser artifact names/manifests and clean only stale upload cache entries.
+- Distinguish untested and known-incompatible firmware in both browser and text console; incompatible artifacts cannot be acknowledged.
+
 ## Lean authenticated management and CLI
 
 - Add local `/etc/shadow` authentication through the existing system `crypt()` implementation without Linux-PAM.
@@ -45,3 +57,35 @@
 - Reworked the MS220 post-build script for quoting and deterministic source-controlled transformations.
 - Replaced the incomplete mixed U-Boot/RedBoot post-image script with deterministic MS42P NOR assembly.
 - Added image and rootfs validation, SHA-256 manifests, revision records, and effective-file manifests.
+
+## Pre-kernel UART recovery protocol v2
+
+- Separated host-only verification, target dry-run, and destructive flash
+  operations.
+- Added acknowledged, retryable binary framing with partial-write-safe host I/O.
+- Added bounded probe, frame, object, confirmation, erase, and program states.
+- Added target-specific Luton26 and Jaguar-class payload descriptors.
+- Bound loader, payload, image, manifest, model, family, flash geometry, and
+  JEDEC identity into the release contract.
+- Added per-frame CRC-32, whole-object CRC-32 and SHA-256, cache maintenance,
+  flash status checks, block-protection checks, and full readback verification.
+- Integrated the source-built UART-capable loader and recovery payloads into the
+  normal VCore-III build and aggregate host tests.
+
+## 2026-06-19 integrated review remediation
+
+- Corrected bootloader-recovery operation routing so host verification never
+  opens serial, dry-run cannot issue flash commands, and full flash requires
+  both host authorization and the target nonce challenge.
+- Replaced fixed-delay recovery sequencing with protocol-v2 ready, header,
+  frame, object-verification, challenge, progress, and terminal-result states.
+- Added short-write-safe serial output, bounded retries, exact duplicate-frame
+  acceptance, and completion-as-final-ACK handling.
+- Added source-built loader attestation and family-specific recovery payload
+  records to the firmware build and release manifest.
+- Added target/model/SoC/layout/JEDEC/geometry checks and manifest enforcement
+  before destructive SPI access.
+- Added deterministic host simulations, source-contract tests, complete-image
+  manifest fixtures, aggregate UI/configd contract coverage, and recovery
+  payload structural builds.
+- Refreshed the UI development dependency lockfile to a zero-advisory audit.

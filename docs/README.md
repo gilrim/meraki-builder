@@ -32,6 +32,7 @@
 - [configd](architecture/configd.md)
 - [Configuration schema](architecture/configuration-schema.md)
 - [Firmware updater](architecture/firmware-updater.md)
+- [Pre-kernel UART recovery](architecture/pre-kernel-uart-recovery.md)
 - [Click graph](architecture/click-system.md)
 - [Adding a model](development/adding-model.md)
 - [Compatibility testing](development/compatibility-testing.md)
@@ -43,6 +44,7 @@
 - [Vitesse switch hardware access](hardware/vitesse-switches.md)
 - [Cooling notes](hardware/cooling.md)
 - [Research utilities](research/README.md)
+- [OpenVTSS runtime boundaries](research/openvtss-runtime-boundaries.md)
 
 ## History
 

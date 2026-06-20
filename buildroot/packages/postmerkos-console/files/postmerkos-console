@@ -150,12 +150,13 @@ detect_layout() {
     TOTAL_PORTS=$(cat /tmp/NUM_PORTS 2>/dev/null || echo 0)
     is_number "$TOTAL_PORTS" || TOTAL_PORTS=0
     if [ "$TOTAL_PORTS" -eq 0 ]; then
-        MODEL=$(sed -n 's/^MODEL=//p' /etc/boardinfo 2>/dev/null | head -n 1)
+        MODEL=$(sed -n 's/^MODEL=//p' /run/postmerkos/boardinfo 2>/dev/null | head -n 1)
         case "$MODEL" in
             MS220-8|MS220-8P) TOTAL_PORTS=10 ;;
+            MS220-24|MS220-24P|MS22|MS22P) TOTAL_PORTS=26 ;;
             MS320-24|MS320-24P) TOTAL_PORTS=28 ;;
             MS220-48*|MS320-48*|MS42|MS42P) TOTAL_PORTS=52 ;;
-            *) TOTAL_PORTS=24 ;;
+            *) TOTAL_PORTS=0 ;;
         esac
     fi
     case "$TOTAL_PORTS" in
@@ -600,22 +601,6 @@ EOF_PC
     done
 }
 
-select_overlay() {
-    echo 'Overlay policy:' >&2
-    echo '  1) preserve - keep settings byte-for-byte' >&2
-    echo '  2) migrate  - copy selected settings into a clean overlay' >&2
-    echo '  3) reset    - erase settings' >&2
-    echo '  4) image    - use overlay embedded in a full firmware image' >&2
-    printf 'Selection [1]: ' >&2
-    read -r selection
-    case "${selection:-1}" in
-        1) echo preserve ;;
-        2) echo migrate ;;
-        3) echo reset ;;
-        4) echo image ;;
-        *) echo preserve ;;
-    esac
-}
 
 display_configuration_copy() {
     local temp=/run/postmerkos/config-copy.$$.json hash
@@ -686,8 +671,44 @@ select_overlay() {
     esac
 }
 
+select_flash_scope() {
+    echo 'Flash scope:' >&2
+    echo '  1) system - update SquashFS and the selected JFFS2 policy' >&2
+    echo '  2) full   - overwrite loader, kernel, SquashFS, and JFFS2' >&2
+    printf 'Selection [1]: ' >&2
+    read -r selection
+    case "${selection:-1}" in
+        2) echo full ;;
+        *) echo system ;;
+    esac
+}
+
+select_force_mode() {
+    echo 'Force mode:' >&2
+    echo '  1) normal - require compatible/new metadata and avoid same-version reinstall' >&2
+    echo '  2) force  - allow reinstall/downgrade/development metadata exceptions; SHA-256 still required' >&2
+    printf 'Selection [1]: ' >&2
+    read -r selection
+    case "${selection:-1}" in
+        2) echo --force ;;
+        *) echo ;;
+    esac
+}
+
+select_artifact_contract() {
+    echo 'Artifact validation:' >&2
+    echo '  1) manifest - firmware, checksum, manifest, and manifest checksum' >&2
+    echo '  2) checksum - original firmware and checksum files only' >&2
+    printf 'Selection [1]: ' >&2
+    read -r selection
+    case "${selection:-1}" in
+        2) echo checksum ;;
+        *) echo manifest ;;
+    esac
+}
+
 firmware_menu() {
-    local file hash overlay server remote port url user password accept_arg
+    local file hash overlay server remote port url user password accept_arg force_arg scope contract scope_args contract_args
     while :; do
         heading 'Firmware Update'
         cat <<'EOF_FW'
@@ -696,25 +717,34 @@ firmware_menu() {
 3) Download and install by TFTP
 4) Download and install by HTTP/HTTPS
 5) Download and install by SFTP
-6) Verify a local image without flashing
+6) Receive and install an image over UART
+7) Verify a local image without flashing
 b) Back
 EOF_FW
         read_choice 'firmware> '
         case "$CHOICE" in
             1) heading 'Firmware update history'; cat /config/postmerkos/update-history/last.json 2>/dev/null || echo 'No completed update record exists.'; echo; cat /config/postmerkos/update-history/last.log 2>/dev/null || true; pause ;;
-            2|6)
+            2|7)
                 heading 'Local firmware image'
                 printf 'Firmware path: '; read -r file
                 [ -f "$file" ] || { echo 'File not found.'; pause; continue; }
                 hash=$(sha256sum "$file" | awk '{print $1}') || { echo 'Unable to hash firmware.'; pause; continue; }
-                overlay=$(select_overlay)
+                scope=$(select_flash_scope)
+                scope_args=
+                if [ "$scope" = full ]; then
+                    overlay=image
+                    scope_args=--full-flash
+                else
+                    overlay=$(select_overlay)
+                fi
                 accept_arg=
                 [ "$(cfg_get_device_compatibility 2>/dev/null || echo confirmed)" = untested ] && accept_arg=--accept-untested
-                if [ "$CHOICE" = 6 ]; then
-                    fw_update --sha256 "$hash" --overlay "$overlay" $accept_arg --verify-only "$file"
+                force_arg=$(select_force_mode)
+                if [ "$CHOICE" = 7 ]; then
+                    fw_update --sha256 "$hash" --overlay "$overlay" $scope_args $accept_arg $force_arg --verify-only "$file"
                 else
                     preupdate_backup_prompt || { echo 'Firmware update cancelled.'; pause; continue; }
-                    fw_update --sha256 "$hash" --overlay "$overlay" $accept_arg "$file"
+                    fw_update --sha256 "$hash" --overlay "$overlay" $scope_args $accept_arg $force_arg "$file"
                 fi
                 pause ;;
             3)
@@ -723,16 +753,24 @@ EOF_FW
                 printf 'TFTP server: '; read -r server
                 printf 'Remote firmware path: '; read -r remote
                 printf 'TFTP port [69]: '; read -r port; port=${port:-69}
-                overlay=$(select_overlay)
-                fw_update_tftp --server "$server" --file "$remote" --port "$port" --overlay "$overlay"
+                contract=$(select_artifact_contract)
+                [ "$contract" = checksum ] && contract_args=--no-manifest || contract_args=
+                scope=$(select_flash_scope)
+                if [ "$scope" = full ]; then overlay=image; scope_args=--full-flash; else overlay=$(select_overlay); scope_args=; fi
+                force_arg=$(select_force_mode)
+                fw_update_tftp --server "$server" --file "$remote" --port "$port" --overlay "$overlay" $contract_args $scope_args $force_arg
                 pause ;;
             4)
                 heading 'HTTP/HTTPS firmware update'
                 command -v fw_update_http >/dev/null 2>&1 || { echo 'HTTP updater support is not installed.'; pause; continue; }
                 preupdate_backup_prompt || { echo 'Firmware update cancelled.'; pause; continue; }
                 printf 'Direct firmware URL (blank opens configured catalog): '; read -r url
-                overlay=$(select_overlay)
-                if [ -n "$url" ]; then fw_update_http --url "$url" --overlay "$overlay"; else fw_update_http --overlay "$overlay"; fi
+                contract=$(select_artifact_contract)
+                [ "$contract" = checksum ] && contract_args=--no-manifest || contract_args=
+                scope=$(select_flash_scope)
+                if [ "$scope" = full ]; then overlay=image; scope_args=--full-flash; else overlay=$(select_overlay); scope_args=; fi
+                force_arg=$(select_force_mode)
+                if [ -n "$url" ]; then fw_update_http --url "$url" --overlay "$overlay" $contract_args $scope_args $force_arg; else fw_update_http --overlay "$overlay" $contract_args $scope_args $force_arg; fi
                 pause ;;
             5)
                 heading 'SFTP firmware update'
@@ -742,8 +780,22 @@ EOF_FW
                 printf 'Remote firmware path: '; read -r remote
                 printf 'Username: '; read -r user
                 password=$(read_secret 'Password: ')
-                overlay=$(select_overlay)
-                fw_update_sftp --server "$server" --file "$remote" --user "$user" --password "$password" --overlay "$overlay"
+                contract=$(select_artifact_contract)
+                [ "$contract" = checksum ] && contract_args=--no-manifest || contract_args=
+                scope=$(select_flash_scope)
+                if [ "$scope" = full ]; then overlay=image; scope_args=--full-flash; else overlay=$(select_overlay); scope_args=; fi
+                force_arg=$(select_force_mode)
+                fw_update_sftp --server "$server" --file "$remote" --user "$user" --password "$password" --overlay "$overlay" $contract_args $scope_args $force_arg
+                pause ;;
+            6)
+                heading 'UART firmware upload'
+                preupdate_backup_prompt || { echo 'Firmware update cancelled.'; pause; continue; }
+                scope=$(select_flash_scope)
+                if [ "$scope" = full ]; then overlay=image; scope_args=--full-flash; else overlay=$(select_overlay); scope_args=; fi
+                echo 'Waiting for the host flasher to send PMOSUART/1 framed data.'
+                echo 'Do not type into this console until the transfer finishes.'
+                force_arg=$(select_force_mode)
+                fw_update_uart --overlay "$overlay" $scope_args $force_arg
                 pause ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
@@ -1034,7 +1086,7 @@ Scriptable compatibility:
   config show                       print complete JSON configuration
   config backup FILE                write a plain JSON backup
   config restore FILE               validate, replace, and apply a backup
-  firmware status|local|tftp|http|sftp [arguments]
+  firmware status|local|tftp|http|sftp|uart [arguments]
   password [USER]                   change a local account password
 
 `postmerkos-cli` is retained as a compatibility symlink.
@@ -1052,11 +1104,24 @@ EOF_PASSWORD
 }
 
 compatibility_first_access() {
-    local answer
+    local state
     [ "$("$CTL" compatibility-needed 2>/dev/null || echo no)" = yes ] || return 0
+    state=$(cfg_get_device_compatibility 2>/dev/null || echo untested)
     while :; do
-        heading 'Untested Switch Model'
-        cat <<'EOF_COMPAT'
+        if [ "$state" = known-incompatible ]; then
+            heading 'Known-Incompatible Firmware'
+            cat <<'EOF_COMPAT_BAD'
+This firmware release is explicitly marked known-incompatible with the detected
+switch model. This notice cannot be dismissed. Do not flash another image from
+this release or rely on port, PoE, LED, reset, or updater hardware behavior.
+
+1) Display diagnostic compatibility report
+2) Display issue-report information
+4) Return to the menu
+EOF_COMPAT_BAD
+        else
+            heading 'Untested Switch Model'
+            cat <<'EOF_COMPAT'
 This switch model is currently marked as untested.
 
 postmerkOS has booted successfully, but port mapping, PoE, LED control, and
@@ -1069,11 +1134,12 @@ report and any errors you observe.
 3) Dismiss for this firmware version
 4) Remind me next time
 EOF_COMPAT
+        fi
         read_choice 'compatibility> '
         case "$CHOICE" in
             1) heading 'Compatibility Report'; "$CTL" compatibility-report; pause ;;
             2) heading 'Compatibility Reporting'; echo 'Project issues: https://github.com/Gadorach/meraki-builder/issues'; echo; echo 'Include the diagnostic report, model, port/PoE behavior, and any boot or update errors.'; pause ;;
-            3) "$CTL" compatibility-ack; pause; return ;;
+            3) if [ "$state" = known-incompatible ]; then echo 'Known-incompatible releases cannot be acknowledged.'; pause; else "$CTL" compatibility-ack; pause; return; fi ;;
             4|b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac
@@ -1182,13 +1248,14 @@ main() {
             sub=${2:-status}; shift 2 2>/dev/null || shift 1
             case "$sub" in
                 status) fw_update_status "$@" ;;
-                local|tftp|http|sftp)
+                local|tftp|http|sftp|uart)
                     can firmware.update || { echo 'Permission denied.' >&2; return 1; }
                     case "$sub" in
                         local) exec fw_update "$@" ;;
                         tftp) exec fw_update_tftp "$@" ;;
                         http) exec fw_update_http "$@" ;;
                         sftp) exec fw_update_sftp "$@" ;;
+                        uart) exec fw_update_uart "$@" ;;
                     esac
                     ;;
                 *) usage >&2; return 2 ;;

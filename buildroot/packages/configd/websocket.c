@@ -18,6 +18,7 @@
 
 #include <libpostmerkos.h>
 #include <dirent.h>
+#include <ctype.h>
 #include <errno.h>
 #include <time.h>
 #include <fcntl.h>
@@ -61,6 +62,7 @@ struct per_session_data {
   bool upload_handed_off;
   int upload_fd;
   char upload_path[256];
+  char upload_manifest_path[256];
   char upload_name[128];
   char upload_overlay[16];
   char upload_token[40];
@@ -87,7 +89,6 @@ static long long config_mtime_ns;
 static int configured_status_interval = 3;
 static struct lws_sorted_usec_list status_sul;
 static struct lws_sorted_usec_list config_sul;
-static struct lws_sorted_usec_list network_sul;
 static struct lws_sorted_usec_list terminal_sul;
 static bool terminal_poll_scheduled;
 static struct lws_context *ws_context;
@@ -231,52 +232,85 @@ static void status_poll_cb(struct lws_sorted_usec_list *sul) {
       (lws_usec_t)configured_status_interval * LWS_USEC_PER_SEC);
 }
 
-static void network_poll_cb(struct lws_sorted_usec_list *sul) {
-  struct network_runtime before = *network_manager_runtime();
-  struct apply_result result;
-  apply_result_init(&result);
-  bool changed = network_manager_poll(&result);
-  const struct network_runtime *after = network_manager_runtime();
-  if (json_object_array_length(result.warnings) > 0)
-    fprintf(stderr, "%s network: %s\n", get_time(),
-            json_object_to_json_string(result.warnings));
-  apply_result_cleanup(&result);
-  if (management_address_changed(&before, after))
-    rebind_management_services(&before, after);
-  if (changed) refresh_status_cache(true);
-  lws_sul_schedule(ws_context, 0, sul, network_poll_cb,
-      (lws_usec_t)network_manager_next_poll_seconds() * LWS_USEC_PER_SEC);
+static struct json_object *load_known_good_configuration(void) {
+  char backup[512];
+  int n = snprintf(backup, sizeof(backup), "%s.bak", config_file);
+  if (n < 0 || (size_t)n >= sizeof(backup)) return NULL;
+  struct json_object *config = load_json_file(backup);
+  char error[256] = {0};
+  if (!config || validate_configuration(config, error, sizeof(error)) != 0) {
+    if (config) json_object_put(config);
+    return NULL;
+  }
+  return config;
 }
 
 static void config_poll_cb(struct lws_sorted_usec_list *sul) {
   long long current_mtime = 0;
   if (config_file_mtime(&current_mtime) == 0 &&
       current_mtime != config_mtime_ns) {
-    config_mtime_ns = current_mtime;
-    struct json_object *config = load_config_file();
+    struct json_object *candidate = load_config_file();
+    struct json_object *known_good = load_known_good_configuration();
     char error[256] = {0};
-    if (!config || validate_configuration(config, error, sizeof(error)) != 0) {
-      config_file_set_runtime_error(config ? error :
-                                    "configuration file could not be parsed");
-      if (config) json_object_put(config);
-      refresh_status_cache(true);
+    bool accepted = candidate &&
+        validate_configuration(candidate, error, sizeof(error)) == 0;
+
+    struct network_runtime before = *network_manager_runtime();
+    struct apply_result result;
+    apply_result_init(&result);
+    if (accepted) {
+      int rc = config_apply_full(candidate, &result);
+      accepted = rc == 0 && apply_result_success(&result);
+      if (!accepted && !error[0])
+        snprintf(error, sizeof(error),
+                 "externally edited configuration could not be applied");
+    } else if (!error[0]) {
+      snprintf(error, sizeof(error),
+               "externally edited configuration could not be parsed");
+    }
+
+    if (accepted) {
+      /* Recommit through the atomic writer.  This refreshes the known-good
+       * backup only after validation and all required runtime operations have
+       * succeeded. */
+      if (save_config_file(candidate, error, sizeof(error)) != 0)
+        accepted = false;
+    }
+
+    if (!accepted) {
+      apply_result_cleanup(&result);
+      apply_result_init(&result);
+      if (known_good) {
+        int rollback_rc = config_apply_full(known_good, &result);
+        char save_error[256] = {0};
+        if (rollback_rc == 0 && apply_result_success(&result) &&
+            save_config_file(known_good, save_error, sizeof(save_error)) == 0) {
+          config_file_set_runtime_error(error);
+          refresh_config_cache(known_good, true);
+        } else {
+          config_file_set_runtime_error(
+              "external configuration was rejected and known-good restoration was incomplete");
+        }
+      } else {
+        config_file_set_runtime_error(
+            "external configuration was rejected and no valid known-good backup is available");
+      }
     } else {
       config_file_set_runtime_error(NULL);
-      struct apply_result result;
-      apply_result_init(&result);
-      struct network_runtime before = *network_manager_runtime();
-      config_apply_full(config, &result);
-      const struct network_runtime *after = network_manager_runtime();
-      if (json_object_array_length(result.warnings) > 0)
-        fprintf(stderr, "%s config reload: %s\n", get_time(),
-                json_object_to_json_string(result.warnings));
-      apply_result_cleanup(&result);
-      if (management_address_changed(&before, after))
-        rebind_management_services(&before, after);
-      refresh_config_cache(config, true);
-      refresh_status_cache(true);
-      json_object_put(config);
+      refresh_config_cache(candidate, true);
     }
+
+    const struct network_runtime *after = network_manager_runtime();
+    if (management_address_changed(&before, after))
+      rebind_management_services(&before, after);
+    if (json_object_array_length(result.warnings) > 0)
+      fprintf(stderr, "%s config reload: %s\n", get_time(),
+              json_object_to_json_string(result.warnings));
+    apply_result_cleanup(&result);
+    refresh_status_cache(true);
+    if (candidate) json_object_put(candidate);
+    if (known_good) json_object_put(known_good);
+    (void)config_file_mtime(&config_mtime_ns);
   }
   lws_sul_schedule(ws_context, 0, sul, config_poll_cb,
                    10 * LWS_USEC_PER_SEC);
@@ -523,18 +557,36 @@ static bool valid_overlay(const char *value) {
                    !strcmp(value, "reset") || !strcmp(value, "image"));
 }
 
+static bool valid_artifact_name(const char *name) {
+  if (!name || !*name || strlen(name) >= 128 || strchr(name, '/')) return false;
+  for (const unsigned char *p = (const unsigned char *)name; *p; ++p)
+    if (!(isalnum(*p) || *p == '.' || *p == '_' || *p == '-')) return false;
+  return true;
+}
+
+static int write_manifest_object(const char *path, struct json_object *manifest) {
+  if (!path || !manifest || !json_object_is_type(manifest, json_type_object)) return -EINVAL;
+  int rc = json_object_to_file_ext(path, manifest, JSON_C_TO_STRING_PRETTY);
+  if (rc == 0) chmod(path, 0600);
+  return rc == 0 ? 0 : -EIO;
+}
+
 static void purge_upload_cache(const char *keep) {
   const char *directory_path = "/run/fwupdate/uploads";
   mkdir("/run/fwupdate", 0700);
   mkdir(directory_path, 0700);
   DIR *directory = opendir(directory_path);
   if (!directory) return;
+  time_t now = time(NULL);
   struct dirent *entry;
   while ((entry = readdir(directory)) != NULL) {
     if (entry->d_name[0] == '.') continue;
     char path[320];
     snprintf(path, sizeof(path), "%s/%s", directory_path, entry->d_name);
-    if (!keep || strcmp(path, keep)) unlink(path);
+    if (keep && !strcmp(path, keep)) continue;
+    struct stat st;
+    if (stat(path, &st) == 0 && now >= st.st_mtime && now - st.st_mtime > 3600)
+      unlink(path);
   }
   closedir(directory);
 }
@@ -542,13 +594,16 @@ static void purge_upload_cache(const char *keep) {
 static void cleanup_upload(struct lws *wsi, struct per_session_data *session) {
   if (session->upload_fd >= 0) close(session->upload_fd);
   session->upload_fd = -1;
-  if (session->upload_path[0] && !session->upload_handed_off)
-    unlink(session->upload_path);
+  if (!session->upload_handed_off) {
+    if (session->upload_path[0]) unlink(session->upload_path);
+    if (session->upload_manifest_path[0]) unlink(session->upload_manifest_path);
+  }
   session->upload_active = false;
   session->upload_ready = false;
   session->upload_expected = 0;
   session->upload_received = 0;
   session->upload_path[0] = '\0';
+  session->upload_manifest_path[0] = '\0';
   if (upload_owner == wsi) upload_owner = NULL;
 }
 
@@ -576,14 +631,11 @@ static struct json_object *upload_status_json(
 static int replace_configuration(struct json_object *candidate,
                                  struct apply_result *result,
                                  char *error, size_t error_size) {
-  int rc = validate_configuration(candidate, error, error_size);
-  if (rc != 0) return rc;
   struct network_runtime before = *network_manager_runtime();
-  rc = save_config_file(candidate, error, error_size);
-  if (rc != 0) return rc;
-  rc = config_apply_full(candidate, result);
+  int rc = config_replace_validate_save_apply(candidate, result,
+                                               error, error_size);
   const struct network_runtime *after = network_manager_runtime();
-  if (management_address_changed(&before, after))
+  if (rc == 0 && management_address_changed(&before, after))
     rebind_management_services(&before, after);
   return rc;
 }
@@ -810,6 +862,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     struct json_object *size_object = NULL;
     struct json_object *force_object = NULL;
     struct json_object *accept_object = NULL;
+    struct json_object *manifest_object = NULL;
     if (!data || !json_object_object_get_ex(data, "size", &size_object)) {
       queue_bad_request(wsi, session, request_id, "firmware size is required");
       return 0;
@@ -820,7 +873,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     bool accept_untested = json_object_object_get_ex(data, "accept_untested", &accept_object) &&
                            json_object_get_boolean(accept_object);
     if (size_value <= 0 || size_value > MAX_FIRMWARE_UPLOAD ||
-        !valid_overlay(overlay)) {
+        !valid_overlay(overlay) || !valid_artifact_name(name)) {
       queue_bad_request(wsi, session, request_id,
                         "invalid firmware size or overlay policy");
       return 0;
@@ -837,6 +890,19 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
              (unsigned long)time(NULL), (unsigned long)((uintptr_t)wsi ^ (uintptr_t)getpid()));
     snprintf(session->upload_path, sizeof(session->upload_path),
              "/run/fwupdate/uploads/%s.bin", session->upload_token);
+    if (json_object_object_get_ex(data, "manifest", &manifest_object)) {
+      if (!json_object_is_type(manifest_object, json_type_object)) {
+        queue_bad_request(wsi, session, request_id, "manifest must be a JSON object");
+        cleanup_upload(wsi, session); return 0;
+      }
+      snprintf(session->upload_manifest_path, sizeof(session->upload_manifest_path),
+               "/run/fwupdate/uploads/%s.manifest.json", session->upload_token);
+      if (write_manifest_object(session->upload_manifest_path, manifest_object) != 0) {
+        queue_error(wsi, session, request_id, 500, "Manifest initialization failed",
+                    "unable to store release manifest");
+        cleanup_upload(wsi, session); return 0;
+      }
+    }
     session->upload_fd = open(session->upload_path,
                               O_WRONLY | O_CREAT | O_EXCL, 0600);
     if (session->upload_fd < 0) {
@@ -882,8 +948,9 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
       return 0;
     }
     char error[256] = {0};
-    if (firmware_validate_update(session->upload_path, session->upload_overlay,
-                                 session->upload_force,
+    if (firmware_validate_update(session->upload_path, session->upload_name,
+                                 session->upload_manifest_path[0] ? session->upload_manifest_path : NULL,
+                                 session->upload_overlay, session->upload_force,
                                  session->upload_accept_untested,
                                  error, sizeof(error)) != 0) {
       queue_error(wsi, session, request_id, 400,
@@ -911,8 +978,9 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
       return 0;
     }
     char error[256] = {0};
-    if (firmware_start_update(session->upload_path, session->upload_overlay,
-                              session->upload_force,
+    if (firmware_start_update(session->upload_path, session->upload_name,
+                              session->upload_manifest_path[0] ? session->upload_manifest_path : NULL,
+                              session->upload_overlay, session->upload_force,
                               session->upload_accept_untested,
                               error, sizeof(error)) != 0) {
       queue_error(wsi, session, request_id, 500,
@@ -1053,8 +1121,6 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     config_file_mtime(&config_mtime_ns);
     refresh_config_cache(candidate, true);
     refresh_status_cache(true);
-    lws_sul_schedule(ws_context, 0, &network_sul, network_poll_cb,
-                     1 * LWS_USEC_PER_SEC);
     return 0;
   }
 
@@ -1091,8 +1157,6 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   config_file_mtime(&config_mtime_ns);
   refresh_config_cache(saved, true);
   refresh_status_cache(true);
-  lws_sul_schedule(ws_context, 0, &network_sul, network_poll_cb,
-                   1 * LWS_USEC_PER_SEC);
   json_object_put(saved);
   return 0;
 }
@@ -1303,8 +1367,6 @@ void ws_schedule_timers(struct lws_context *context, int status_interval) {
       (lws_usec_t)configured_status_interval * LWS_USEC_PER_SEC);
   lws_sul_schedule(context, 0, &config_sul, config_poll_cb,
       10 * LWS_USEC_PER_SEC);
-  lws_sul_schedule(context, 0, &network_sul, network_poll_cb,
-      (lws_usec_t)network_manager_next_poll_seconds() * LWS_USEC_PER_SEC);
 }
 
 int ws_service_once(struct lws_context *context, int timeout_ms) {
@@ -1314,7 +1376,6 @@ int ws_service_once(struct lws_context *context, int timeout_ms) {
 void ws_shutdown(struct lws_context *context) {
   lws_sul_cancel(&status_sul);
   lws_sul_cancel(&config_sul);
-  lws_sul_cancel(&network_sul);
   lws_sul_cancel(&terminal_sul);
   terminal_poll_scheduled = false;
   for (size_t i = 0; i < client_count; i++) {

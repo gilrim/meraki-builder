@@ -9,7 +9,7 @@ postmerkOS is an independent, locally managed firmware environment for selected 
 - Administrator, operator, and viewer roles
 - Port, VLAN, STP, LACP, multicast, PoE, and management-network configuration
 - Persistent JSON configuration stored in JFFS2
-- Local upload, TFTP, HTTP/HTTPS, and SFTP firmware workflows
+- Local, browser, TFTP, HTTP/HTTPS, SFTP, Linux UART, and pre-kernel UART recovery workflows
 - Release/version validation, update history, recovery reset, and external configuration backup
 - DHCP or static management addressing
 - SSH, chrony/NTP, UTC offset, and compact DST-rule configuration
@@ -18,7 +18,7 @@ postmerkOS is an independent, locally managed firmware environment for selected 
 
 ## Compatibility
 
-MS42P and MS320-24P are currently recorded as confirmed runtime targets. Other recognized Vitesse models are marked **untested**: they are allowed to boot and flash after an explicit warning, and successful users are invited to submit a compatibility report. Clearly incompatible architecture or flash geometry remains blocked by normal updater validation.
+Compatibility is release-specific. A release manifest promotes only exact models validated for that artifact; recognized but unvalidated models require explicit acknowledgement, and known-incompatible architecture or flash geometry remains blocked. One VCore-III image carries all supported Luton26, Jaguar1, and Jaguar Dual module families and selects the exact profile at boot.
 
 See [Hardware compatibility](docs/hardware/compatibility.md) for the complete model table.
 
@@ -29,6 +29,8 @@ See [Hardware compatibility](docs/hardware/compatibility.md) for the complete mo
 3. Build an image with `make base` or `make web`, or use a validated release image.
 4. Flash the complete image using the [hardware flashing guide](docs/installation/hardware-flashing.md).
 5. Connect using serial, SSH, or the optional web interface and follow the [first-boot guide](docs/getting-started/first-boot.md).
+
+VCore-III builds resolve the selected `Gadorach/meraki-redboot` release, compile its 256 KiB boot region and embedded family recovery stages from source, and use that release's canonical SPIM payload packer. The watchmysys donor remains only for proprietary Vitesse/Click module extraction. Release generation fails unless source provenance, boot-menu capability, SPIM alignment/CRC, recovery descriptors, model allow-lists, and flash geometry all match the final image.
 
 Build help is available with:
 

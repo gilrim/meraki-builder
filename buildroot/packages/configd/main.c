@@ -23,6 +23,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 bool dry_run = false;
@@ -41,6 +43,64 @@ static volatile sig_atomic_t running = 1;
 static void signal_handler(int signal_number) {
   (void)signal_number;
   running = 0;
+}
+
+
+static bool management_address_changed(const struct network_runtime *before,
+                                       const struct network_runtime *after) {
+  if (!before || !after) return false;
+  return strcmp(before->applied.address, after->applied.address) ||
+         before->applied.prefix != after->applied.prefix;
+}
+
+static void rebind_management_services(const struct network_runtime *before,
+                                       const struct network_runtime *after) {
+  if (!before || !after || dry_run || !after->applied.address[0]) return;
+  const char *script = getenv("CONFIGD_NETWORK_REBIND");
+  if (!script || !*script) script = "/usr/sbin/postmerkos-network-rebind";
+  if (access(script, X_OK) != 0) {
+    fprintf(stderr, "%s network: rebind hook is unavailable: %s\n",
+            get_time(), script);
+    return;
+  }
+  char old_cidr[32];
+  char new_cidr[32];
+  snprintf(old_cidr, sizeof(old_cidr), "%s/%u",
+           before->applied.address[0] ? before->applied.address : "0.0.0.0",
+           before->applied.prefix);
+  snprintf(new_cidr, sizeof(new_cidr), "%s/%u", after->applied.address,
+           after->applied.prefix);
+  fprintf(stderr, "%s network: management address changed %s -> %s; rebinding management services\n",
+          get_time(), old_cidr, new_cidr);
+  pid_t child = fork();
+  if (child == 0) {
+    execl(script, script, old_cidr, new_cidr, after->source, (char *)NULL);
+    _exit(127);
+  }
+  if (child < 0) {
+    fprintf(stderr, "%s network: unable to start rebind hook: %s\n",
+            get_time(), strerror(errno));
+    return;
+  }
+  int status = 0;
+  if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status) ||
+      WEXITSTATUS(status) != 0)
+    fprintf(stderr, "%s network: management-service rebind hook failed\n", get_time());
+}
+
+static void service_network_poll(void) {
+  struct network_runtime before = *network_manager_runtime();
+  struct apply_result result;
+  apply_result_init(&result);
+  bool changed = network_manager_poll(&result);
+  const struct network_runtime *after = network_manager_runtime();
+  if (json_object_array_length(result.warnings) > 0)
+    fprintf(stderr, "%s network: %s\n", get_time(),
+            json_object_to_json_string(result.warnings));
+  apply_result_cleanup(&result);
+  if (management_address_changed(&before, after))
+    rebind_management_services(&before, after);
+  if (changed) mark_clients_pending();
 }
 
 static void usage(FILE *stream, const char *program) {
@@ -419,11 +479,10 @@ int main(int argc, char **argv) {
       i2c_close(&pd690xx);
       return print_bad_request("unable to parse replacement configuration");
     }
-    int rc = validate_configuration(candidate, error, sizeof(error));
-    if (rc == 0) rc = save_config_file(candidate, error, sizeof(error));
     struct apply_result result;
     apply_result_init(&result);
-    if (rc == 0) rc = config_apply_full(candidate, &result);
+    int rc = config_replace_validate_save_apply(candidate, &result,
+                                                 error, sizeof(error));
     if (rc != 0) {
       json_object_put(candidate);
       apply_result_cleanup(&result);
@@ -523,7 +582,15 @@ int main(int argc, char **argv) {
 
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
+  long network_poll_due = 0;
   while (running) {
+    long now = time(NULL);
+    if (now >= network_poll_due) {
+      service_network_poll();
+      unsigned int next_poll = network_manager_next_poll_seconds();
+      if (next_poll < 1) next_poll = 1;
+      network_poll_due = now + (long)next_poll;
+    }
     int local_rc = local_socket_service_once(local_fd, 50);
     if (local_rc < 0) {
       fprintf(stderr, "configd: local socket error: %s\n", strerror(-local_rc));

@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/common.sh"
 
-# On rolling-release Arch/CachyOS hosts, run the complete firmware build in the
-# supported Ubuntu container.  Previously only build-kernel.sh entered
-# Distrobox, so build-all.sh returned to the host and Buildroot compiled its
-# host tools with the host GCC.  GCC 16 cannot compile the binutils 2.38 bundled
-# by Buildroot 2023.02.4.
+# Run the complete build in the supported Ubuntu environment on Arch-derived
+# hosts so the kernel toolchain and Buildroot host utilities use one compiler
+# baseline.
 if [[ "${MS42P_IN_DISTROBOX:-0}" != 1 ]]; then
   if bool_enabled "${USE_DISTROBOX:-0}"; then
     exec "$SCRIPT_DIR/distrobox-run.sh" env \
@@ -64,11 +62,52 @@ else
   log "Reusing existing kernel artifacts"
 fi
 
-if [[ ! -d "$DONOR_ROOT/lib/modules" || ! -f "$LOADER_ARTIFACT" ]] || \
-   bool_enabled "${REEXTRACT_DONOR:-0}"; then
+if [[ ! -f "$LOADER_ARTIFACT" || ! -f "$LOADER_MANIFEST" || ! -f "$LOADER_BUILD_SOURCE_RECORD" ]] || \
+   bool_enabled "${REBUILD_LOADER:-0}"; then
+  "$SCRIPT_DIR/build-loader.sh"
+else
+  if ! python3 - "$LOADER_ARTIFACT" "$LOADER_MANIFEST" "$LOADER_BUILD_SOURCE_RECORD" \
+      "$LOADER_SOURCE_REVISION_FILE" "$RECOVERY_ARTIFACT_DIR" <<'PY_LOADER'
+import hashlib, json, sys
+from pathlib import Path
+image, manifest_path, source_record_path, selected_revision_path, recovery_dir = map(Path, sys.argv[1:])
+data = image.read_bytes()
+manifest = json.loads(manifest_path.read_text())
+source_record = json.loads(source_record_path.read_text())
+selected_revision = selected_revision_path.read_text().strip()
+cap = manifest.get("uart_ramloader", {})
+policies = manifest.get("policies", {})
+assert len(data) == 0x40000
+for marker in (b"PMOSRAM READY 2", b"PMOSBOOT MENU-PROBE", b"PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY"):
+    assert marker in data
+assert manifest.get("format") == "postmerkos.vcoreiii-linuxloader-build.v7"
+assert cap.get("enabled") is True and cap.get("protocol_version") == 2
+assert cap.get("boot_menu", {}).get("options") == {"1": "uart-ramloader", "2": "embedded-firmware-recovery"}
+assert cap.get("image_check_diagnostics") == "structured-pass-warn-fail-skip-values-v1"
+assert policies.get("payload_slot_end") == 0x300000 and policies.get("hard_payload_limit") == 0x2BFFE0
+assert manifest.get("boot_region", {}).get("sha256") == hashlib.sha256(data).hexdigest()
+assert source_record.get("project") == "Gadorach/meraki-redboot"
+assert source_record.get("revision") == selected_revision
+for family in ("luton26", "jaguar1"):
+    assert (recovery_dir / f"recovery-{family}.bin").is_file()
+    assert (recovery_dir / f"recovery-{family}.descriptor.json").is_file()
+PY_LOADER
+  then
+    warn "The cached loader does not match the selected meraki-redboot source release; rebuilding it."
+    "$SCRIPT_DIR/build-loader.sh"
+  else
+    log "Reusing validated source-built meraki-redboot and embedded recovery payloads"
+  fi
+fi
+
+donor_modules_ready() {
+  verify_vendor_module_tree "$DONOR_ROOT/lib/modules" >/dev/null 2>&1
+}
+
+if ! donor_modules_ready || bool_enabled "${REEXTRACT_DONOR:-0}"; then
   "$SCRIPT_DIR/prepare-donor.sh"
 else
-  log "Reusing extracted donor modules and loader"
+  log "Reusing verified materialized donor modules"
 fi
 
 if (( INCLUDE_UI )); then

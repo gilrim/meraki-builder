@@ -1,84 +1,66 @@
 #!/bin/sh
-#
-# Copyright (C) Hal Martin (github.com/halmartin)
-#
-# Set up GPIO for the PD690xx
-#
+# Gate PD690xx reset/enable GPIO writes behind an immutable exact-model profile.
+set -u
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+BOARDINFO=${POSTMERKOS_BOARDINFO:-/run/postmerkos/boardinfo}
+STATUS=${POSTMERKOS_POE_INIT_STATUS:-/run/postmerkos/poe-init.status}
+
+status() {
+  state=$1; shift
+  mkdir -p "$(dirname "$STATUS")"
+  { printf 'state=%s\n' "$state"; printf 'message=%s\n' "$*"; } > "$STATUS.tmp.$$"
+  mv -f "$STATUS.tmp.$$" "$STATUS"
+}
+
+candidate_gpio() {
+  case "$MODEL" in
+    MS220-8P) echo '7 12' ;;
+    MS22P|MS220-24P) echo '82 81' ;;
+    MS320-24P) echo '9 8' ;;
+    MS220-48P|MS220-48LP|MS220-48FP|MS320-48P|MS320-48LP|MS320-48FP) echo '41 40' ;;
+    MS42P) echo '41 8' ;;
+    *) return 1 ;;
+  esac
+}
+
+write_gpio() {
+  gpio=$1 value=$2
+  [ -d "/sys/class/gpio/gpio$gpio" ] || echo "$gpio" > /sys/class/gpio/export
+  echo out > "/sys/class/gpio/gpio$gpio/direction"
+  echo "$value" > "/sys/class/gpio/gpio$gpio/value"
+}
 
 start() {
-    # libmeraki.so: get_switch_type
-    # MS22P: switch_type 1 (VSC7427)
-    # MS42P: switch_type 2 (VSC7434 dual)
-    # MS220-8P:  switch_type 3 (VSC7425)
-    # MS220-24P: switch_type 5 (VSC7427)
-    # MS220-48P: switch_type 6 (VSC7434 dual)
-    # MS320-24: switch_type 7 (VSC7434)
-    # this is to configure the PD690xx (to auto mode?)
-    # libpoecore.so: hard_init
-    if [ $(cat /proc/cpuinfo | grep -Ec "VSC7425$") -eq 1 ]; then
-      # switch_type 3
-      GPIO1=7
-      GPIO2=12
-    elif [ $(cat /proc/cpuinfo | grep -Ec "VSC7427$") -eq 1 ]; then
-      # switch_type 1, 4, or 5
-      GPIO1=82
-      GPIO2=81
-    elif [ $(cat /proc/cpuinfo | grep -Ec "VSC7434$") -eq 1 ]; then
-      # switch_type 7
-      GPIO1=9
-      GPIO2=8
-    elif [ $(cat /proc/cpuinfo | grep -Ec "VSC7434 Dual$") -eq 1 ]; then
-      # switch_type 6
-      GPIO1=41
-      GPIO2=40
-      # switch_type 2 sets GPIO2 to 8 (I think?)
-      # so this might not work for MS42P
-      # we'd have to use /etc/boardinfo for that?
-      # someone with an MS42P can strace poe_server and find out
-    fi
-    echo $GPIO1 > /sys/class/gpio/export
-    echo $GPIO2 > /sys/class/gpio/export
-    # N/A in VDMS-10393, 1588 in VDMS-10394 (Carcal)
-    echo out > /sys/class/gpio/gpio${GPIO1}/direction
-    # SFP17_SD or PHY7_LED1 in VDMS-10393 (Luton26/Jaguar)
-    echo out > /sys/class/gpio/gpio${GPIO2}/direction
-    echo 1 > /sys/class/gpio/gpio${GPIO1}/value
-    echo 0 > /sys/class/gpio/gpio${GPIO2}/value
-    # usleep(10000)
-    sleep 0.1
-    echo 1 > /sys/class/gpio/gpio${GPIO2}/value
-    echo 0 > /sys/class/gpio/gpio${GPIO1}/value
-    echo 1 > /sys/class/gpio/gpio${GPIO2}/value
-    # usleep(500000)
-    # I would like to put this into /usr/local/bin/
-    # but that's not in the path unless you patch busybox
-    if [ -f /bin/poe_leds ]; then
-        /bin/poe_leds
-    fi
+  if [ ! -r "$BOARDINFO" ]; then
+    echo 'PoE init: exact runtime board identity unavailable; no GPIO writes'
+    status disabled 'exact board identity unavailable'
+    return 0
+  fi
+  . "$BOARDINFO"
+  if [ "${IDENTITY_EXACT:-0}" != 1 ] || [ "${POE_CAPABLE:-0}" != 1 ]; then
+    echo "PoE init: $MODEL is not an exact PoE-capable profile; no GPIO writes"
+    status disabled 'profile is not exact and PoE-capable'
+    return 0
+  fi
+  gpios=$(candidate_gpio 2>/dev/null || true)
+  if [ "${POE_GPIO_VERIFIED:-0}" != 1 ]; then
+    echo "PoE init: GPIO mapping registered but not hardware-verified for $MODEL; no GPIO writes"
+    status diagnostic-only "candidate GPIO mapping: ${gpios:-unknown}"
+    return 0
+  fi
+  [ -n "$gpios" ] || { echo "PoE init: verified profile lacks a GPIO mapping for $MODEL" >&2; status failed 'verified profile lacks GPIO mapping'; return 1; }
+  set -- $gpios; gpio1=$1; gpio2=$2
+  write_gpio "$gpio1" 1 || { status failed "could not assert GPIO $gpio1"; return 1; }
+  write_gpio "$gpio2" 0 || { status failed "could not assert GPIO $gpio2"; return 1; }
+  sleep 0.1
+  write_gpio "$gpio2" 1 || { status failed "could not release GPIO $gpio2"; return 1; }
+  write_gpio "$gpio1" 0 || { status failed "could not release GPIO $gpio1"; return 1; }
+  command -v poe_leds >/dev/null 2>&1 && poe_leds >/dev/null 2>&1 || true
+  status ready "verified PoE GPIO initialization completed for $MODEL"
 }
 
-stop() {
-    /bin/true
-}
-
-restart() {
-	stop
-	start
-}
-
-case "$1" in
-  start)
-  	start
-	;;
-  stop)
-  	stop
-	;;
-  restart|reload)
-  	restart
-	;;
-  *)
-	echo "Usage: $0 {start|stop|restart}"
-	exit 1
+case "${1:-}" in
+  start|restart|reload) start ;;
+  stop) : ;;
+  *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 2 ;;
 esac
-
-exit $?

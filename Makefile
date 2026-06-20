@@ -4,8 +4,8 @@ SHELL := /usr/bin/env bash
 JOBS ?= $(shell nproc 2>/dev/null || echo 1)
 export JOBS
 
-.PHONY: help all base web doctor deps sources kernel donor ui prepare rootfs image \
-        validate verify-inputs test-fwupdate menuconfig distrobox clean distclean print-config \
+.PHONY: help all base web doctor deps sources kernel loader donor ui prepare rootfs image \
+        validate verify-inputs test-fwupdate test-image test-modules test-hardware test-docs test-ui-contract verify-modules test-all menuconfig distrobox clean distclean print-config \
         mx80 mx80-prepare mx80-validate mx80-check mx80-menuconfig mx80-clean mx80-distclean mx84-check
 
 help:
@@ -17,15 +17,23 @@ help:
 	  '  make web          Complete build with Gadorach/postmerkos-ui ms42p-dev' \
 	  '  make doctor       Check host tools and local build state' \
 	  '  make deps         Install dependencies for the current distribution' \
-	  '  make sources      Clone/select the pinned kernel and OpenWrt source' \
+	  '  make sources      Clone/select kernel/OpenWrt and the latest tagged meraki-redboot source' \
 	  '  make kernel       Build the OpenWrt toolchain and Linux 3.18 kernel' \
-	  '  make donor        Download/extract donor modules and RedBoot as needed' \
+	  '  make loader       Build meraki-redboot, its embedded recovery stages, and payload packer from source' \
+	  '  make donor        Download/extract the donor switch module tree' \
 	  '  make ui           Clone/update and compile postmerkos-ui' \
 	  '  make verify-inputs Validate and hash all local binary build inputs' \
 	  '  make prepare      Download/configure Buildroot and generated overlays' \
 	  '  make rootfs       Build SquashFS and the complete 16 MiB NOR image' \
 	  '  make validate     Validate the most recent image and rootfs contents' \
-	  '  make test-fwupdate Run host-side updater syntax and packaging tests' \
+	  '  make test-fwupdate Run updater, UART, flasher, and packaging tests' \
+	  '  make test-image    Verify full-capacity SquashFS image construction' \
+	  '  make test-hardware Verify board identity and hardware capability policy' \
+	  '  make test-docs     Check repository Markdown links' \
+	  '  make test-ui-contract UI_DIR=../postmerkos-ui checks browser/configd methods' \
+	  '  make test-all      Run all builder host-side validation targets' \
+	  '  make test-modules  Test complete multi-platform module staging and boot selection' \
+	  '  make verify-modules Verify all platform modules in ROOTFS=artifacts/rootfs.squashfs' \
 	  '  make menuconfig   Open Buildroot menuconfig after preparation' \
 	  '  make distrobox    Run the complete build in Ubuntu 22.04 distrobox' \
 	  '' \
@@ -43,8 +51,8 @@ help:
 	  '  make distclean    Remove .work and artifacts completely' \
 	  '' \
 	  'Useful variables:' \
-	  '  JOBS=8 INCLUDE_UI=1 DONOR_IMAGE=/path/file.bin' \
-	  '  USE_DISTROBOX=1 NONINTERACTIVE=1 AUTO_DOWNLOAD_DONOR=1'
+	  '  JOBS=8 INCLUDE_UI=1 DONOR_IMAGE=/path/file.bin LOADER_REF=latest' \
+	  '  USE_DISTROBOX=1 NONINTERACTIVE=1 AUTO_DOWNLOAD_DONOR=1 LOADER_BUILD_MODE=auto'
 
 all:
 	@./scripts/build-all.sh
@@ -67,6 +75,9 @@ sources:
 kernel:
 	@./scripts/build-kernel.sh
 
+loader:
+	@./scripts/build-loader.sh
+
 donor:
 	@./scripts/prepare-donor.sh
 
@@ -79,10 +90,10 @@ verify-inputs:
 prepare:
 	@./scripts/prepare-buildroot.sh
 
-rootfs:
+rootfs: prepare
 	@./scripts/build-rootfs.sh
 
-image:
+image: prepare
 	@./scripts/build-rootfs.sh
 	@./scripts/validate-image.sh
 
@@ -90,7 +101,35 @@ validate:
 	@./scripts/validate-image.sh
 
 test-fwupdate:
-	@./tools/fwupdate-host/host-smoke-test.sh
+	@./buildroot/packages/fwupdate/tests/test-host.sh
+	@./buildroot/packages/fwupdate/tests/test-uart.sh
+	@./tools/fwupdate-smoke-test/host-smoke-test.sh
+	@python3 -m unittest discover -s tools/firmware-flasher/tests -p 'test_*.py' -v
+
+test-image:
+	@./buildroot/board/meraki/ms220/tests/test-post-image.sh
+	@python3 ./scripts/tests/test-artifact-manifest.py
+
+test-modules:
+	@./scripts/tests/test-vendor-modules.sh
+
+verify-modules:
+	@./scripts/verify-vendor-modules-in-rootfs.sh "$${ROOTFS:-artifacts/rootfs.squashfs}"
+
+
+test-hardware:
+	@./buildroot/board/meraki/ms220/tests/test-board-identity.sh
+	@./buildroot/packages/postmerkos-hardware/tests/test-host.sh
+
+test-docs:
+	@./scripts/tests/test-doc-links.py
+
+test-ui-contract:
+	@./scripts/tests/test-ui-configd-contract.py "$${UI_DIR:-../postmerkos-ui}"
+
+test-all: test-fwupdate test-image test-modules test-hardware test-docs test-ui-contract
+	@./buildroot/packages/postmerkos-console/tests/test-host.sh
+	@$(MAKE) -C buildroot/packages/configd test-host
 
 menuconfig: prepare
 	@bash -c 'source ./scripts/common.sh; $(MAKE) -C "$$BUILDROOT_DIR" menuconfig'
