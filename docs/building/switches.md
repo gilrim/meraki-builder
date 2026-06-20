@@ -7,7 +7,7 @@ building from an Arch-derived workstation.
 The build prepares:
 
 - the pinned kernel/OpenWrt source used for Linux 3.18 and headers;
-- the latest tagged `Gadorach/meraki-redboot` source by default;
+- the latest `Gadorach/meraki-redboot` `main` revision by default;
 - meraki-redboot's checksum-pinned GCC 4.7.3/binutils toolchain and 256 KiB boot
   region;
 - the Luton26 and Jaguar1 recovery stages embedded by that loader;
@@ -18,16 +18,21 @@ The build prepares:
 ## Loader source selection
 
 ```sh
-make sources                     # LOADER_REF=latest
-LOADER_REF=0.7.0 make loader      # exact release tag
-LOADER_REF=<commit> make loader   # exact revision
+make sources                     # fetches origin/main
+LOADER_REF=main make loader       # explicit moving main branch
+LOADER_REF=<commit> make loader   # optional exact revision
 ```
 
-`latest` prefers the highest stable remote version tag and falls back to the
-highest prerelease tag only when no stable version tag exists. The resolved commit and VERSION
-are persisted in `artifacts/`; cached loader output is rebuilt when it no longer
-matches the selected source revision. The builder does not download or consume
-Hal Martin's patched RedBoot binary.
+`main` is authoritative and is fetched from `origin` on every source preparation.
+The compatibility value `LOADER_REF=latest` is treated as an alias for `main`, never
+as a release tag. The resolved commit and VERSION are persisted in `artifacts/`,
+and cached loader output is rebuilt when it no longer matches that revision.
+
+The builder never applies patches, creates commits, or rewrites files in the
+meraki-redboot checkout. Required loader or recovery changes must be committed to
+`Gadorach/meraki-redboot` itself. If the selected source lacks a required contract,
+the build stops with a contract error. The same immutable-upstream policy applies
+to `Gadorach/postmerkos-ui`, whose default source is `origin/main`.
 
 `LOADER_VARIANT=development` is the default for this project integration. It
 retains the loader's warn-and-continue compatibility policy where continuation

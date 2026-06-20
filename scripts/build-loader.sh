@@ -39,46 +39,25 @@ chmod 0755 "$ARTIFACTS_DIR/tools/mkvcoreiii_payload.py"
 write_sha256_sidecar "$LOADER_ARTIFACT"
 write_sha256_sidecar "$LOADER_MANIFEST"
 write_sha256_sidecar "$ARTIFACTS_DIR/tools/mkvcoreiii_payload.py"
-source_resolution=git
-if [[ "$(git -C "$LOADER_SOURCE_DIR" log -1 --pretty=%s)" == Imported\ meraki-redboot* ]]; then
-  source_resolution=archive-bootstrap
-fi
 source_describe="$(git -C "$LOADER_SOURCE_DIR" describe --tags --always --dirty)"
 python3 - "$LOADER_BUILD_SOURCE_RECORD" "$LOADER_REPO_URL" "$LOADER_SOURCE_VERSION_FILE" \
-  "$LOADER_SOURCE_REVISION_FILE" "$variant" "$LOADER_REF" "$source_describe" \
-  "$source_resolution" "$LOADER_SOURCE_ARCHIVE" <<'PY_SOURCE'
-import hashlib
+  "$LOADER_SOURCE_REVISION_FILE" "$variant" "$LOADER_REF" "$RESOLVED_GIT_SYMBOLIC_REF" "$source_describe" <<'PY_SOURCE'
 import json
 from pathlib import Path
 import sys
-import zipfile
 
-out, repo, version, revision, variant, requested_ref, describe, resolution, archive = sys.argv[1:]
+out, repo, version, revision, variant, requested_ref, resolved_ref, describe = sys.argv[1:]
 record = {
     "project": "Gadorach/meraki-redboot",
     "repository": repo,
     "version": Path(version).read_text().strip(),
     "revision": Path(revision).read_text().strip(),
     "requested_ref": requested_ref,
+    "resolved_ref": resolved_ref,
     "describe": describe,
-    "resolution": resolution,
+    "resolution": "authoritative-git",
     "variant": variant,
 }
-archive_path = Path(archive) if archive else None
-if archive_path and archive_path.is_file():
-    raw = archive_path.read_bytes()
-    comment = ""
-    try:
-        with zipfile.ZipFile(archive_path) as zf:
-            comment = zf.comment.decode("utf-8", "replace").strip()
-    except zipfile.BadZipFile:
-        pass
-    record["offline_fallback_archive"] = {
-        "filename": archive_path.name,
-        "bytes": len(raw),
-        "sha256": hashlib.sha256(raw).hexdigest(),
-        "zip_comment": comment,
-    }
 Path(out).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
 PY_SOURCE
 write_sha256_sidecar "$LOADER_BUILD_SOURCE_RECORD"

@@ -21,6 +21,7 @@
 ## Builders
 
 - [Switch builds](building/switches.md)
+- [Authoritative upstream source policy](building/upstream-source-policy.md)
 - [MX80 build](building/mx80.md)
 - [MX84 build status](building/mx84.md)
 - [Artifacts and validation](building/artifacts.md)

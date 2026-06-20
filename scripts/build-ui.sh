@@ -34,10 +34,12 @@ select_node() {
   need npm
 }
 
-clone_or_update_ref "$UI_REPO_URL" "$UI_DIR" "$UI_REF" "postmerkos-ui"
+clone_or_update_git_ref "$UI_REPO_URL" "$UI_DIR" "$UI_REF" "postmerkos-ui"
+ui_revision_before="$(git -C "$UI_DIR" rev-parse HEAD)"
+[[ -z "$(git -C "$UI_DIR" status --porcelain)" ]] ||   die "postmerkos-ui checkout is not clean before build"
 select_node
 
-log "Building postmerkos-ui from $UI_REF"
+log "Building postmerkos-ui from authoritative origin/$RESOLVED_GIT_SYMBOLIC_REF"
 (
   cd "$UI_DIR"
   npm_config_cache="$DOWNLOAD_DIR/npm-cache" npm ci --no-audit --no-fund
@@ -45,6 +47,10 @@ log "Building postmerkos-ui from $UI_REF"
 )
 
 [[ -f "$UI_DIR/build/index.html" ]] || die "UI build did not produce build/index.html"
+[[ "$(git -C "$UI_DIR" rev-parse HEAD)" == "$ui_revision_before" ]] ||   die "postmerkos-ui revision changed during build"
+if ! git -C "$UI_DIR" diff --quiet || ! git -C "$UI_DIR" diff --cached --quiet; then
+  die "postmerkos-ui tracked source changed during build; commit changes upstream instead of modifying them in meraki-builder"
+fi
 rm -rf "$BUILD_DIR/postmerkos-ui"
 mkdir -p "$BUILD_DIR/postmerkos-ui"
 rsync -a --delete "$UI_DIR/build/" "$BUILD_DIR/postmerkos-ui/"

@@ -1,3 +1,13 @@
+# 2026-06-20 authoritative upstream main policy
+
+- Make `Gadorach/meraki-redboot:main` and `Gadorach/postmerkos-ui:main` the default authoritative sources.
+- Treat the legacy `LOADER_REF=latest` value as an alias for `main`, never as the newest version tag.
+- Remove all meraki-redboot patch files and automatic source-repair commits from meraki-builder.
+- Reject dirty, stale, or contract-incompatible upstream checkouts instead of modifying them.
+- Remove the automatic v0.7.0 archive fallback and require a refreshed Git source.
+- Record both the requested and normalized source ref plus the exact selected commit in artifact provenance.
+- Add regression coverage proving that repeated builder runs advance to newer upstream `main` commits while leaving both source trees unchanged.
+
 # 2026-06-20 PMOSREC v3 adaptive UART transport
 
 - Keep the meraki-redboot menu and PMOSRAM executable upload fixed at 115200 baud, then negotiate optimized transport only after PMOSREC starts in RAM.
