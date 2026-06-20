@@ -137,7 +137,7 @@ for family in ("luton26", "jaguar1"):
         raise SystemExit(f"Recovery descriptor lacks corrected byte-zero entry contract: {descriptor_path}")
     if descriptor.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise SystemExit(f"Recovery descriptor lacks direct-member manifest lookup: {descriptor_path}")
-    if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+    if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
         raise SystemExit(f"Recovery descriptor lacks destructive SPI NOR preflight: {descriptor_path}")
     if descriptor.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
         raise SystemExit(f"Recovery descriptor lacks SPI master-enable correction: {descriptor_path}")
@@ -155,7 +155,7 @@ for family in ("luton26", "jaguar1"):
     payload_data = binary_path.read_bytes()
     marker = (
         f"PMOSRECOVERY2;SOC={family};FAMILY={expected[family]['id']};"
-        f"SPI={expected[family]['spi']:08x};PROTO=2;PREFLIGHT=2;END"
+        f"SPI={expected[family]['spi']:08x};PROTO=2;PREFLIGHT=3;END"
     ).encode("ascii")
     if payload_data.count(marker) != 1:
         raise SystemExit(f"Recovery payload embedded target descriptor mismatch: {binary_path}")
@@ -171,7 +171,7 @@ for family in ("luton26", "jaguar1"):
         raise SystemExit(f"meraki-redboot embedded recovery lacks corrected byte-zero entry contract: {family}")
     if embedded_record.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise SystemExit(f"meraki-redboot embedded recovery lacks direct-member manifest lookup: {family}")
-    if embedded_record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+    if embedded_record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
         raise SystemExit(f"meraki-redboot embedded recovery lacks hardware preflight: {family}")
     if embedded_record.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
         raise SystemExit(f"meraki-redboot embedded recovery lacks SPI master-enable correction: {family}")
@@ -237,7 +237,7 @@ data = {
             "protocol_version": 2,
             "full_image_bytes": 16 * 1024 * 1024,
             "operations": ["verify", "preflight", "dry-run", "flash"],
-            "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+            "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
             "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
             "preflight_scratch": {"default_address": 0x00FF0000, "bytes": 0x10000, "minimum_address": 0x40000, "restore_original": True},
             "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],

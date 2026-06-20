@@ -31,7 +31,7 @@ READY_SOC = re.compile(r"\bSOC=(luton26|jaguar1)\b")
 INFO_SOC = re.compile(r"\bSOC:\s*(luton26|jaguar1)\b")
 RECOVERY_DESCRIPTOR = re.compile(
     r"^PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=(luton26|jaguar1);"
-    r"FAMILY=([12]);SPI=([0-9a-fA-F]{8});PROTO=2;PREFLIGHT=2;END$"
+    r"FAMILY=([12]);SPI=([0-9a-fA-F]{8});PROTO=2;PREFLIGHT=3;END$"
 )
 MENU_BYTE = re.compile(r"\bBYTE:\s*0x([0-9a-fA-F]{8})\b")
 MENU_SELECTION = re.compile(r"\bSELECTED:\s*0x([0-9a-fA-F]{8})\b")
@@ -367,7 +367,7 @@ def main() -> int:
                     "recovery_payload_sha256": descriptor.sha256 if descriptor is not None else None,
                     "hardware_preflight_contract": (
                         descriptor.hardware_preflight_contract if descriptor is not None
-                        else "spi-nor-scratch-rw-restore-loader-crc-v2"
+                        else "spi-nor-scratch-rw-restore-loader-crc-v3"
                     ),
                     "spi_master_enable_contract": (
                         descriptor.spi_master_enable_contract if descriptor is not None
@@ -438,5 +438,13 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except ProtocolError as exc:
-        print(f"bootloader recovery error: {exc}", file=sys.stderr)
+        message = str(exc)
+        print(f"bootloader recovery error: {message}", file=sys.stderr)
+        if "FLASH-NO-RESPONSE" in message:
+            print(
+                "diagnosis: SPI NOR did not answer the JEDEC probe; verify that the "
+                "recovery descriptor reports PREFLIGHT=3. Older PREFLIGHT=2 payloads "
+                "used inverted MSCC chip-select values and always read ffffff.",
+                file=sys.stderr,
+            )
         raise SystemExit(1)

@@ -130,7 +130,7 @@ embedded = {}
 for family, target in targets.items():
     marker = (
         f"PMOSRECOVERY2;SOC={family};FAMILY={target['id']};"
-        f"SPI={target['spi']:08x};PROTO=2;PREFLIGHT=2;END"
+        f"SPI={target['spi']:08x};PROTO=2;PREFLIGHT=3;END"
     ).encode()
     payload = recovery / f'recovery-{family}.bin'
     payload.write_bytes(b'smoke-payload\0' + marker + b'\0')
@@ -141,7 +141,7 @@ for family, target in targets.items():
         'load_address': 0x81000000, 'entry_address': 0x81000000,
         'entry_contract': 'flat-binary-byte-zero-v1',
         'manifest_lookup_contract': 'direct-object-members-v1',
-        'hardware_preflight_contract': 'spi-nor-scratch-rw-restore-loader-crc-v2',
+        'hardware_preflight_contract': 'spi-nor-scratch-rw-restore-loader-crc-v3',
         'spi_master_enable_contract': 'preserve-general-ctrl-enable-spi-v1',
     }
     descriptor = {
@@ -159,7 +159,7 @@ for family, target in targets.items():
         'entry_address': 0x81000000,
         'entry_contract': 'flat-binary-byte-zero-v1',
         'manifest_lookup_contract': 'direct-object-members-v1',
-        'hardware_preflight_contract': 'spi-nor-scratch-rw-restore-loader-crc-v2',
+        'hardware_preflight_contract': 'spi-nor-scratch-rw-restore-loader-crc-v3',
         'spi_master_enable_contract': 'preserve-general-ctrl-enable-spi-v1',
         'preflight_scratch': {'default_address': 0x00FF0000, 'bytes': 0x10000, 'minimum_address': 0x40000, 'restore_original': True},
         'transport_integrity': ['frame-crc32', 'object-crc32', 'object-sha256'],

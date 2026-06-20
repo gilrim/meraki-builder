@@ -152,7 +152,7 @@ def main(argv: list[str]) -> int:
             raise SystemExit(f"recovery descriptor lacks corrected byte-zero entry contract: {descriptor_path}")
         if descriptor.get("manifest_lookup_contract") != "direct-object-members-v1":
             raise SystemExit(f"recovery descriptor lacks direct-member manifest lookup: {descriptor_path}")
-        if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
             raise SystemExit(f"recovery descriptor lacks hardware preflight contract: {descriptor_path}")
         if descriptor.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
             raise SystemExit(f"recovery descriptor lacks SPI master-enable correction: {descriptor_path}")
@@ -180,7 +180,7 @@ def main(argv: list[str]) -> int:
         payload_data = binary_path.read_bytes()
         marker = (
             f"PMOSRECOVERY2;SOC={family};FAMILY={expected[family]['id']};"
-            f"SPI={expected[family]['spi']:08x};PROTO=2;PREFLIGHT=2;END"
+            f"SPI={expected[family]['spi']:08x};PROTO=2;PREFLIGHT=3;END"
         ).encode("ascii")
         if payload_data.count(marker) != 1:
             raise SystemExit(f"recovery payload embedded target descriptor mismatch: {binary_path}")
@@ -198,7 +198,7 @@ def main(argv: list[str]) -> int:
             raise SystemExit(f"loader embedded recovery lacks corrected byte-zero entry contract: {binary_path.name}")
         if embedded_record.get("manifest_lookup_contract") != "direct-object-members-v1":
             raise SystemExit(f"loader embedded recovery lacks direct-member manifest lookup: {binary_path.name}")
-        if embedded_record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        if embedded_record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
             raise SystemExit(f"loader embedded recovery lacks hardware preflight support: {binary_path.name}")
         if embedded_record.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
             raise SystemExit(f"loader embedded recovery lacks SPI master-enable correction: {binary_path.name}")
@@ -260,7 +260,7 @@ def main(argv: list[str]) -> int:
             "protocol_version": 2,
             "full_image_bytes": TOTAL_BYTES,
             "operations": ["verify", "preflight", "dry-run", "flash"],
-            "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+            "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
             "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
             "preflight_scratch": {"default_address": 0x00FF0000, "bytes": 64 * 1024, "minimum_address": 0x00040000, "restore_original": True},
             "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],

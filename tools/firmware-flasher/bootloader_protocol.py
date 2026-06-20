@@ -57,7 +57,7 @@ FAMILY_ID = {"luton26": 1, "jaguar1": 2}
 FAMILY_SPI_ADDRESS = {"luton26": 0x70000064, "jaguar1": 0x70000068}
 ALLOWED_MODEL_STATUS = {"validated", "confirmed", "untested"}
 DESCRIPTOR_RE = re.compile(
-    rb"PMOSRECOVERY2;SOC=(luton26|jaguar1);FAMILY=([12]);SPI=([0-9a-f]{8});PROTO=2;PREFLIGHT=2;END"
+    rb"PMOSRECOVERY2;SOC=(luton26|jaguar1);FAMILY=([12]);SPI=([0-9a-f]{8});PROTO=2;PREFLIGHT=3;END"
 )
 
 
@@ -166,8 +166,8 @@ def inspect_payload(path: Path, descriptor_path: Path | None = None) -> PayloadD
             "recovery payload lacks direct-object-members-v1 manifest parsing; "
             "nested kernel/region digests can shadow artifact.sha256"
         )
-    if hardware_preflight_contract != "spi-nor-scratch-rw-restore-loader-crc-v2":
-        raise ProtocolError("recovery payload lacks destructive scratch read/write/restore preflight support")
+    if hardware_preflight_contract != "spi-nor-scratch-rw-restore-loader-crc-v3":
+        raise ProtocolError("recovery payload lacks PREFLIGHT=3 active-mask chip-select and destructive scratch read/write/restore support")
     if spi_master_enable_contract != "preserve-general-ctrl-enable-spi-v1":
         raise ProtocolError("recovery payload lacks the SPI master-enable handoff correction")
     return PayloadDescriptor(
@@ -223,7 +223,7 @@ def _validate_loader_capability(manifest: dict, loader_sha256: str, family: str)
             "firmware image contains a recovery parser that permits nested digest shadowing; "
             "rebuild meraki-redboot with direct-object-members-v1 manifest lookup"
         )
-    if record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+    if record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
         raise ProtocolError(
             "firmware image contains a recovery payload without destructive SPI NOR preflight support"
         )
@@ -299,7 +299,7 @@ def _recovery_payload_record(manifest: dict, family: str, model: str) -> dict:
         raise ProtocolError("manifest UART firmware recovery image size is incompatible")
     if firmware.get("operations") != ["verify", "preflight", "dry-run", "flash"]:
         raise ProtocolError("manifest UART firmware recovery operation contract is incompatible")
-    if firmware.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+    if firmware.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
         raise ProtocolError("manifest lacks destructive SPI NOR preflight support")
     if firmware.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
         raise ProtocolError("manifest lacks the SPI master-enable handoff correction")
@@ -344,7 +344,7 @@ def _recovery_payload_record(manifest: dict, family: str, model: str) -> dict:
         raise ProtocolError("manifest recovery payload lacks the corrected byte-zero entry contract")
     if record.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise ProtocolError("manifest recovery payload lacks scoped direct-member manifest parsing")
-    if record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+    if record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
         raise ProtocolError("manifest recovery payload lacks scratch read/write/restore preflight support")
     if record.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
         raise ProtocolError("manifest recovery payload lacks the SPI master-enable correction")

@@ -80,7 +80,7 @@ class ArtifactManifestTests(unittest.TestCase):
         for family, target in TARGETS.items():
             marker = (
                 f"PMOSRECOVERY2;SOC={family};FAMILY={target['id']};"
-                f"SPI={target['spi']:08x};PROTO=2;PREFLIGHT=2;END"
+                f"SPI={target['spi']:08x};PROTO=2;PREFLIGHT=3;END"
             ).encode("ascii")
             payload = self.recovery / f"recovery-{family}.bin"
             payload.write_bytes(b"payload-prefix\0" + marker + b"\0payload-suffix")
@@ -90,7 +90,7 @@ class ArtifactManifestTests(unittest.TestCase):
                 "load_address": 0x81000000, "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
-                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
                 "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
             }
             descriptor = {
@@ -109,7 +109,7 @@ class ArtifactManifestTests(unittest.TestCase):
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
-                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
                 "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
                 "preflight_scratch": {
                     "default_address": 0x00FF0000,
@@ -198,7 +198,7 @@ class ArtifactManifestTests(unittest.TestCase):
         self.assertEqual(firmware["flash_geometry"], GEOMETRY)
         self.assertEqual(firmware["accepted_jedec_ids"], JEDEC)
         self.assertEqual(firmware["operations"], ["verify", "preflight", "dry-run", "flash"])
-        self.assertEqual(firmware["hardware_preflight_contract"], "spi-nor-scratch-rw-restore-loader-crc-v2")
+        self.assertEqual(firmware["hardware_preflight_contract"], "spi-nor-scratch-rw-restore-loader-crc-v3")
         self.assertEqual(firmware["spi_master_enable_contract"], "preserve-general-ctrl-enable-spi-v1")
         self.assertEqual(firmware["preflight_scratch"]["default_address"], 0x00FF0000)
         for family, target in TARGETS.items():
@@ -210,7 +210,7 @@ class ArtifactManifestTests(unittest.TestCase):
             self.assertEqual(record["entry_address"], 0x81000000)
             self.assertEqual(record["entry_contract"], "flat-binary-byte-zero-v1")
             self.assertEqual(record["manifest_lookup_contract"], "direct-object-members-v1")
-            self.assertEqual(record["hardware_preflight_contract"], "spi-nor-scratch-rw-restore-loader-crc-v2")
+            self.assertEqual(record["hardware_preflight_contract"], "spi-nor-scratch-rw-restore-loader-crc-v3")
             self.assertEqual(record["spi_master_enable_contract"], "preserve-general-ctrl-enable-spi-v1")
             self.assertTrue(record["preflight_scratch"]["restore_original"])
 

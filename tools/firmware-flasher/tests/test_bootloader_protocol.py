@@ -55,10 +55,10 @@ class BundleFixture:
         self.payload_luton = root / "recovery-luton26.bin"
         self.payload_jaguar = root / "recovery-jaguar1.bin"
         self.payload_luton.write_bytes(
-            b"xPMOSRECOVERY2;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=2;PREFLIGHT=2;ENDy"
+            b"xPMOSRECOVERY2;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=2;PREFLIGHT=3;ENDy"
         )
         self.payload_jaguar.write_bytes(
-            b"xPMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=2;ENDy"
+            b"xPMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=3;ENDy"
         )
         for payload, family, family_id, spi in (
             (self.payload_luton, "luton26", 1, 0x70000064),
@@ -75,7 +75,7 @@ class BundleFixture:
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
-                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
                 "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
                 "binary": {
                     "filename": payload.name,
@@ -99,7 +99,7 @@ class BundleFixture:
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
-                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
                 "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
             },
             "jaguar1": {
@@ -113,7 +113,7 @@ class BundleFixture:
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
-                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
                 "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
             },
         }
@@ -150,7 +150,7 @@ class BundleFixture:
                     "protocol_version": 2,
                     "full_image_bytes": bp.FULL_IMAGE_SIZE,
                     "operations": ["verify", "preflight", "dry-run", "flash"],
-                    "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                    "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
                     "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
                     "preflight_scratch": {
                         "default_address": bp.DEFAULT_PREFLIGHT_SCRATCH,
@@ -379,6 +379,22 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaisesRegex(bp.ProtocolError, "direct-object-members-v1"):
                 bp.inspect_payload(bundle.payload_jaguar)
 
+    def test_preflight2_payload_with_inverted_chip_select_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = BundleFixture(Path(temp))
+            payload = bundle.payload_jaguar
+            sidecar = payload.with_suffix(".descriptor.json")
+            payload.write_bytes(
+                b"xPMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=2;ENDy"
+            )
+            data = json.loads(sidecar.read_text())
+            data["hardware_preflight_contract"] = "spi-nor-scratch-rw-restore-loader-crc-v2"
+            data["binary"]["bytes"] = payload.stat().st_size
+            data["binary"]["sha256"] = hashlib.sha256(payload.read_bytes()).hexdigest()
+            sidecar.write_text(json.dumps(data))
+            with self.assertRaisesRegex(bp.ProtocolError, "PMOSRECOVERY2 descriptor"):
+                bp.inspect_payload(payload)
+
     def test_embedded_exec_without_ready_is_classified_as_entry_failure(self) -> None:
         link = mock.Mock()
         link.wait_for.side_effect = [
@@ -414,7 +430,7 @@ class ProtocolTests(unittest.TestCase):
             f"PMOSREC READY 2 SOC={family} FAMILY={family_id:08x}",
             (
                 f"PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC={family};FAMILY={family_id};"
-                f"SPI={'70000064' if family == 'luton26' else '70000068'};PROTO=2;PREFLIGHT=2;END"
+                f"SPI={'70000064' if family == 'luton26' else '70000068'};PROTO=2;PREFLIGHT=3;END"
             ),
             "PMOSREC FLASH-PREFLIGHT-OK ID=c22018 ERASE=00010000 PAGE=00000100",
             "PMOSREC COMMAND-READY 1",
@@ -444,7 +460,7 @@ class ProtocolTests(unittest.TestCase):
             "PMOSBOOT PASS-MENU-CHOICE: SELECTED: 0x00000001",
             "PMOSRAM READY 2 SOC=jaguar1",
             "PMOSREC READY 2 SOC=jaguar1 FAMILY=00000002",
-            "PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=2;END",
+            "PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=3;END",
             "PMOSREC FLASH-PREFLIGHT-OK ID=c22018 ERASE=00010000 PAGE=00000100",
             "PMOSREC COMMAND-READY 1",
         ]
@@ -476,7 +492,7 @@ class ProtocolTests(unittest.TestCase):
                     pass
                 target.sendall(
                     b"PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;"
-                    b"SPI=70000068;PROTO=2;PREFLIGHT=2;END\n"
+                    b"SPI=70000068;PROTO=2;PREFLIGHT=3;END\n"
                 )
                 target.sendall(b"PMOSREC FLASH-PREFLIGHT-OK ID=c22018 ERASE=00010000 PAGE=00000100\n")
                 target.sendall(b"PMOSREC COMMAND-READY 1\n")
@@ -510,7 +526,7 @@ class ProtocolTests(unittest.TestCase):
         link = mock.Mock()
         link.wait_for.return_value = (
             "PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=luton26;FAMILY=1;"
-            "SPI=70000064;PROTO=2;PREFLIGHT=2;END"
+            "SPI=70000064;PROTO=2;PREFLIGHT=3;END"
         )
         with self.assertRaisesRegex(bp.ProtocolError, "recovery descriptor mismatch"):
             br.wait_for_recovery_descriptor(link, "jaguar1")
