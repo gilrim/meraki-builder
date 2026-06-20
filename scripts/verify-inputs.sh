@@ -78,15 +78,15 @@ expected_targets = {
 for family, (fid, spi, expected_models) in expected_targets.items():
     payload = recovery_dir / f"recovery-{family}.bin"
     raw = payload.read_bytes()
-    marker = f"PMOSRECOVERY2;SOC={family};FAMILY={fid};SPI={spi};PROTO=2;PREFLIGHT=3;END".encode()
+    marker = f"PMOSRECOVERY3;SOC={family};FAMILY={fid};SPI={spi};PROTO=3;PREFLIGHT=4;BAUDTEST=1;FRAME_MAX=4096;WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;END".encode()
     if raw.count(marker) != 1:
         raise SystemExit(f"{payload.name} target descriptor mismatch")
     descriptor = json.loads((recovery_dir / f"recovery-{family}.descriptor.json").read_text(encoding="utf-8"))
     binary = descriptor.get("binary", {})
     expected_geometry = {"bytes": 0x1000000, "erase_bytes": 0x10000, "page_bytes": 256, "address_bytes": 3}
-    if descriptor.get("format") != "postmerkos.uart-recovery-payload.v2":
+    if descriptor.get("format") != "postmerkos.uart-recovery-payload.v3":
         raise SystemExit(f"{payload.name} descriptor format is unsupported")
-    if descriptor.get("protocol_version") != 2 or descriptor.get("soc_family") != family:
+    if descriptor.get("protocol_version") != 3 or descriptor.get("soc_family") != family:
         raise SystemExit(f"{payload.name} descriptor family/protocol mismatch")
     if descriptor.get("soc_family_id") != fid or descriptor.get("spi_software_mode_address") != int(spi, 16):
         raise SystemExit(f"{payload.name} descriptor target registers mismatch")
@@ -100,14 +100,16 @@ for family, (fid, spi, expected_models) in expected_targets.items():
         raise SystemExit(f"{payload.name} descriptor lacks corrected byte-zero entry contract")
     if descriptor.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise SystemExit(f"{payload.name} descriptor lacks direct-member manifest lookup")
-    if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
+    if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v4":
         raise SystemExit(f"{payload.name} descriptor lacks destructive SPI NOR preflight")
     if descriptor.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
         raise SystemExit(f"{payload.name} descriptor lacks SPI master-enable correction")
+    if descriptor.get("adaptive_transport_contract") != "pmosrec-v3-adaptive-uart-sparse-lz4-v1":
+        raise SystemExit(f"{payload.name} descriptor lacks adaptive PMOSREC v3 transport")
     scratch = descriptor.get("preflight_scratch", {})
     if scratch != {"default_address": 0x00FF0000, "bytes": 0x10000, "minimum_address": 0x40000, "restore_original": True}:
         raise SystemExit(f"{payload.name} descriptor preflight scratch contract mismatch")
-    if descriptor.get("transport_integrity") != ["frame-crc32", "object-crc32", "object-sha256"]:
+    if descriptor.get("transport_integrity") != ["frame-crc32", "compact-ack-crc32", "object-crc32", "object-sha256", "reconstructed-image-sha256"]:
         raise SystemExit(f"{payload.name} descriptor integrity contract mismatch")
     jedec = descriptor.get("accepted_jedec_ids")
     if not isinstance(jedec, list) or not jedec or any(re.fullmatch(r"[0-9a-f]{6}", item or "") is None for item in jedec):
@@ -128,10 +130,12 @@ for family, (fid, spi, expected_models) in expected_targets.items():
         raise SystemExit(f"{payload.name} embedded recovery lacks corrected byte-zero entry contract")
     if embedded_record.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise SystemExit(f"{payload.name} embedded recovery lacks direct-member manifest lookup")
-    if embedded_record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
+    if embedded_record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v4":
         raise SystemExit(f"{payload.name} embedded recovery lacks hardware preflight support")
     if embedded_record.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
         raise SystemExit(f"{payload.name} embedded recovery lacks SPI master-enable correction")
+    if embedded_record.get("adaptive_transport_contract") != "pmosrec-v3-adaptive-uart-sparse-lz4-v1":
+        raise SystemExit(f"{payload.name} embedded recovery lacks adaptive PMOSREC v3 transport")
 PY
 
 entry="$(readelf -h "$KERNEL_ARTIFACT_DIR/vmlinuz" | awk '/Entry point address/ {print $4}')"

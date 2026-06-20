@@ -79,8 +79,10 @@ class ArtifactManifestTests(unittest.TestCase):
         embedded = {}
         for family, target in TARGETS.items():
             marker = (
-                f"PMOSRECOVERY2;SOC={family};FAMILY={target['id']};"
-                f"SPI={target['spi']:08x};PROTO=2;PREFLIGHT=3;END"
+                f"PMOSRECOVERY3;SOC={family};FAMILY={target['id']};"
+                f"SPI={target['spi']:08x};PROTO=3;PREFLIGHT=4;BAUDTEST=1;FRAME_MAX=4096;"
+                "WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;CONFIRM_RETRY=1;"
+                "AUTO_CONFIRM=1;AUTO_REBOOT=1;END"
             ).encode("ascii")
             payload = self.recovery / f"recovery-{family}.bin"
             payload.write_bytes(b"payload-prefix\0" + marker + b"\0payload-suffix")
@@ -90,12 +92,13 @@ class ArtifactManifestTests(unittest.TestCase):
                 "load_address": 0x81000000, "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
-                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
                 "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+                "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
             }
             descriptor = {
-                "format": "postmerkos.uart-recovery-payload.v2",
-                "protocol_version": 2,
+                "format": "postmerkos.uart-recovery-payload.v3",
+                "protocol_version": 3,
                 "soc_family": family,
                 "soc_family_id": target["id"],
                 "spi_software_mode_address": target["spi"],
@@ -104,12 +107,13 @@ class ArtifactManifestTests(unittest.TestCase):
                 "accepted_jedec_ids": JEDEC,
                 "flash_geometry": GEOMETRY,
                 "operations": ["verify", "preflight", "dry-run", "flash"],
-                "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
+                "transport_integrity": ["frame-crc32", "compact-ack-crc32", "object-crc32", "object-sha256", "reconstructed-image-sha256"],
+                "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
                 "load_address": 0x81000000,
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
-                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
                 "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
                 "preflight_scratch": {
                     "default_address": 0x00FF0000,
@@ -198,7 +202,9 @@ class ArtifactManifestTests(unittest.TestCase):
         self.assertEqual(firmware["flash_geometry"], GEOMETRY)
         self.assertEqual(firmware["accepted_jedec_ids"], JEDEC)
         self.assertEqual(firmware["operations"], ["verify", "preflight", "dry-run", "flash"])
-        self.assertEqual(firmware["hardware_preflight_contract"], "spi-nor-scratch-rw-restore-loader-crc-v3")
+        self.assertEqual(firmware["protocol_version"], 3)
+        self.assertEqual(firmware["hardware_preflight_contract"], "spi-nor-scratch-rw-restore-loader-crc-v4")
+        self.assertEqual(firmware["adaptive_transport_contract"], "pmosrec-v3-adaptive-uart-sparse-lz4-v1")
         self.assertEqual(firmware["spi_master_enable_contract"], "preserve-general-ctrl-enable-spi-v1")
         self.assertEqual(firmware["preflight_scratch"]["default_address"], 0x00FF0000)
         for family, target in TARGETS.items():
@@ -210,8 +216,9 @@ class ArtifactManifestTests(unittest.TestCase):
             self.assertEqual(record["entry_address"], 0x81000000)
             self.assertEqual(record["entry_contract"], "flat-binary-byte-zero-v1")
             self.assertEqual(record["manifest_lookup_contract"], "direct-object-members-v1")
-            self.assertEqual(record["hardware_preflight_contract"], "spi-nor-scratch-rw-restore-loader-crc-v3")
+            self.assertEqual(record["hardware_preflight_contract"], "spi-nor-scratch-rw-restore-loader-crc-v4")
             self.assertEqual(record["spi_master_enable_contract"], "preserve-general-ctrl-enable-spi-v1")
+            self.assertEqual(record["adaptive_transport_contract"], "pmosrec-v3-adaptive-uart-sparse-lz4-v1")
             self.assertTrue(record["preflight_scratch"]["restore_original"])
 
     def test_tampered_payload_is_rejected(self) -> None:
@@ -249,7 +256,7 @@ class ArtifactManifestTests(unittest.TestCase):
 
     def test_missing_embedded_descriptor_is_rejected(self) -> None:
         payload = self.recovery / "recovery-luton26.bin"
-        data = payload.read_bytes().replace(b"PMOSRECOVERY2", b"PMOSRECOVERX2")
+        data = payload.read_bytes().replace(b"PMOSRECOVERY3", b"PMOSRECOVERX3")
         payload.write_bytes(data)
         descriptor_path = self.recovery / "recovery-luton26.descriptor.json"
         descriptor = json.loads(descriptor_path.read_text())

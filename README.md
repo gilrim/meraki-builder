@@ -52,3 +52,13 @@ make help
 The [documentation index](docs/README.md) links installation, user, build, architecture, development, recovery, research, and project-history material.
 
 This project is provided without warranty. Keep a direct hardware recovery method available while testing unconfirmed models or firmware-update changes.
+
+## PMOSREC v3 adaptive pre-kernel recovery
+
+The full-image UART recovery path keeps meraki-redboot and `PMOSRAM2` at
+115200 baud, then negotiates faster target-generated rates inside the RAM-resident
+PMOSREC stage. It qualifies bidirectional deterministic CRC traffic, 4 KiB
+frames, windowed compact acknowledgements, sparse reconstruction and LZ4
+blocks before transferring the manifest and image. The complete reconstructed
+16 MiB image is still SHA-256 verified before erase authorization. See
+[`docs/architecture/pmosrec-v3-adaptive-uart.md`](docs/architecture/pmosrec-v3-adaptive-uart.md).

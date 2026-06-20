@@ -135,11 +135,17 @@ for family, (family_id, spi, models) in expected.items():
     descriptor_path = recovery_dir / f"recovery-{family}.descriptor.json"
     raw = payload.read_bytes()
     descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
-    marker = f"PMOSRECOVERY2;SOC={family};FAMILY={family_id};SPI={spi:08x};PROTO=2;PREFLIGHT=3;END".encode()
+    marker = f"PMOSRECOVERY3;SOC={family};FAMILY={family_id};SPI={spi:08x};PROTO=3;PREFLIGHT=4;BAUDTEST=1;FRAME_MAX=4096;WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;END".encode()
     if raw.count(marker) != 1:
         raise SystemExit(f"{payload.name} has an invalid embedded target descriptor")
-    if descriptor.get("format") != "postmerkos.uart-recovery-payload.v2":
+    if descriptor.get("format") != "postmerkos.uart-recovery-payload.v3":
         raise SystemExit(f"{payload.name} descriptor format is unsupported")
+    if descriptor.get("protocol_version") != 3:
+        raise SystemExit(f"{payload.name} descriptor protocol is not PMOSREC v3")
+    if descriptor.get("adaptive_transport_contract") != "pmosrec-v3-adaptive-uart-sparse-lz4-v1":
+        raise SystemExit(f"{payload.name} lacks the PMOSREC v3 adaptive transport contract")
+    if descriptor.get("transport_integrity") != ["frame-crc32", "compact-ack-crc32", "object-crc32", "object-sha256", "reconstructed-image-sha256"]:
+        raise SystemExit(f"{payload.name} has an invalid PMOSREC v3 integrity contract")
     if descriptor.get("accepted_models") != models:
         raise SystemExit(f"{payload.name} descriptor model allow-list is invalid")
     if descriptor.get("load_address") != 0x81000000 or descriptor.get("entry_address") != 0x81000000:
@@ -148,7 +154,7 @@ for family, (family_id, spi, models) in expected.items():
         raise SystemExit(f"{payload.name} lacks the corrected flat-binary byte-zero entry contract")
     if descriptor.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise SystemExit(f"{payload.name} lacks scoped direct-member manifest parsing")
-    if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
+    if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v4":
         raise SystemExit(f"{payload.name} lacks destructive SPI NOR preflight support")
     if descriptor.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
         raise SystemExit(f"{payload.name} lacks the SPI master-enable correction")
@@ -163,10 +169,12 @@ for family, (family_id, spi, models) in expected.items():
         raise SystemExit(f"meraki-redboot embedded recovery lacks the corrected entry contract for {family}")
     if embedded.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise SystemExit(f"meraki-redboot embedded recovery lacks scoped manifest parsing for {family}")
-    if embedded.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
+    if embedded.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v4":
         raise SystemExit(f"meraki-redboot embedded recovery lacks hardware preflight for {family}")
     if embedded.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
         raise SystemExit(f"meraki-redboot embedded recovery lacks SPI master-enable correction for {family}")
+    if embedded.get("adaptive_transport_contract") != "pmosrec-v3-adaptive-uart-sparse-lz4-v1":
+        raise SystemExit(f"meraki-redboot embedded recovery lacks adaptive PMOSREC v3 transport for {family}")
     binary = descriptor.get("binary", {})
     if binary.get("bytes") != len(raw) or binary.get("sha256") != hashlib.sha256(raw).hexdigest():
         raise SystemExit(f"{payload.name} descriptor binary record mismatch")

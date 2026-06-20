@@ -101,8 +101,10 @@ embedded = {}
 jedec = ["c22018", "ef4018", "012018", "20ba18", "c84018"]
 for family, target in targets.items():
     marker = (
-        f"PMOSRECOVERY2;SOC={family};FAMILY={target['id']};"
-        f"SPI={target['spi']:08x};PROTO=2;PREFLIGHT=3;END"
+        f"PMOSRECOVERY3;SOC={family};FAMILY={target['id']};"
+        f"SPI={target['spi']:08x};PROTO=3;PREFLIGHT=4;BAUDTEST=1;FRAME_MAX=4096;"
+        "WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;CONFIRM_RETRY=1;"
+        "AUTO_CONFIRM=1;AUTO_REBOOT=1;END"
     ).encode()
     payload = recovery / f"recovery-{family}.bin"
     payload.write_bytes(b"module-test-payload\0" + marker + b"\0")
@@ -113,12 +115,13 @@ for family, target in targets.items():
         "load_address": 0x81000000, "entry_address": 0x81000000,
         "entry_contract": "flat-binary-byte-zero-v1",
         "manifest_lookup_contract": "direct-object-members-v1",
-        "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+        "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
         "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+        "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
     }
     descriptor = {
-        "format": "postmerkos.uart-recovery-payload.v2",
-        "protocol_version": 2,
+        "format": "postmerkos.uart-recovery-payload.v3",
+        "protocol_version": 3,
         "soc_family": family,
         "soc_family_id": target["id"],
         "spi_software_mode_address": target["spi"],
@@ -127,12 +130,13 @@ for family, target in targets.items():
         "accepted_jedec_ids": jedec,
         "flash_geometry": geometry,
         "operations": ["verify", "preflight", "dry-run", "flash"],
-        "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
+        "transport_integrity": ["frame-crc32", "compact-ack-crc32", "object-crc32", "object-sha256", "reconstructed-image-sha256"],
+        "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
         "load_address": 0x81000000,
         "entry_address": 0x81000000,
         "entry_contract": "flat-binary-byte-zero-v1",
         "manifest_lookup_contract": "direct-object-members-v1",
-        "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+        "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
         "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
         "preflight_scratch": {"default_address": 0x00FF0000, "bytes": 0x10000, "minimum_address": 0x40000, "restore_original": True},
         "binary": {
@@ -163,7 +167,8 @@ Path(loader_manifest).write_text(json.dumps({
         "ram_start": 0x81000000,
         "ram_end": 0x87f00000,
         "supported_soc_families": ["luton26", "jaguar1"],
-        "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
+        "transport_integrity": ["frame-crc32", "compact-ack-crc32", "object-crc32", "object-sha256", "reconstructed-image-sha256"],
+        "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
         "boot_menu": {
             "probe_timeout_ms": 3000,
             "selection_timeout_ms": 5000,

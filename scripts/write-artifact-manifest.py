@@ -136,9 +136,9 @@ def main(argv: list[str]) -> int:
         descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
         binary_record = descriptor.get("binary", {})
         binary_path = recovery_dir / str(binary_record.get("filename", ""))
-        if descriptor.get("format") != "postmerkos.uart-recovery-payload.v2":
+        if descriptor.get("format") != "postmerkos.uart-recovery-payload.v3":
             raise SystemExit(f"unsupported recovery descriptor format: {descriptor_path}")
-        if descriptor.get("soc_family") != family or descriptor.get("protocol_version") != 2:
+        if descriptor.get("soc_family") != family or descriptor.get("protocol_version") != 3:
             raise SystemExit(f"recovery descriptor family/protocol mismatch: {descriptor_path}")
         if descriptor.get("soc_family_id") != expected[family]["id"] or descriptor.get("spi_software_mode_address") != expected[family]["spi"]:
             raise SystemExit(f"recovery descriptor target register mismatch: {descriptor_path}")
@@ -152,10 +152,12 @@ def main(argv: list[str]) -> int:
             raise SystemExit(f"recovery descriptor lacks corrected byte-zero entry contract: {descriptor_path}")
         if descriptor.get("manifest_lookup_contract") != "direct-object-members-v1":
             raise SystemExit(f"recovery descriptor lacks direct-member manifest lookup: {descriptor_path}")
-        if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
+        if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v4":
             raise SystemExit(f"recovery descriptor lacks hardware preflight contract: {descriptor_path}")
         if descriptor.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
             raise SystemExit(f"recovery descriptor lacks SPI master-enable correction: {descriptor_path}")
+        if descriptor.get("adaptive_transport_contract") != "pmosrec-v3-adaptive-uart-sparse-lz4-v1":
+            raise SystemExit(f"recovery descriptor lacks PMOSREC v3 adaptive transport: {descriptor_path}")
         expected_scratch = {
             "default_address": 0x00FF0000,
             "bytes": 0x10000,
@@ -164,7 +166,7 @@ def main(argv: list[str]) -> int:
         }
         if descriptor.get("preflight_scratch") != expected_scratch:
             raise SystemExit(f"recovery descriptor preflight scratch contract mismatch: {descriptor_path}")
-        if descriptor.get("transport_integrity") != ["frame-crc32", "object-crc32", "object-sha256"]:
+        if descriptor.get("transport_integrity") != ["frame-crc32", "compact-ack-crc32", "object-crc32", "object-sha256", "reconstructed-image-sha256"]:
             raise SystemExit(f"recovery descriptor integrity contract mismatch: {descriptor_path}")
         accepted_models = descriptor.get("accepted_models")
         if accepted_models != expected[family]["models"] or any(model not in known_models for model in accepted_models):
@@ -179,8 +181,10 @@ def main(argv: list[str]) -> int:
             raise SystemExit(f"recovery payload size does not match descriptor: {binary_path}")
         payload_data = binary_path.read_bytes()
         marker = (
-            f"PMOSRECOVERY2;SOC={family};FAMILY={expected[family]['id']};"
-            f"SPI={expected[family]['spi']:08x};PROTO=2;PREFLIGHT=3;END"
+            f"PMOSRECOVERY3;SOC={family};FAMILY={expected[family]['id']};"
+            f"SPI={expected[family]['spi']:08x};PROTO=3;PREFLIGHT=4;BAUDTEST=1;"
+            "FRAME_MAX=4096;WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;"
+            "CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;END"
         ).encode("ascii")
         if payload_data.count(marker) != 1:
             raise SystemExit(f"recovery payload embedded target descriptor mismatch: {binary_path}")
@@ -198,10 +202,12 @@ def main(argv: list[str]) -> int:
             raise SystemExit(f"loader embedded recovery lacks corrected byte-zero entry contract: {binary_path.name}")
         if embedded_record.get("manifest_lookup_contract") != "direct-object-members-v1":
             raise SystemExit(f"loader embedded recovery lacks direct-member manifest lookup: {binary_path.name}")
-        if embedded_record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
+        if embedded_record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v4":
             raise SystemExit(f"loader embedded recovery lacks hardware preflight support: {binary_path.name}")
         if embedded_record.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
             raise SystemExit(f"loader embedded recovery lacks SPI master-enable correction: {binary_path.name}")
+        if embedded_record.get("adaptive_transport_contract") != "pmosrec-v3-adaptive-uart-sparse-lz4-v1":
+            raise SystemExit(f"loader embedded recovery lacks PMOSREC v3 adaptive transport: {binary_path.name}")
         if common_geometry is None:
             common_geometry = geometry
             common_jedec = jedec
@@ -220,6 +226,8 @@ def main(argv: list[str]) -> int:
             "manifest_lookup_contract": descriptor["manifest_lookup_contract"],
             "hardware_preflight_contract": descriptor["hardware_preflight_contract"],
             "spi_master_enable_contract": descriptor["spi_master_enable_contract"],
+            "adaptive_transport_contract": descriptor["adaptive_transport_contract"],
+            "adaptive_transport": descriptor.get("adaptive_transport"),
             "preflight_scratch": descriptor["preflight_scratch"],
         }
 
@@ -251,19 +259,35 @@ def main(argv: list[str]) -> int:
                     "manifest_lookup_contract": recovery_payloads[family]["manifest_lookup_contract"],
                     "hardware_preflight_contract": recovery_payloads[family]["hardware_preflight_contract"],
                     "spi_master_enable_contract": recovery_payloads[family]["spi_master_enable_contract"],
+                    "adaptive_transport_contract": recovery_payloads[family]["adaptive_transport_contract"],
                 } for family in ("luton26", "jaguar1")
             },
             "loader_sha256": loader_digest,
         },
         "uart_firmware": {
             "enabled": True,
-            "protocol_version": 2,
+            "protocol_version": 3,
             "full_image_bytes": TOTAL_BYTES,
             "operations": ["verify", "preflight", "dry-run", "flash"],
-            "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+            "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
             "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+            "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
+            "adaptive_transport": {
+                "stable_bootstrap_baud": 115200,
+                "target_divisor_negotiation": True,
+                "bidirectional_prng_crc_test": True,
+                "autonomous_baud_fallback": True,
+                "baud_refinement_percent": 2,
+                "frame_sizes": [1024, 4096],
+                "maximum_window_frames": 16,
+                "ack_format": "binary-cumulative-selective-retry-v1",
+                "manifest_first": True,
+                "representations": ["raw", "sparse", "lz4", "sparse-lz4"],
+                "confirmation_retry": "infinite",
+                "automatic_reboot_seconds": 5,
+            },
             "preflight_scratch": {"default_address": 0x00FF0000, "bytes": 64 * 1024, "minimum_address": 0x00040000, "restore_original": True},
-            "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
+            "transport_integrity": ["frame-crc32", "compact-ack-crc32", "object-crc32", "object-sha256", "reconstructed-image-sha256"],
             "flash_geometry": common_geometry,
             "accepted_jedec_ids": common_jedec,
             "delivery": "meraki-redboot-stage1-menu-option-2",

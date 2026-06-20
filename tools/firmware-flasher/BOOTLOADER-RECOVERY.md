@@ -1,31 +1,52 @@
 # meraki-redboot UART firmware recovery
 
-The flasher supports two pre-kernel stages:
+The flasher supports pre-kernel recovery without Linux, networking, SSH or a
+working root filesystem.
 
-- **RAM upload (menu option 1):** uploads the model-matched corrected recovery
-  binary to `0x81000000`, executes it, then transfers the full firmware image.
-  This is the default and is required for a switch still running the original
-  meraki-redboot v0.7.0 build.
-- **Embedded recovery (menu option 2):** executes the recovery binary embedded
-  in the installed loader. Use this only after the loader has been rebuilt with
-  the `flat-binary-byte-zero-v1` entry correction.
+## Recovery entry paths
 
-The original v0.7.0 recovery ELF recorded `_start` as its ELF entry but emitted
-MIPS metadata before `.text` in the raw binary. Stage 1 always jumps to byte zero
-at `0x81000000`, so the old embedded stage can log `PASS-RECOVERY-EXEC` and then
-remain silent. The corrected build uses an assembly entry veneer at byte zero,
-clears BSS, initializes GP and the stack, and calls `recovery_main`.
+- **RAM upload, menu option 1:** uploads the current family-specific PMOSREC
+  executable to `0x81000000`, verifies it through `PMOSRAM2`, and executes it.
+  This is the default because it always supplies the latest recovery logic.
+- **Embedded recovery, menu option 2:** executes the PMOSREC payload stored in
+  the installed loader. Use it only when the installed loader advertises the
+  same PMOSREC v3 contracts as the host and selected image.
+- **Automatic:** attempts embedded recovery and falls back to RAM upload after a
+  power cycle when the embedded stage cannot satisfy the current contract.
 
-## Recommended recovery of a switch running original v0.7.0
+The RAM-loader bootstrap always remains at 115200 baud. Adaptive rate testing
+starts only after PMOSREC v3 is running in RAM.
 
-First rebuild the complete firmware and recovery artifacts with the corrected
-builder. Then run the flasher interactively and select:
+## Rebuild requirement
 
-1. the newly rebuilt full 16 MiB image;
-2. flash or force-flash;
-3. `meraki-redboot UART recovery`;
-4. `Upload corrected recovery utility through RAM loader`;
-5. the exact model and serial device.
+The selected recovery descriptor and final firmware manifest must declare:
+
+```text
+format: postmerkos.uart-recovery-payload.v3
+protocol_version: 3
+entry_contract: flat-binary-byte-zero-v1
+manifest_lookup_contract: direct-object-members-v1
+hardware_preflight_contract: spi-nor-scratch-rw-restore-loader-crc-v4
+adaptive_transport_contract: pmosrec-v3-adaptive-uart-sparse-lz4-v1
+```
+
+Rebuild stale loader and recovery artifacts with:
+
+```sh
+REBUILD_LOADER=1 make all
+```
+
+## Normal interactive full flash
+
+Run:
+
+```sh
+./tools/firmware-flasher/firmware-flasher.sh
+```
+
+Select a complete 16 MiB artifact, full scope, flash or force flash,
+meraki-redboot UART recovery and RAM upload. The wrapper obtains `FLASH-ALL`
+authorization before opening the destructive path.
 
 Equivalent command-line use:
 
@@ -33,96 +54,64 @@ Equivalent command-line use:
 ./tools/firmware-flasher/firmware-flasher.sh \
   --bootloader-recovery \
   --recovery-path ram-upload \
-  --firmware artifacts/<new-full-image>.bin \
+  --firmware artifacts/<full-image>.bin \
   --target-model MS42P \
-  --serial-device /dev/ttyUSB0
+  --serial-device /dev/serial/by-id/<adapter>
 ```
 
-The flasher automatically selects the matching artifact:
+## PMOSREC v3 sequence
 
-- Luton26: `artifacts/recovery/recovery-luton26.bin`
-- Jaguar1: `artifacts/recovery/recovery-jaguar1.bin`
+1. Enter the boot menu at 115200 baud.
+2. Upload and verify the recovery executable through `PMOSRAM2` when using
+   menu option 1.
+3. Require `PMOSREC READY 3`, the complete `PMOSRECOVERY3` descriptor, UART
+   capability record and early SPI NOR preflight.
+4. Propose target-generated UART rates and qualify each candidate
+   bidirectionally with deterministic CRC-32 streams.
+5. Select the fastest passing rate; independently roll back on failure.
+6. Qualify 4096-byte framing, windows, compact acknowledgements, sparse
+   reconstruction and LZ4 blocks. Fall back independently where necessary.
+7. Transfer and validate the manifest before the firmware object.
+8. Select the smallest qualified raw, sparse, LZ4 or sparse-LZ4
+   representation.
+9. Reconstruct the complete 16 MiB image and verify its CRC-32 and SHA-256.
+10. Automatically return the live target challenge under the wrapper's prior
+    `FLASH-ALL` authorization, or wait indefinitely in manual mode.
+11. Erase, program and read back the NOR.
+12. Reboot automatically after a five-second target-side countdown.
 
-The adjacent `.descriptor.json` must declare:
+## Manual target confirmation
 
-- load and entry address `0x81000000`;
-- `entry_contract: flat-binary-byte-zero-v1`;
-- `manifest_lookup_contract: direct-object-members-v1`;
-- exact payload size and SHA-256;
-- matching SoC family, SPI register and accepted models.
+Use:
 
-## Embedded and automatic modes
+```sh
+--manual-target-confirmation
+```
 
-After a corrected loader has been flashed, `--recovery-path embedded` selects
-menu option 2 and requires `PMOSREC READY 2` after the loader's
-`PASS-RECOVERY-EXEC` marker.
+The complete command must be entered, including the challenge:
 
-`--recovery-path auto` tries embedded recovery first. If an affected v0.7.0
-loader reports `PASS-RECOVERY-EXEC` but never emits `PMOSREC READY 2`, the host
-identifies the entry-offset defect, asks for a reset or power cycle, waits for
-the menu again, and falls back to option 1 with the corrected external payload.
+```text
+ERASEFLASH 12620a82
+```
 
-## Local validation
+Incorrect input does not cancel recovery. PMOSREC repeats the expected command
+and waits forever. Power cycle the switch to cancel without writing flash.
 
-Before serial access, the flasher checks:
+## Speed and diagnostic options
 
-- exact 16 MiB image and release-manifest SHA-256;
-- source-built meraki-redboot v7 capability record and loader digest;
-- corrected entry contract in both embedded and external recovery metadata;
-- exact target model and Luton26/Jaguar1 mapping;
-- SPIM load/entry addresses, 32-byte alignment, slot boundary and CRC-32;
-- SquashFS location, flash geometry and JEDEC allow-list;
-- external payload size, digest, family and entry contract.
+- `--skip-baud-negotiation` keeps PMOSREC at 115200 baud while retaining v3
+  framing and integrity checks.
+- `--verbose-acks` prints each decoded compact acknowledgement in addition to
+  normal progress.
+- USB-serial latency is reduced to 1 ms where the Linux driver exposes a
+  writable latency timer, then restored at exit.
 
-A firmware image built before this correction is intentionally rejected. Even
-if a corrected external stage could write it, that image would reinstall the
-broken embedded recovery payload.
+Initial ETA is derived from the selected baud and wire representation. It is
+replaced by rolling measured throughput once enough data has transferred.
 
-## Protocol sequence for RAM upload
+## Hardware preflight
 
-1. Reset or power-cycle the target.
-2. Receive `PMOSBOOT MENU-PROBE`, send carriage return, and validate the menu.
-3. Select option `1` and require `PMOSRAM READY 2` for the expected SoC.
-4. Upload the corrected recovery payload with acknowledged `PMOSRAM2` frames.
-5. Require `PMOSREC READY 2` from the uploaded stage.
-6. Send the package header, firmware image and manifest.
-7. Require target-side CRC-32, SHA-256, manifest and hardware validation.
-8. For flash, return the exact target-generated `ERASEFLASH <nonce>` challenge.
-9. Require `PMOSREC RESULT SUCCESS`.
-
-Pre-kernel flashing rewrites loader, kernel, SquashFS and JFFS2. Keep a verified
-external SPI backup and programmer available.
-
-## Recovery descriptor handoff
-
-`PMOSREC READY 2` is followed by a descriptor line. The host must wait for and
-validate the complete descriptor before sending the binary package header. The
-recovery stage uses a polling UART while printing startup text; transmitting at
-the first READY line can overrun its receive FIFO and produce
-`PMOSREC RESULT ERROR PACKAGE-HEADER-TIMEOUT` even though no firmware upload has
-started. The descriptor newline is the protocol's safe host-to-target handoff.
-
-Current host tooling accepts both Jaguar1 and Luton26 descriptors and validates
-the family ID and SPI software-mode register before transmitting. Future-built
-recovery payloads also allow 30 seconds for the initial package header; frame
-interbyte limits remain unchanged.
-## Manifest digest shadowing correction
-
-Recovery payloads built before this correction used an unscoped minimal JSON key
-search. In a sorted artifact object, `kernel_payload.sha256` appears before the
-direct `artifact.sha256` member. The old recovery stage therefore compared the
-kernel payload digest with the full-image digest and reported
-`PMOSREC RESULT ERROR MANIFEST-IMAGE-DIGEST` even though both transferred objects
-had already passed transport CRC-32 and SHA-256 verification.
-
-Corrected payloads declare `direct-object-members-v1` and limit every JSON lookup
-to direct members of the object currently being validated. The flasher rejects
-external payloads and firmware loader records that lack this contract.
-
-
-## Destructive-but-restored hardware preflight
-
-Run the preflight before a full recovery flash:
+Run the short destructive-but-restored test before a full flash:
 
 ```sh
 ./tools/firmware-flasher/firmware-flasher.sh \
@@ -132,54 +121,17 @@ Run the preflight before a full recovery flash:
   --serial-device /dev/serial/by-id/<adapter>
 ```
 
-No firmware image or manifest is required and no 16 MiB package is transferred.
-The flasher uploads only the family-specific recovery utility, validates the full
-startup descriptor, enables and verifies the SoC SPI master, reads JEDEC/status/
-SFDP, and then tests a complete scratch sector.
+The preflight performs the adaptive UART tests, JEDEC/SFDP/status checks and a
+complete erase/program/readback/restore cycle on one 64 KiB scratch sector. It
+also checks the entire 256 KiB bootloader region before and after the test.
+The default scratch sector is `0x00ff0000`; addresses below `0x00040000` are
+rejected.
 
-Default scratch range:
+## Safety
 
-```text
-0x00ff0000..0x00ffffff  (64 KiB)
-```
+Pre-kernel full flash overwrites loader, kernel, SquashFS and JFFS2. Keep a
+verified external SPI backup and programmer available. The target does not
+begin erase until all transport, manifest, reconstructed-image and hardware
+checks have passed and the exact live challenge has been authorized.
 
-The target backs up that sector in RAM, erases it, verifies erase, programs and
-verifies all 256 pages, then erases and restores the original 64 KiB contents.
-The loader region `0x00000000..0x0003ffff` is hard-protected in both host and
-target code. Override the scratch sector only with an aligned address:
-
-```sh
---preflight-scratch 0x00fe0000
-```
-
-A successful run writes an atomic JSON receipt under `logs/`, including the exact
-model, SoC family, payload SHA-256, scratch address, recovery path and completion
-result. A pass proves UART menu control, external RAM upload, target execution,
-SPI controller enable, JEDEC/status reads, write-enable, sector erase, page
-program, full readback and restoration. It also CRC-checks the complete 256 KiB
-bootloader region before and after the destructive test and refuses success unless
-that region is unchanged.
-
-The recovery descriptor must declare:
-
-- `hardware_preflight_contract: spi-nor-scratch-rw-restore-loader-crc-v3`;
-- `spi_master_enable_contract: preserve-general-ctrl-enable-spi-v1`;
-- `operations: [verify, preflight, dry-run, flash]`;
-- `PREFLIGHT=1` in its embedded descriptor marker.
-
-## Jaguar1 all-high JEDEC response and `PREFLIGHT=3`
-
-`PMOSREC FLASH-ID ffffff` with `SPI-GENERAL ... OBSERVED=00000004` means the
-SPI master gate is enabled but CS0 was not asserted. Recovery payloads marked
-`PREFLIGHT=2` used the `SW_SPI_CS` field as active-low output levels. MSCC
-hardware instead defines it as an active mask: `BIT(0)` asserts CS0 and zero
-deselects all devices.
-
-The corrected payload declares `PREFLIGHT=3`, follows the working MSCC U-Boot
-bitbang sequence, and prints:
-
-```text
-PMOSREC SPI-CS-CONTRACT ACTIVE-MASK CS0=00000001 NONE=00000000
-```
-
-The host rejects older descriptors before uploading them.
+After verified programming, PMOSREC requests the family soft-chip reset and arms the family-specific ICPU watchdog if execution unexpectedly continues.

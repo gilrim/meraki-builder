@@ -99,8 +99,10 @@ for family in ("luton26", "jaguar1"):
     assert descriptor.get("entry_address") == 0x81000000
     assert descriptor.get("entry_contract") == "flat-binary-byte-zero-v1"
     assert descriptor.get("manifest_lookup_contract") == "direct-object-members-v1"
-    assert descriptor.get("hardware_preflight_contract") == "spi-nor-scratch-rw-restore-loader-crc-v3"
+    assert descriptor.get("hardware_preflight_contract") == "spi-nor-scratch-rw-restore-loader-crc-v4"
     assert descriptor.get("spi_master_enable_contract") == "preserve-general-ctrl-enable-spi-v1"
+    assert descriptor.get("adaptive_transport_contract") == "pmosrec-v3-adaptive-uart-sparse-lz4-v1"
+    assert descriptor.get("transport_integrity") == ["frame-crc32", "compact-ack-crc32", "object-crc32", "object-sha256", "reconstructed-image-sha256"]
     assert descriptor.get("operations") == ["verify", "preflight", "dry-run", "flash"]
     assert descriptor.get("preflight_scratch") == {"default_address": 0x00FF0000, "bytes": 0x10000, "minimum_address": 0x40000, "restore_original": True}
     binary = descriptor.get("binary", {})
@@ -115,8 +117,9 @@ for family in ("luton26", "jaguar1"):
     assert record.get("entry_address") == 0x81000000
     assert record.get("entry_contract") == "flat-binary-byte-zero-v1"
     assert record.get("manifest_lookup_contract") == "direct-object-members-v1"
-    assert record.get("hardware_preflight_contract") == "spi-nor-scratch-rw-restore-loader-crc-v3"
+    assert record.get("hardware_preflight_contract") == "spi-nor-scratch-rw-restore-loader-crc-v4"
     assert record.get("spi_master_enable_contract") == "preserve-general-ctrl-enable-spi-v1"
+    assert record.get("adaptive_transport_contract") == "pmosrec-v3-adaptive-uart-sparse-lz4-v1"
 PY_LOADER
   then
     warn "The cached loader does not match the selected meraki-redboot source release; rebuilding it."

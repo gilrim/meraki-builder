@@ -55,10 +55,10 @@ class BundleFixture:
         self.payload_luton = root / "recovery-luton26.bin"
         self.payload_jaguar = root / "recovery-jaguar1.bin"
         self.payload_luton.write_bytes(
-            b"xPMOSRECOVERY2;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=2;PREFLIGHT=3;ENDy"
+            b"xPMOSRECOVERY3;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=3;PREFLIGHT=4;BAUDTEST=1;FRAME_MAX=4096;WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;ENDy"
         )
         self.payload_jaguar.write_bytes(
-            b"xPMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=3;ENDy"
+            b"xPMOSRECOVERY3;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=3;PREFLIGHT=4;BAUDTEST=1;FRAME_MAX=4096;WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;ENDy"
         )
         for payload, family, family_id, spi in (
             (self.payload_luton, "luton26", 1, 0x70000064),
@@ -66,8 +66,8 @@ class BundleFixture:
         ):
             raw = payload.read_bytes()
             payload.with_suffix(".descriptor.json").write_text(json.dumps({
-                "format": "postmerkos.uart-recovery-payload.v2",
-                "protocol_version": 2,
+                "format": "postmerkos.uart-recovery-payload.v3",
+                "protocol_version": 3,
                 "soc_family": family,
                 "soc_family_id": family_id,
                 "spi_software_mode_address": spi,
@@ -75,8 +75,10 @@ class BundleFixture:
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
-                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
                 "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+                "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
+                "transport_integrity": ["frame-crc32", "compact-ack-crc32", "object-crc32", "object-sha256", "reconstructed-image-sha256"],
                 "binary": {
                     "filename": payload.name,
                     "bytes": len(raw),
@@ -99,8 +101,9 @@ class BundleFixture:
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
-                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
                 "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+                "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
             },
             "jaguar1": {
                 "filename": self.payload_jaguar.name,
@@ -113,8 +116,9 @@ class BundleFixture:
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
-                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
                 "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+                "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
             },
         }
         data = {
@@ -141,17 +145,20 @@ class BundleFixture:
                             "manifest_lookup_contract": record["manifest_lookup_contract"],
                             "hardware_preflight_contract": record["hardware_preflight_contract"],
                             "spi_master_enable_contract": record["spi_master_enable_contract"],
+                            "adaptive_transport_contract": record["adaptive_transport_contract"],
                         }
                         for family, record in payload_records.items()
                     },
                 },
                 "uart_firmware": {
                     "enabled": True,
-                    "protocol_version": 2,
+                    "protocol_version": 3,
                     "full_image_bytes": bp.FULL_IMAGE_SIZE,
                     "operations": ["verify", "preflight", "dry-run", "flash"],
-                    "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+                    "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
                     "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+                    "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
+                    "transport_integrity": ["frame-crc32", "compact-ack-crc32", "object-crc32", "object-sha256", "reconstructed-image-sha256"],
                     "preflight_scratch": {
                         "default_address": bp.DEFAULT_PREFLIGHT_SCRATCH,
                         "bytes": bp.PREFLIGHT_SCRATCH_BYTES,
@@ -409,7 +416,7 @@ class ProtocolTests(unittest.TestCase):
             "PMOSBOOT PASS-RECOVERY-EXEC: ENTRY: 0x81000000",
             bp.ProtocolError("timed out waiting for: PMOSREC READY 2"),
         ]
-        with self.assertRaisesRegex(bp.EmbeddedRecoveryEntryError, "entry-offset defect"):
+        with self.assertRaisesRegex(bp.EmbeddedRecoveryEntryError, "did not enter PMOSREC v3"):
             br.enter_recovery(
                 link, "embedded", "jaguar1", 30.0, None,
                 0x81000000, 0x81000000, 1024, 3, 5.0,
@@ -427,13 +434,16 @@ class ProtocolTests(unittest.TestCase):
             "PMOSBOOT PASS-RECOVERY-SIZE: MAX: 0x00400000 | GOT: 0x000037D8",
             "PMOSBOOT PASS-RECOVERY-COPY: LOAD: 0x81000000 | SIZE: 0x000037D8",
             "PMOSBOOT PASS-RECOVERY-EXEC: ENTRY: 0x81000000",
-            f"PMOSREC READY 2 SOC={family} FAMILY={family_id:08x}",
+            f"PMOSREC READY 3 SOC={family} FAMILY={family_id:08x}",
             (
-                f"PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC={family};FAMILY={family_id};"
-                f"SPI={'70000064' if family == 'luton26' else '70000068'};PROTO=2;PREFLIGHT=3;END"
+                f"PMOSREC DESCRIPTOR PMOSRECOVERY3;SOC={family};FAMILY={family_id};"
+                f"SPI={'70000064' if family == 'luton26' else '70000068'};PROTO=3;PREFLIGHT=4;"
+                "BAUDTEST=1;FRAME_MAX=4096;WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;"
+                "CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;END"
             ),
+            "PMOSREC UART-CAP CLOCK=103219200 DIV_MIN=1 DIV_MAX=65535 CURRENT=115200",
             "PMOSREC FLASH-PREFLIGHT-OK ID=c22018 ERASE=00010000 PAGE=00000100",
-            "PMOSREC COMMAND-READY 1",
+            "PMOSREC COMMAND-READY 3",
         ]
         selected = br.enter_recovery(
             link, "embedded", family, 30.0, None, 0x81000000, 0x81000000,
@@ -460,9 +470,10 @@ class ProtocolTests(unittest.TestCase):
             "PMOSBOOT PASS-MENU-CHOICE: SELECTED: 0x00000001",
             "PMOSRAM READY 2 SOC=jaguar1",
             "PMOSREC READY 2 SOC=jaguar1 FAMILY=00000002",
-            "PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=3;END",
+            "PMOSREC DESCRIPTOR PMOSRECOVERY3;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=3;PREFLIGHT=4;BAUDTEST=1;FRAME_MAX=4096;WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;END",
+            "PMOSREC UART-CAP CLOCK=103219200 DIV_MIN=1 DIV_MAX=65535 CURRENT=115200",
             "PMOSREC FLASH-PREFLIGHT-OK ID=c22018 ERASE=00010000 PAGE=00000100",
-            "PMOSREC COMMAND-READY 1",
+            "PMOSREC COMMAND-READY 3",
         ]
         with mock.patch.object(br, "send_ram_payload") as send_payload:
             selected = br.enter_recovery(
@@ -471,7 +482,7 @@ class ProtocolTests(unittest.TestCase):
             )
         self.assertEqual(selected, "ram-upload")
         send_payload.assert_called_once()
-        self.assertEqual(link.wait_for.call_args_list[-1], mock.call(("PMOSREC COMMAND-READY 1",), 5.0))
+        self.assertEqual(link.wait_for.call_args_list[-1], mock.call(("PMOSREC COMMAND-READY 3",), 5.0))
 
 
     def test_package_header_is_not_sent_until_descriptor_line_completes(self) -> None:
@@ -481,24 +492,26 @@ class ProtocolTests(unittest.TestCase):
 
         def simulate() -> None:
             try:
-                target.sendall(b"PMOSREC READY 2 SOC=jaguar1 FAMILY=00000002\n")
+                target.sendall(b"PMOSREC READY 3 SOC=jaguar1 FAMILY=00000002\n")
                 target.settimeout(0.15)
                 try:
                     early = target.recv(1)
                     if early:
                         observed["early"] = True
-                        observed["header"] = early + read_exact(target, 123)
+                        observed["header"] = early + read_exact(target, 143)
                 except socket.timeout:
                     pass
                 target.sendall(
-                    b"PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;"
-                    b"SPI=70000068;PROTO=2;PREFLIGHT=3;END\n"
+                    b"PMOSREC DESCRIPTOR PMOSRECOVERY3;SOC=jaguar1;FAMILY=2;"
+                    b"SPI=70000068;PROTO=3;PREFLIGHT=4;BAUDTEST=1;FRAME_MAX=4096;WINDOW_MAX=16;"
+                    b"ACKFMT=BIN1;SPARSE=1;LZ4=1;CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;END\n"
                 )
+                target.sendall(b"PMOSREC UART-CAP CLOCK=103219200 DIV_MIN=1 DIV_MAX=65535 CURRENT=115200\n")
                 target.sendall(b"PMOSREC FLASH-PREFLIGHT-OK ID=c22018 ERASE=00010000 PAGE=00000100\n")
-                target.sendall(b"PMOSREC COMMAND-READY 1\n")
+                target.sendall(b"PMOSREC COMMAND-READY 3\n")
                 if not observed["early"]:
                     target.settimeout(1.0)
-                    observed["header"] = read_exact(target, 124)
+                    observed["header"] = read_exact(target, 144)
             except BaseException as exc:  # pragma: no cover - rethrown below
                 errors.append(exc)
             finally:
@@ -513,20 +526,21 @@ class ProtocolTests(unittest.TestCase):
                 0x81000000, 0x81000000, 1024, 3, 1.0,
             )
             self.assertEqual(selected, "embedded")
-            link.write_all(b"H" * 124)
+            link.write_all(b"H" * 144)
         finally:
             host.close()
             thread.join(3)
         if errors:
             raise errors[0]
         self.assertFalse(observed["early"], "binary header was sent while descriptor text was still transmitting")
-        self.assertEqual(observed["header"], b"H" * 124)
+        self.assertEqual(observed["header"], b"H" * 144)
 
     def test_recovery_descriptor_mismatch_is_rejected(self) -> None:
         link = mock.Mock()
         link.wait_for.return_value = (
-            "PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=luton26;FAMILY=1;"
-            "SPI=70000064;PROTO=2;PREFLIGHT=3;END"
+            "PMOSREC DESCRIPTOR PMOSRECOVERY3;SOC=luton26;FAMILY=1;"
+            "SPI=70000064;PROTO=3;PREFLIGHT=4;BAUDTEST=1;FRAME_MAX=4096;WINDOW_MAX=16;"
+            "ACKFMT=BIN1;SPARSE=1;LZ4=1;CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;END"
         )
         with self.assertRaisesRegex(bp.ProtocolError, "recovery descriptor mismatch"):
             br.wait_for_recovery_descriptor(link, "jaguar1")

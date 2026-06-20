@@ -31,6 +31,9 @@ OPERATION=""
 OPERATION_PRESELECTED=0
 PREFLIGHT_SCRATCH=${PREFLIGHT_SCRATCH:-0x00ff0000}
 SUPPRESS_ERR_REPORT=0
+MANUAL_TARGET_CONFIRMATION=0
+VERBOSE_ACKS=0
+SKIP_BAUD_NEGOTIATION=0
 
 usage() {
     cat <<'USAGE'
@@ -55,6 +58,9 @@ Options:
   --recovery-payload FILE external payload for ram-upload/legacy fallback
   --target-model MODEL  exact hardware model required for bootloader recovery
   --preflight-scratch N  aligned 64 KiB NOR address (default: 0x00ff0000)
+  --manual-target-confirmation  require manual ERASEFLASH challenge entry
+  --verbose-acks        print every decoded compact ACK (always retained in logs)
+  --skip-baud-negotiation keep PMOSREC at 115200 for diagnostics
   --serial-device DEV   serial character device
   --modern              current manifest-aware workflow (default)
   --checksum-only       current updater with image + .sha256 only
@@ -1008,6 +1014,7 @@ run_bootloader_recovery_mode() {
     need python3
     [[ -x $SCRIPT_DIR/bootloader-ramload.py ]] || die 'bootloader-ramload.py helper is missing or not executable'
     [[ -f $SCRIPT_DIR/bootloader_protocol.py ]] || die 'bootloader_protocol.py helper is missing'
+    [[ -f $SCRIPT_DIR/pmosrec_v3.py ]] || die 'pmosrec_v3.py helper is missing'
     [[ $MODE == modern ]] || die 'bootloader recovery requires the modern manifest-aware artifact contract'
     if [[ $OPERATION != preflight ]]; then
         [[ $FLASH_SCOPE == full && $SELECTED_TYPE == full ]] || \
@@ -1044,6 +1051,10 @@ run_bootloader_recovery_mode() {
         args+=(--payload-descriptor "$payload_descriptor")
     fi
     (( FORCE_FLASH )) && args+=(--force)
+    [[ $OPERATION == flash ]] && args+=(--host-full-flash-authorized)
+    (( MANUAL_TARGET_CONFIRMATION )) && args+=(--manual-target-confirmation)
+    (( VERBOSE_ACKS )) && args+=(--verbose-acks)
+    (( SKIP_BAUD_NEGOTIATION )) && args+=(--skip-baud-negotiation)
 
     printf '\nPre-kernel UART recovery\n'
     printf 'Operation:         %s\n' "$OPERATION"
@@ -1137,7 +1148,7 @@ PY
     printf UBT0 | dd of="$TMP/alternate-boot.bin" bs=1 seek=$((0x40000)) conv=notrunc status=none
     [[ $(classify_firmware "$TMP/alternate-boot.bin") == raw-full ]] || die 'alternate boot-chain classification self-test failed'
     if [[ ${FIRMWARE_FLASHER_SELFTEST_QUICK:-0} != 1 ]]; then
-        python3 - "$SCRIPT_DIR/tftp-server.py" "$SCRIPT_DIR/serial-runner.py" "$SCRIPT_DIR/bootloader-ramload.py" "$SCRIPT_DIR/bootloader_protocol.py" <<'PY_SYNTAX'
+        python3 - "$SCRIPT_DIR/tftp-server.py" "$SCRIPT_DIR/serial-runner.py" "$SCRIPT_DIR/bootloader-ramload.py" "$SCRIPT_DIR/bootloader_protocol.py" "$SCRIPT_DIR/pmosrec_v3.py" <<'PY_SYNTAX'
 from pathlib import Path
 import sys
 for source in sys.argv[1:]:
@@ -1163,6 +1174,9 @@ main() {
             --recovery-payload) (($# >= 2)) || die '--recovery-payload requires a file'; BOOTLOADER_PAYLOAD=$2; shift 2 ;;
             --target-model) (($# >= 2)) || die '--target-model requires a model'; TARGET_MODEL=$2; shift 2 ;;
             --preflight-scratch) (($# >= 2)) || die '--preflight-scratch requires an address'; PREFLIGHT_SCRATCH=$2; shift 2 ;;
+            --manual-target-confirmation) MANUAL_TARGET_CONFIRMATION=1; shift ;;
+            --verbose-acks) VERBOSE_ACKS=1; shift ;;
+            --skip-baud-negotiation) SKIP_BAUD_NEGOTIATION=1; shift ;;
             --serial-device) (($# >= 2)) || die '--serial-device requires a device'; SERIAL_DEVICE=$2; shift 2 ;;
             --modern) MODE=modern; shift ;;
             --checksum-only|--original-artifacts) MODE=checksum; shift ;;

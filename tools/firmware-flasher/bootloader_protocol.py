@@ -28,7 +28,9 @@ PREFLIGHT_VERSION = 1
 PREFLIGHT_FLAG_RESTORE = 1
 DEFAULT_PREFLIGHT_SCRATCH = 0x00FF0000
 PREFLIGHT_SCRATCH_BYTES = 64 * 1024
-PROTOCOL_VERSION = 2
+RAM_PROTOCOL_VERSION = 2
+RECOVERY_PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = RAM_PROTOCOL_VERSION
 FULL_IMAGE_SIZE = 16 * 1024 * 1024
 LOADER_REGION_SIZE = 0x40000
 KERNEL_OFFSET = 0x40000
@@ -57,7 +59,7 @@ FAMILY_ID = {"luton26": 1, "jaguar1": 2}
 FAMILY_SPI_ADDRESS = {"luton26": 0x70000064, "jaguar1": 0x70000068}
 ALLOWED_MODEL_STATUS = {"validated", "confirmed", "untested"}
 DESCRIPTOR_RE = re.compile(
-    rb"PMOSRECOVERY2;SOC=(luton26|jaguar1);FAMILY=([12]);SPI=([0-9a-f]{8});PROTO=2;PREFLIGHT=3;END"
+    rb"PMOSRECOVERY3;SOC=(luton26|jaguar1);FAMILY=([12]);SPI=([0-9a-f]{8});PROTO=3;PREFLIGHT=4;BAUDTEST=1;FRAME_MAX=4096;WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;END"
 )
 
 
@@ -82,6 +84,7 @@ class PayloadDescriptor:
     manifest_lookup_contract: str
     hardware_preflight_contract: str
     spi_master_enable_contract: str
+    adaptive_transport_contract: str
 
 
 @dataclass(frozen=True)
@@ -118,7 +121,9 @@ def inspect_payload(path: Path, descriptor_path: Path | None = None) -> PayloadD
     data = path.read_bytes()
     matches = list(DESCRIPTOR_RE.finditer(data))
     if len(matches) != 1:
-        raise ProtocolError("recovery payload must contain exactly one PMOSRECOVERY2 descriptor")
+        if b"PMOSRECOVERY2;SOC=" in data:
+            raise ProtocolError("stale PMOSRECOVERY2 descriptor; rebuild the PMOSREC v3 recovery payload")
+        raise ProtocolError("recovery payload must contain exactly one PMOSRECOVERY3 descriptor")
     match = matches[0]
     family = match.group(1).decode("ascii")
     family_id = int(match.group(2))
@@ -154,6 +159,7 @@ def inspect_payload(path: Path, descriptor_path: Path | None = None) -> PayloadD
     manifest_lookup_contract = metadata.get("manifest_lookup_contract")
     hardware_preflight_contract = metadata.get("hardware_preflight_contract")
     spi_master_enable_contract = metadata.get("spi_master_enable_contract")
+    adaptive_transport_contract = metadata.get("adaptive_transport_contract")
     if load_address != 0x81000000 or entry_address != 0x81000000:
         raise ProtocolError("recovery payload is not linked for load/entry address 0x81000000")
     if entry_contract != "flat-binary-byte-zero-v1":
@@ -166,10 +172,14 @@ def inspect_payload(path: Path, descriptor_path: Path | None = None) -> PayloadD
             "recovery payload lacks direct-object-members-v1 manifest parsing; "
             "nested kernel/region digests can shadow artifact.sha256"
         )
-    if hardware_preflight_contract != "spi-nor-scratch-rw-restore-loader-crc-v3":
-        raise ProtocolError("recovery payload lacks PREFLIGHT=3 active-mask chip-select and destructive scratch read/write/restore support")
+    if metadata.get("protocol_version") != RECOVERY_PROTOCOL_VERSION:
+        raise ProtocolError("recovery payload protocol is not PMOSREC v3")
+    if hardware_preflight_contract != "spi-nor-scratch-rw-restore-loader-crc-v4":
+        raise ProtocolError("recovery payload lacks PREFLIGHT=4 adaptive transport and destructive scratch read/write/restore support")
     if spi_master_enable_contract != "preserve-general-ctrl-enable-spi-v1":
         raise ProtocolError("recovery payload lacks the SPI master-enable handoff correction")
+    if adaptive_transport_contract != "pmosrec-v3-adaptive-uart-sparse-lz4-v1":
+        raise ProtocolError("recovery payload lacks the PMOSREC v3 adaptive transport contract")
     return PayloadDescriptor(
         family=family,
         family_id=family_id,
@@ -182,6 +192,7 @@ def inspect_payload(path: Path, descriptor_path: Path | None = None) -> PayloadD
         manifest_lookup_contract=manifest_lookup_contract,
         hardware_preflight_contract=hardware_preflight_contract,
         spi_master_enable_contract=spi_master_enable_contract,
+        adaptive_transport_contract=adaptive_transport_contract,
     )
 
 
@@ -223,10 +234,12 @@ def _validate_loader_capability(manifest: dict, loader_sha256: str, family: str)
             "firmware image contains a recovery parser that permits nested digest shadowing; "
             "rebuild meraki-redboot with direct-object-members-v1 manifest lookup"
         )
-    if record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
+    if record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v4":
         raise ProtocolError(
-            "firmware image contains a recovery payload without destructive SPI NOR preflight support"
+            "firmware image contains a recovery payload without adaptive UART and destructive SPI NOR preflight support"
         )
+    if record.get("adaptive_transport_contract") != "pmosrec-v3-adaptive-uart-sparse-lz4-v1":
+        raise ProtocolError("firmware image embedded recovery lacks the PMOSREC v3 adaptive transport contract")
     if record.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
         raise ProtocolError(
             "firmware image contains a recovery payload without the SPI master-enable handoff correction"
@@ -293,13 +306,13 @@ def _recovery_payload_record(manifest: dict, family: str, model: str) -> dict:
     firmware = recovery.get("uart_firmware")
     if not isinstance(firmware, dict) or firmware.get("enabled") is not True:
         raise ProtocolError("manifest does not enable UART firmware recovery")
-    if firmware.get("protocol_version") != PROTOCOL_VERSION:
+    if firmware.get("protocol_version") != RECOVERY_PROTOCOL_VERSION:
         raise ProtocolError("manifest UART firmware recovery protocol is incompatible")
     if firmware.get("full_image_bytes") != FULL_IMAGE_SIZE:
         raise ProtocolError("manifest UART firmware recovery image size is incompatible")
     if firmware.get("operations") != ["verify", "preflight", "dry-run", "flash"]:
         raise ProtocolError("manifest UART firmware recovery operation contract is incompatible")
-    if firmware.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
+    if firmware.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v4":
         raise ProtocolError("manifest lacks destructive SPI NOR preflight support")
     if firmware.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
         raise ProtocolError("manifest lacks the SPI master-enable handoff correction")
@@ -344,10 +357,12 @@ def _recovery_payload_record(manifest: dict, family: str, model: str) -> dict:
         raise ProtocolError("manifest recovery payload lacks the corrected byte-zero entry contract")
     if record.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise ProtocolError("manifest recovery payload lacks scoped direct-member manifest parsing")
-    if record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v3":
+    if record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v4":
         raise ProtocolError("manifest recovery payload lacks scratch read/write/restore preflight support")
     if record.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
         raise ProtocolError("manifest recovery payload lacks the SPI master-enable correction")
+    if record.get("adaptive_transport_contract") != "pmosrec-v3-adaptive-uart-sparse-lz4-v1":
+        raise ProtocolError("manifest recovery payload lacks PMOSREC v3 adaptive transport")
     return record
 
 
@@ -375,6 +390,8 @@ def validate_recovery_payload(path: Path, descriptor: PayloadDescriptor, bundle:
         raise ProtocolError("recovery payload preflight contract does not match the release manifest")
     if descriptor.spi_master_enable_contract != record["spi_master_enable_contract"]:
         raise ProtocolError("recovery payload SPI master-enable contract does not match the release manifest")
+    if descriptor.adaptive_transport_contract != record.get("adaptive_transport_contract"):
+        raise ProtocolError("recovery payload adaptive transport contract does not match the release manifest")
 
 
 def validate_bundle(image: Path, manifest_path: Path, model: str, *, force: bool) -> BundleInfo:
@@ -481,6 +498,34 @@ class SerialLink:
                 pass
         except OSError:
             pass
+
+    def read_exact(self, length: int, timeout: float, *, echo: bool = False) -> bytes:
+        if length < 0:
+            raise ValueError("length must be non-negative")
+        deadline = time.monotonic() + timeout
+        output = bytearray()
+        if self.buffer:
+            take = min(length, len(self.buffer))
+            output.extend(self.buffer[:take])
+            del self.buffer[:take]
+        while len(output) < length:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProtocolError(f"timed out reading {length} binary bytes")
+            readable, _, _ = select.select([self.fd], [], [], min(remaining, 0.25))
+            if not readable:
+                continue
+            try:
+                data = os.read(self.fd, min(65536, length - len(output)))
+            except (BlockingIOError, InterruptedError):
+                continue
+            if not data:
+                continue
+            if echo:
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+            output.extend(data)
+        return bytes(output)
 
     def read_line(self, timeout: float) -> str:
         deadline = time.monotonic() + timeout
