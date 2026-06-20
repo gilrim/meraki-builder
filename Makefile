@@ -5,7 +5,7 @@ JOBS ?= $(shell nproc 2>/dev/null || echo 1)
 export JOBS
 
 .PHONY: help all base web doctor deps sources kernel loader donor ui prepare rootfs image \
-        validate verify-inputs test-fwupdate test-image test-modules test-hardware test-docs test-ui-contract verify-modules test-all menuconfig distrobox clean distclean print-config \
+        validate verify-inputs test-fwupdate test-image test-modules test-hardware test-docs test-ui-contract test-loader-contract verify-modules test-all menuconfig distrobox clean distclean print-config \
         mx80 mx80-prepare mx80-validate mx80-check mx80-menuconfig mx80-clean mx80-distclean mx84-check
 
 help:
@@ -31,6 +31,7 @@ help:
 	  '  make test-hardware Verify board identity and hardware capability policy' \
 	  '  make test-docs     Check repository Markdown links' \
 	  '  make test-ui-contract UI_DIR=../postmerkos-ui checks browser/configd methods' \
+	  '  make test-loader-contract Check meraki-redboot PMOSREC validator patching' \
 	  '  make test-all      Run all builder host-side validation targets' \
 	  '  make test-modules  Test complete multi-platform module staging and boot selection' \
 	  '  make verify-modules Verify all platform modules in ROOTFS=artifacts/rootfs.squashfs' \
@@ -128,7 +129,10 @@ test-docs:
 test-ui-contract:
 	@./scripts/tests/test-ui-configd-contract.py "$${UI_DIR:-../postmerkos-ui}"
 
-test-all: test-fwupdate test-image test-modules test-hardware test-docs test-ui-contract
+test-loader-contract:
+	@python3 ./scripts/tests/test-loader-source-contract.py
+
+test-all: test-fwupdate test-image test-modules test-hardware test-docs test-ui-contract test-loader-contract
 	@./buildroot/packages/postmerkos-console/tests/test-host.sh
 	@$(MAKE) -C buildroot/packages/configd test-host
 

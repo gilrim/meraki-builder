@@ -56,6 +56,7 @@ manifest_scope_patch="$REPO_ROOT/patches/meraki-redboot/0003-recovery-direct-mem
 hardware_preflight_patch="$REPO_ROOT/patches/meraki-redboot/0004-recovery-spi-preflight-and-master-enable.patch"
 chip_select_patch="$REPO_ROOT/patches/meraki-redboot/0005-recovery-mscc-active-mask-chip-select.patch"
 adaptive_transport_patch="$REPO_ROOT/patches/meraki-redboot/0006-pmosrec-v3-adaptive-transport.patch"
+stage_validator_patch="$REPO_ROOT/patches/meraki-redboot/0007-pmosrec-v3-stage-validator.patch"
 entry_descriptor="$LOADER_SOURCE_DIR/payloads/uart-firmware-recovery/write_descriptor.py"
 recovery_source="$LOADER_SOURCE_DIR/payloads/uart-firmware-recovery/recovery.c"
 if ! grep -q 'flat-binary-byte-zero-v1' "$entry_descriptor" 2>/dev/null; then
@@ -165,6 +166,28 @@ if ! grep -q 'pmosrec-v3-adaptive-uart-sparse-lz4-v1' "$entry_descriptor" 2>/dev
   RESOLVED_GIT_DESCRIBE="$(git -C "$LOADER_SOURCE_DIR" describe --tags --always --dirty)"
 fi
 
+
+stage_validator="$LOADER_SOURCE_DIR/scripts/validate_uart_stage1.py"
+structural_stage_test="$LOADER_SOURCE_DIR/scripts/structural-test-clang.sh"
+if ! grep -q 'PMOSRECOVERY3;SOC=luton26' "$stage_validator" 2>/dev/null || \
+   ! grep -q 'PMOSRECOVERY3;SOC=jaguar1' "$stage_validator" 2>/dev/null || \
+   ! grep -q 'PMOSRECOVERY3;SOC=luton26;STRUCTURAL' "$structural_stage_test" 2>/dev/null || \
+   ! grep -q 'PMOSRECOVERY3;SOC=jaguar1;STRUCTURAL' "$structural_stage_test" 2>/dev/null; then
+  [[ -f "$stage_validator_patch" ]] || die "meraki-redboot PMOSREC v3 stage-validator patch is missing: $stage_validator_patch"
+  log "Applying meraki-redboot PMOSREC v3 stage-validator synchronization"
+  if ! git -C "$LOADER_SOURCE_DIR" apply --check "$stage_validator_patch"; then
+    die "meraki-redboot source advertises PMOSREC v3 but its fixed-RAM stage validator does not match the supported v3 layout"
+  fi
+  git -C "$LOADER_SOURCE_DIR" apply "$stage_validator_patch"
+  git -C "$LOADER_SOURCE_DIR" config user.name postmerkOS-builder
+  git -C "$LOADER_SOURCE_DIR" config user.email builder@localhost
+  git -C "$LOADER_SOURCE_DIR" add -A
+  GIT_AUTHOR_DATE='2026-06-20T00:06:00Z' GIT_COMMITTER_DATE='2026-06-20T00:06:00Z' \
+    git -C "$LOADER_SOURCE_DIR" commit -q -m 'Synchronize fixed-RAM stage validator with PMOSREC v3'
+  RESOLVED_GIT_REF="$(git -C "$LOADER_SOURCE_DIR" rev-parse HEAD)"
+  RESOLVED_GIT_DESCRIBE="$(git -C "$LOADER_SOURCE_DIR" describe --tags --always --dirty)"
+fi
+
 [[ -f "$LOADER_SOURCE_DIR/Makefile" ]] || die "meraki-redboot Makefile is missing"
 [[ -f "$LOADER_SOURCE_DIR/VERSION" ]] || die "meraki-redboot VERSION is missing"
 [[ -f "$LOADER_PAYLOAD_PACKER" ]] || die "meraki-redboot payload packer is missing"
@@ -203,4 +226,12 @@ if grep -q 'spi-nor-scratch-rw-restore-loader-crc-v4' "$entry_descriptor" && \
   log "meraki-redboot recovery contract: PMOSREC v3 adaptive UART/sparse/LZ4"
 else
   die "selected meraki-redboot source lacks the PMOSREC v3 adaptive transport contract"
+fi
+if grep -q 'PMOSRECOVERY3;SOC=luton26' "$stage_validator" && \
+   grep -q 'PMOSRECOVERY3;SOC=jaguar1' "$stage_validator" && \
+   grep -q 'PMOSRECOVERY3;SOC=luton26;STRUCTURAL' "$structural_stage_test" && \
+   grep -q 'PMOSRECOVERY3;SOC=jaguar1;STRUCTURAL' "$structural_stage_test"; then
+  log "meraki-redboot fixed-RAM stage validator contract: PMOSRECOVERY3"
+else
+  die "selected meraki-redboot source has stale fixed-RAM PMOSREC recovery markers"
 fi

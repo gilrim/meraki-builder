@@ -62,3 +62,11 @@ frames, windowed compact acknowledgements, sparse reconstruction and LZ4
 blocks before transferring the manifest and image. The complete reconstructed
 16 MiB image is still SHA-256 verified before erase authorization. See
 [`docs/architecture/pmosrec-v3-adaptive-uart.md`](docs/architecture/pmosrec-v3-adaptive-uart.md).
+
+### PMOSREC v3 stage-validator hotfix
+
+The loader source preparation step now detects and repairs the transitional
+PMOSREC v3 source state where the recovery payloads advertise `PMOSRECOVERY3`
+but `scripts/validate_uart_stage1.py` still requires `PMOSRECOVERY2`. The
+`0007-pmosrec-v3-stage-validator.patch` update is applied automatically before
+the loader build and is verified by `make test-loader-contract`.
