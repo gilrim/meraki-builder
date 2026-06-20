@@ -91,3 +91,17 @@ broken embedded recovery payload.
 
 Pre-kernel flashing rewrites loader, kernel, SquashFS and JFFS2. Keep a verified
 external SPI backup and programmer available.
+
+## Recovery descriptor handoff
+
+`PMOSREC READY 2` is followed by a descriptor line. The host must wait for and
+validate the complete descriptor before sending the binary package header. The
+recovery stage uses a polling UART while printing startup text; transmitting at
+the first READY line can overrun its receive FIFO and produce
+`PMOSREC RESULT ERROR PACKAGE-HEADER-TIMEOUT` even though no firmware upload has
+started. The descriptor newline is the protocol's safe host-to-target handoff.
+
+Current host tooling accepts both Jaguar1 and Luton26 descriptors and validates
+the family ID and SPI software-mode register before transmitting. Future-built
+recovery payloads also allow 30 seconds for the initial package header; frame
+interbyte limits remain unchanged.

@@ -25,6 +25,10 @@ from bootloader_protocol import (
 
 READY_SOC = re.compile(r"\bSOC=(luton26|jaguar1)\b")
 INFO_SOC = re.compile(r"\bSOC:\s*(luton26|jaguar1)\b")
+RECOVERY_DESCRIPTOR = re.compile(
+    r"^PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=(luton26|jaguar1);"
+    r"FAMILY=([12]);SPI=([0-9a-fA-F]{8});PROTO=2;END$"
+)
 MENU_BYTE = re.compile(r"\bBYTE:\s*0x([0-9a-fA-F]{8})\b")
 MENU_SELECTION = re.compile(r"\bSELECTED:\s*0x([0-9a-fA-F]{8})\b")
 CHALLENGE = re.compile(r"^PMOSREC ERASE-CHALLENGE ([0-9a-f]{8})$")
@@ -75,6 +79,38 @@ def require_info_soc(line: str, expected: str) -> None:
         )
 
 
+def wait_for_recovery_descriptor(link: SerialLink, expected_family: str) -> str:
+    """Synchronize after the target has finished all startup UART output.
+
+    PMOSREC prints READY and then a descriptor using a polling UART. Sending the
+    binary package header as soon as READY is seen can overrun the target RX FIFO
+    while it is still transmitting the descriptor. Waiting for the descriptor's
+    terminating newline creates an explicit half-duplex handoff point.
+    """
+    line = link.wait_for(("PMOSREC DESCRIPTOR ",), 5.0)
+    match = RECOVERY_DESCRIPTOR.fullmatch(line)
+    if not match:
+        raise ProtocolError(f"recovery stage emitted an invalid descriptor: {line}")
+    family = match.group(1)
+    family_id = int(match.group(2))
+    spi_address = int(match.group(3), 16)
+    expected_id = 1 if expected_family == "luton26" else 2
+    expected_spi = 0x70000064 if expected_family == "luton26" else 0x70000068
+    if family != expected_family or family_id != expected_id or spi_address != expected_spi:
+        raise ProtocolError(
+            "recovery descriptor mismatch: "
+            f"reported family={family} id={family_id} spi=0x{spi_address:08x}; "
+            f"expected family={expected_family} id={expected_id} spi=0x{expected_spi:08x}"
+        )
+    return line
+
+
+def accept_recovery_ready(link: SerialLink, ready_line: str, expected_family: str,
+                          stage: str) -> None:
+    require_soc(ready_line, expected_family, stage)
+    wait_for_recovery_descriptor(link, expected_family)
+
+
 def require_hex_field(line: str, pattern: re.Pattern[str], expected: int, label: str) -> None:
     match = pattern.search(line)
     if not match:
@@ -119,7 +155,7 @@ def enter_recovery(
     prefixes = ("PMOSBOOT MENU-PROBE", "PMOSREC READY 2", "PMOSRAM READY 2")
     line = link.wait_for(prefixes, timeout)
     if line.startswith("PMOSREC READY 2"):
-        require_soc(line, expected_family, "automatic embedded recovery")
+        accept_recovery_ready(link, line, expected_family, "automatic embedded recovery")
         return "embedded"
 
     if line.startswith("PMOSBOOT MENU-PROBE"):
@@ -170,7 +206,7 @@ def enter_recovery(
             line = link.wait_for(("PMOSRAM READY 2",), 10.0)
 
     if line.startswith("PMOSREC READY 2"):
-        require_soc(line, expected_family, "embedded recovery")
+        accept_recovery_ready(link, line, expected_family, "embedded recovery")
         return "embedded"
 
     if not line.startswith("PMOSRAM READY 2"):
@@ -185,7 +221,7 @@ def enter_recovery(
         raise ProtocolError("external RAM-loader recovery requires --payload")
     send_ram_payload(link, payload, load, entry, chunk_size, frame_retries, ack_timeout)
     payload_ready = link.wait_for(("PMOSREC READY 2",), 10.0)
-    require_soc(payload_ready, expected_family, "uploaded recovery payload")
+    accept_recovery_ready(link, payload_ready, expected_family, "uploaded recovery payload")
     return "ram-upload"
 
 
@@ -271,7 +307,11 @@ def main() -> int:
                 link, "ram-upload", bundle.family, args.fallback_ready_timeout, payload_data,
                 load, entry, args.chunk_size, args.frame_retries, args.ack_timeout,
             )
-        print(f"target recovery stage ready through {selected_path}")
+        print(
+            f"target recovery stage ready through {selected_path}; "
+            "descriptor complete, beginning package transfer",
+            flush=True,
+        )
 
         package_header = make_package_header(
             bundle, dry_run=args.operation == "dry-run", force=compatibility_override,
