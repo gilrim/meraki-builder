@@ -142,6 +142,15 @@ for family, (family_id, spi, models) in expected.items():
         raise SystemExit(f"{payload.name} descriptor format is unsupported")
     if descriptor.get("accepted_models") != models:
         raise SystemExit(f"{payload.name} descriptor model allow-list is invalid")
+    if descriptor.get("load_address") != 0x81000000 or descriptor.get("entry_address") != 0x81000000:
+        raise SystemExit(f"{payload.name} descriptor load/entry address is invalid")
+    if descriptor.get("entry_contract") != "flat-binary-byte-zero-v1":
+        raise SystemExit(f"{payload.name} lacks the corrected flat-binary byte-zero entry contract")
+    embedded = cap.get("embedded_recovery", {}).get(family, {})
+    if embedded.get("load_address") != 0x81000000 or embedded.get("entry_address") != 0x81000000:
+        raise SystemExit(f"meraki-redboot embedded recovery address is invalid for {family}")
+    if embedded.get("entry_contract") != "flat-binary-byte-zero-v1":
+        raise SystemExit(f"meraki-redboot embedded recovery lacks the corrected entry contract for {family}")
     binary = descriptor.get("binary", {})
     if binary.get("bytes") != len(raw) or binary.get("sha256") != hashlib.sha256(raw).hexdigest():
         raise SystemExit(f"{payload.name} descriptor binary record mismatch")

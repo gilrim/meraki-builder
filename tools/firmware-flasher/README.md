@@ -28,9 +28,11 @@ independent full-flash acknowledgements.
   --serial-device /dev/ttyUSB0
 ```
 
-The default `--recovery-path embedded` drives meraki-redboot menu option 2 and
-uses the recovery stage already embedded in the boot region. No standalone
-payload is required. `--recovery-path ram-upload --recovery-payload FILE`
+The default `--recovery-path ram-upload` drives meraki-redboot menu option 1
+and uploads the corrected model-specific recovery stage. This is required for
+an original v0.7.0 loader because its embedded raw recovery binary can jump into
+MIPS metadata instead of `_start`. After a corrected loader is installed,
+`--recovery-path embedded` uses menu option 2. `--recovery-payload FILE`
 retains option-1 compatibility for external payload testing or older loaders.
 `--recovery-path auto` prefers embedded recovery and permits the direct
 RAM-loader fallback only when a valid external payload is supplied.
@@ -50,4 +52,20 @@ flash uses the nonce-gated complete-NOR sequence documented in
 ./tools/firmware-flasher/firmware-flasher.sh --bootloader-recovery --recovery-path ram-upload \
   --recovery-payload artifacts/recovery/recovery-jaguar1.bin --target-model MS42P
 ./tools/firmware-flasher/firmware-flasher.sh --self-test
+```
+
+## Silent exit after selecting flash scope
+
+A previous revision could return directly to the shell after selecting either
+`system` or `full`. The flasher runs with `set -e`, and several optional helper
+functions used a bare `return` after a failed guard expression. In modern mode,
+`prepare_version_hint` consequently returned status 1 even though skipping the
+checksum-only version prompt was expected.
+
+All optional no-op guards now return status 0 explicitly. An ERR trap also prints
+the failing command, status, and source line for any future unexpected `set -e`
+termination. The regression test is:
+
+```sh
+./tests/test_flasher_control_flow.sh
 ```

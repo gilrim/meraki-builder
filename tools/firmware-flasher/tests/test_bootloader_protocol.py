@@ -60,6 +60,26 @@ class BundleFixture:
         self.payload_jaguar.write_bytes(
             b"xPMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;ENDy"
         )
+        for payload, family, family_id, spi in (
+            (self.payload_luton, "luton26", 1, 0x70000064),
+            (self.payload_jaguar, "jaguar1", 2, 0x70000068),
+        ):
+            raw = payload.read_bytes()
+            payload.with_suffix(".descriptor.json").write_text(json.dumps({
+                "format": "postmerkos.uart-recovery-payload.v2",
+                "protocol_version": 2,
+                "soc_family": family,
+                "soc_family_id": family_id,
+                "spi_software_mode_address": spi,
+                "load_address": 0x81000000,
+                "entry_address": 0x81000000,
+                "entry_contract": "flat-binary-byte-zero-v1",
+                "binary": {
+                    "filename": payload.name,
+                    "bytes": len(raw),
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                },
+            }) + "\n")
         digest = bp.sha256_file(self.image).hex()
         loader_digest = hashlib.sha256(image[:bp.LOADER_REGION_SIZE]).hexdigest()
         kernel_sha = hashlib.sha256(kernel).hexdigest()
@@ -72,6 +92,9 @@ class BundleFixture:
                 "soc_family_id": 1,
                 "spi_software_mode_address": 0x70000064,
                 "accepted_models": ["MS22", "MS22P", "MS220-8", "MS220-8P", "MS220-24", "MS220-24P"],
+                "load_address": 0x81000000,
+                "entry_address": 0x81000000,
+                "entry_contract": "flat-binary-byte-zero-v1",
             },
             "jaguar1": {
                 "filename": self.payload_jaguar.name,
@@ -80,6 +103,9 @@ class BundleFixture:
                 "soc_family_id": 2,
                 "spi_software_mode_address": 0x70000068,
                 "accepted_models": ["MS42P", "MS42", "MS320-24", "MS320-24P", "MS220-48", "MS220-48P", "MS220-48LP", "MS220-48FP", "MS320-48", "MS320-48P", "MS320-48LP", "MS320-48FP"],
+                "load_address": 0x81000000,
+                "entry_address": 0x81000000,
+                "entry_contract": "flat-binary-byte-zero-v1",
             },
         }
         data = {
@@ -98,7 +124,12 @@ class BundleFixture:
                     },
                     "image_check_diagnostics": "structured-pass-warn-fail-skip-values-v1",
                     "embedded_recovery": {
-                        family: {"bytes": record["bytes"], "sha256": record["sha256"]}
+                        family: {
+                            "bytes": record["bytes"], "sha256": record["sha256"],
+                            "load_address": record["load_address"],
+                            "entry_address": record["entry_address"],
+                            "entry_contract": record["entry_contract"],
+                        }
                         for family, record in payload_records.items()
                     },
                 },
@@ -296,15 +327,46 @@ class ProtocolTests(unittest.TestCase):
             info = bp.validate_bundle(bundle.image, bundle.manifest, "MS42P", force=False)
             descriptor = bp.inspect_payload(bundle.payload_jaguar)
             bp.validate_recovery_payload(bundle.payload_jaguar, descriptor, info)
-            bundle.payload_jaguar.write_bytes(bundle.payload_jaguar.read_bytes() + b"tamper")
-            tampered = bp.inspect_payload(bundle.payload_jaguar)
-            with self.assertRaisesRegex(bp.ProtocolError, "size|SHA-256"):
-                bp.validate_recovery_payload(bundle.payload_jaguar, tampered, info)
+            tampered = bytearray(bundle.payload_jaguar.read_bytes())
+            tampered[-1] ^= 0x01
+            bundle.payload_jaguar.write_bytes(tampered)
+            with self.assertRaisesRegex(bp.ProtocolError, "descriptor SHA-256"):
+                bp.inspect_payload(bundle.payload_jaguar)
             manifest = json.loads(bundle.manifest.read_text())
             manifest["recovery"]["uart_firmware"]["flash_geometry"]["page_bytes"] = 512
             bundle.manifest.write_text(json.dumps(manifest))
             with self.assertRaisesRegex(bp.ProtocolError, "flash geometry"):
                 bp.validate_bundle(bundle.image, bundle.manifest, "MS42P", force=False)
+
+    def test_payload_without_byte_zero_contract_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = BundleFixture(Path(temp))
+            sidecar = bundle.payload_jaguar.with_suffix(".descriptor.json")
+            data = json.loads(sidecar.read_text())
+            data.pop("entry_contract")
+            sidecar.write_text(json.dumps(data))
+            with self.assertRaisesRegex(bp.ProtocolError, "flat-binary-byte-zero-v1"):
+                bp.inspect_payload(bundle.payload_jaguar)
+
+    def test_embedded_exec_without_ready_is_classified_as_entry_failure(self) -> None:
+        link = mock.Mock()
+        link.wait_for.side_effect = [
+            "PMOSBOOT MENU-PROBE TIMEOUT_MS=00000bb8",
+            "PMOSBOOT PASS-MENU-TRIGGER: BYTE: 0x0000000D",
+            "PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY",
+            "PMOSBOOT MENU-READY TIMEOUT_MS=00001388",
+            "PMOSBOOT PASS-MENU-CHOICE: SELECTED: 0x00000002",
+            "PMOSBOOT INFO-RECOVERY: SOURCE: MENU-OPTION-2 | SOC: jaguar1",
+            "PMOSBOOT PASS-RECOVERY-SIZE: MAX: 0x00400000 | GOT: 0x000037D8",
+            "PMOSBOOT PASS-RECOVERY-COPY: LOAD: 0x81000000 | SIZE: 0x000037D8",
+            "PMOSBOOT PASS-RECOVERY-EXEC: ENTRY: 0x81000000",
+            bp.ProtocolError("timed out waiting for: PMOSREC READY 2"),
+        ]
+        with self.assertRaisesRegex(bp.EmbeddedRecoveryEntryError, "entry-offset defect"):
+            br.enter_recovery(
+                link, "embedded", "jaguar1", 30.0, None,
+                0x81000000, 0x81000000, 1024, 3, 5.0,
+            )
 
     def _exercise_embedded_bootlog(self, family: str, family_id: int) -> mock.Mock:
         link = mock.Mock()

@@ -1,26 +1,65 @@
 # meraki-redboot UART firmware recovery
 
-This workflow uses the source-built meraki-redboot v0.7 fixed-RAM boot menu and
-its embedded `PMOSPKG2` recovery stage. It does not require Linux, SSH, TFTP,
-networking, or an external recovery payload.
+The flasher supports two pre-kernel stages:
+
+- **RAM upload (menu option 1):** uploads the model-matched corrected recovery
+  binary to `0x81000000`, executes it, then transfers the full firmware image.
+  This is the default and is required for a switch still running the original
+  meraki-redboot v0.7.0 build.
+- **Embedded recovery (menu option 2):** executes the recovery binary embedded
+  in the installed loader. Use this only after the loader has been rebuilt with
+  the `flat-binary-byte-zero-v1` entry correction.
+
+The original v0.7.0 recovery ELF recorded `_start` as its ELF entry but emitted
+MIPS metadata before `.text` in the raw binary. Stage 1 always jumps to byte zero
+at `0x81000000`, so the old embedded stage can log `PASS-RECOVERY-EXEC` and then
+remain silent. The corrected build uses an assembly entry veneer at byte zero,
+clears BSS, initializes GP and the stack, and calls `recovery_main`.
+
+## Recommended recovery of a switch running original v0.7.0
+
+First rebuild the complete firmware and recovery artifacts with the corrected
+builder. Then run the flasher interactively and select:
+
+1. the newly rebuilt full 16 MiB image;
+2. flash or force-flash;
+3. `meraki-redboot UART recovery`;
+4. `Upload corrected recovery utility through RAM loader`;
+5. the exact model and serial device.
+
+Equivalent command-line use:
 
 ```sh
 ./tools/firmware-flasher/firmware-flasher.sh \
   --bootloader-recovery \
-  --recovery-path embedded \
-  --firmware artifacts/<full-image>.bin \
+  --recovery-path ram-upload \
+  --firmware artifacts/<new-full-image>.bin \
   --target-model MS42P \
   --serial-device /dev/ttyUSB0
 ```
 
-The default `embedded` path waits for `PMOSBOOT MENU-PROBE`, sends carriage
-return as the discarded trigger, selects option `2`, validates each reported
-menu/recovery PASS marker, and requires `PMOSREC READY 2` from the expected SoC
-family. Both `luton26` and `jaguar1` are supported targets.
-`auto` behaves the same on v0.7 and can fall back to a directly exposed
-`PMOSRAM READY 2` listener when a matching `--recovery-payload` is supplied.
-`ram-upload` explicitly selects menu option `1` and uploads that external
-payload before starting `PMOSPKG2`.
+The flasher automatically selects the matching artifact:
+
+- Luton26: `artifacts/recovery/recovery-luton26.bin`
+- Jaguar1: `artifacts/recovery/recovery-jaguar1.bin`
+
+The adjacent `.descriptor.json` must declare:
+
+- load and entry address `0x81000000`;
+- `entry_contract: flat-binary-byte-zero-v1`;
+- exact payload size and SHA-256;
+- matching SoC family, SPI register and accepted models.
+
+## Embedded and automatic modes
+
+After a corrected loader has been flashed, `--recovery-path embedded` selects
+menu option 2 and requires `PMOSREC READY 2` after the loader's
+`PASS-RECOVERY-EXEC` marker.
+
+`--recovery-path auto` tries embedded recovery first. If an affected v0.7.0
+loader reports `PASS-RECOVERY-EXEC` but never emits `PMOSREC READY 2`, the host
+identifies the entry-offset defect, asks for a reset or power cycle, waits for
+the menu again, and falls back to option 1 with the corrected external payload.
 
 ## Local validation
 
@@ -28,39 +67,27 @@ Before serial access, the flasher checks:
 
 - exact 16 MiB image and release-manifest SHA-256;
 - source-built meraki-redboot v7 capability record and loader digest;
-- boot-menu option map and embedded family recovery digest;
-- exact target model, compatibility status, and boot-family mapping;
-- SPIM magic, load/entry addresses, reserved words, 32-byte alignment, slot
-  boundary, payload SHA-256, and CRC-32;
-- SquashFS location;
-- recovery payload descriptor and digest when an external path is requested;
-- flash geometry and JEDEC allow-list.
+- corrected entry contract in both embedded and external recovery metadata;
+- exact target model and Luton26/Jaguar1 mapping;
+- SPIM load/entry addresses, 32-byte alignment, slot boundary and CRC-32;
+- SquashFS location, flash geometry and JEDEC allow-list;
+- external payload size, digest, family and entry contract.
 
-## Operations
+A firmware image built before this correction is intentionally rejected. Even
+if a corrected external stage could write it, that image would reinstall the
+broken embedded recovery payload.
 
-- **Verify** performs local validation and never opens the serial port.
-- **Dry run** uploads the image and manifest and performs target-side flash
-  identification and policy checks without erase/program.
-- **Flash** requires complete-image authorization and a target-generated nonce.
-- **Force flash** acknowledges an `untested` model status; it does not bypass
-  family, geometry, digest, CRC, JEDEC, protection, or hard-boundary checks.
-
-## Protocol sequence
+## Protocol sequence for RAM upload
 
 1. Reset or power-cycle the target.
-2. Receive `PMOSBOOT MENU-PROBE`, send `0x0d`, require
-   `PASS-MENU-TRIGGER`, receive the menu and `PMOSBOOT MENU-READY`, then send
-   `2`.
-3. Require `PASS-MENU-CHOICE`, `INFO-RECOVERY` with the model-matched SoC,
-   `PASS-RECOVERY-SIZE`, `PASS-RECOVERY-COPY`, and `PASS-RECOVERY-EXEC`.
-4. Receive `PMOSREC READY 2` and verify `SOC=luton26` or `SOC=jaguar1` against
-   the selected model.
-5. Send the package header and await acceptance.
-6. Send image and manifest with acknowledged `PKF2` frames.
-7. Require whole-object CRC-32/SHA-256 and manifest validation.
-8. For dry-run, require `PMOSREC RESULT DRY-RUN-OK`.
-9. For flash, return the exact `ERASEFLASH <nonce>` only after local
-   confirmation, then require `PMOSREC RESULT SUCCESS`.
+2. Receive `PMOSBOOT MENU-PROBE`, send carriage return, and validate the menu.
+3. Select option `1` and require `PMOSRAM READY 2` for the expected SoC.
+4. Upload the corrected recovery payload with acknowledged `PMOSRAM2` frames.
+5. Require `PMOSREC READY 2` from the uploaded stage.
+6. Send the package header, firmware image and manifest.
+7. Require target-side CRC-32, SHA-256, manifest and hardware validation.
+8. For flash, return the exact target-generated `ERASEFLASH <nonce>` challenge.
+9. Require `PMOSREC RESULT SUCCESS`.
 
-Pre-kernel flash rewrites loader, kernel, SquashFS, and JFFS2. Keep a verified
+Pre-kernel flashing rewrites loader, kernel, SquashFS and JFFS2. Keep a verified
 external SPI backup and programmer available.

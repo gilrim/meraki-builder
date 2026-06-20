@@ -11,6 +11,7 @@ import termios
 
 from bootloader_protocol import (
     ProtocolError,
+    EmbeddedRecoveryEntryError,
     SerialLink,
     inspect_payload,
     make_package_header,
@@ -152,11 +153,19 @@ def enter_recovery(
         require_hex_field(selected, MENU_SELECTION, int(choice), "menu selection")
         if choice == b"2":
             wait_for_embedded_recovery(link, expected_family)
-            line = link.wait_for(
-                ("PMOSREC READY 2",),
-                10.0,
-                error_prefixes=("PMOSBOOT FAIL-RECOVERY",),
-            )
+            try:
+                line = link.wait_for(
+                    ("PMOSREC READY 2",),
+                    10.0,
+                    error_prefixes=("PMOSBOOT FAIL-RECOVERY",),
+                )
+            except ProtocolError as exc:
+                if "timed out" not in str(exc):
+                    raise
+                raise EmbeddedRecoveryEntryError(
+                    "loader reported PASS-RECOVERY-EXEC but the payload never emitted PMOSREC READY 2; "
+                    "this matches the v0.7.0 flat-binary entry-offset defect"
+                ) from exc
         else:
             line = link.wait_for(("PMOSRAM READY 2",), 10.0)
 
@@ -186,7 +195,8 @@ def main() -> int:
     parser.add_argument("--port", help="Linux serial character device")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--recovery-path", choices=("embedded", "ram-upload", "auto"), default="embedded")
-    parser.add_argument("--payload", type=Path, help="legacy/external recovery payload for ram-upload fallback")
+    parser.add_argument("--payload", type=Path, help="external recovery payload for RAM-loader fallback")
+    parser.add_argument("--payload-descriptor", type=Path, help="entry-contract descriptor for --payload")
     parser.add_argument("--firmware", type=Path, required=True)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--target-model", required=True)
@@ -197,6 +207,7 @@ def main() -> int:
     parser.add_argument("--frame-retries", type=int, default=3)
     parser.add_argument("--ack-timeout", type=float, default=5.0)
     parser.add_argument("--ready-timeout", type=float, default=30.0)
+    parser.add_argument("--fallback-ready-timeout", type=float, default=180.0)
     parser.add_argument("--operation-timeout", type=float, default=1800.0)
     parser.add_argument("--auto-confirm-erase", action="store_true")
     args = parser.parse_args()
@@ -208,7 +219,7 @@ def main() -> int:
     payload_data: bytes | None = None
     descriptor = None
     if args.payload is not None:
-        descriptor = inspect_payload(args.payload)
+        descriptor = inspect_payload(args.payload, args.payload_descriptor)
         validate_recovery_payload(args.payload, descriptor, bundle)
         payload_data = args.payload.read_bytes()
         if len(payload_data) > 4 * 1024 * 1024:
@@ -238,10 +249,28 @@ def main() -> int:
     link = SerialLink(fd)
     try:
         print("Reset or power-cycle the switch now; waiting for the meraki-redboot recovery menu...")
-        selected_path = enter_recovery(
-            link, args.recovery_path, bundle.family, args.ready_timeout, payload_data,
-            load, entry, args.chunk_size, args.frame_retries, args.ack_timeout,
-        )
+        try:
+            selected_path = enter_recovery(
+                link, args.recovery_path, bundle.family, args.ready_timeout, payload_data,
+                load, entry, args.chunk_size, args.frame_retries, args.ack_timeout,
+            )
+        except EmbeddedRecoveryEntryError as exc:
+            if args.recovery_path != "auto" or payload_data is None:
+                raise ProtocolError(
+                    f"{exc}. Power-cycle and retry with --recovery-path ram-upload using a "
+                    "flat-binary-byte-zero-v1 recovery payload."
+                ) from exc
+            print(f"embedded recovery failed to enter: {exc}", file=sys.stderr, flush=True)
+            print(
+                "AUTO FALLBACK: power-cycle or reset the switch now. The host will wait for the "
+                "meraki-redboot menu and select UART RAM-loader option 1.",
+                file=sys.stderr, flush=True,
+            )
+            link.discard_buffer()
+            selected_path = enter_recovery(
+                link, "ram-upload", bundle.family, args.fallback_ready_timeout, payload_data,
+                load, entry, args.chunk_size, args.frame_retries, args.ack_timeout,
+            )
         print(f"target recovery stage ready through {selected_path}")
 
         package_header = make_package_header(

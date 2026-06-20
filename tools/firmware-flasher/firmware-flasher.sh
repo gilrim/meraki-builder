@@ -23,10 +23,11 @@ ALLOW_UNTESTED=0
 TRANSPORT=tftp
 BOOTLOADER_RECOVERY=0
 BOOTLOADER_PAYLOAD=${BOOTLOADER_PAYLOAD:-}
-BOOTLOADER_RECOVERY_PATH=${BOOTLOADER_RECOVERY_PATH:-embedded}
+BOOTLOADER_RECOVERY_PATH=${BOOTLOADER_RECOVERY_PATH:-ram-upload}
 SERIAL_DEVICE=${SERIAL_DEVICE:-}
 TARGET_MODEL=${TARGET_MODEL:-}
 FORCE_FLASH=0
+SUPPRESS_ERR_REPORT=0
 
 usage() {
     cat <<'USAGE'
@@ -43,10 +44,10 @@ Options:
   --artifacts DIR       artifact directory (default: ../../artifacts)
   --firmware FILE       preselect an artifact instead of opening the list
   --tftp-port PORT      unprivileged TFTP port (default: 1069)
-  --control METHOD      ssh or serial; otherwise prompt
-  --transport METHOD    tftp (default) or uart; UART requires serial control
+  --control METHOD      ssh, serial, or bootloader; otherwise prompt
+  --transport METHOD    tftp (default) or uart; UART supports serial or bootloader control
   --bootloader-recovery use meraki-redboot pre-kernel UART recovery
-  --recovery-path PATH embedded (default), auto, or ram-upload
+  --recovery-path PATH ram-upload (default), embedded, or auto
   --recovery-payload FILE external payload for ram-upload/legacy fallback
   --target-model MODEL  exact hardware model required for bootloader recovery
   --serial-device DEV   serial character device
@@ -89,6 +90,17 @@ log() { printf '[flasher] %s\n' "$*"; }
 warn() { printf '[flasher] warning: %s\n' "$*" >&2; }
 die() { printf '[flasher] error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1"; }
+
+report_unexpected_error() {
+    local rc=$? line=${BASH_LINENO[0]:-unknown} command=${BASH_COMMAND:-unknown}
+    (( SUPPRESS_ERR_REPORT )) && return "$rc"
+    # Expected probe failures used by if/while/|| are excluded from ERR by Bash.
+    # Anything reaching this trap is therefore an unexpected set -e termination.
+    printf '[flasher] error: unexpected command failure (status %s) at line %s: %s\n' \
+        "$rc" "$line" "$command" >&2
+    return "$rc"
+}
+trap report_unexpected_error ERR
 
 stop_tftp_server() {
     local attempt
@@ -365,7 +377,9 @@ select_flash_scope() {
         FLASH_SCOPE=system
         return
     fi
-    (( FLASH_SCOPE_REQUESTED )) && return
+    if (( FLASH_SCOPE_REQUESTED )); then
+        return 0
+    fi
     printf '
 Flash scope:
 '
@@ -385,8 +399,12 @@ Flash scope:
 
 prepare_version_hint() {
     local detected
-    [[ $MODE == checksum ]] || return
-    [[ -n $FIRMWARE_VERSION ]] && return
+    if [[ $MODE != checksum ]]; then
+        return 0
+    fi
+    if [[ -n $FIRMWARE_VERSION ]]; then
+        return 0
+    fi
     detected=$(detect_embedded_version "$SELECTED_FIRMWARE" "$SELECTED_TYPE" 2>/dev/null || true)
     if [[ -n $detected ]]; then
         FIRMWARE_VERSION=$detected
@@ -399,7 +417,9 @@ prepare_version_hint() {
 
 confirm_full_flash() {
     local answer
-    [[ $FLASH_SCOPE == full && $OPERATION == flash ]] || return
+    if [[ $FLASH_SCOPE != full || $OPERATION != flash ]]; then
+        return 0
+    fi
     printf '
 WARNING: full-flash mode overwrites the bootloader and kernel in addition to rootfs/config.
 '
@@ -407,6 +427,70 @@ WARNING: full-flash mode overwrites the bootloader and kernel in addition to roo
 '
     read -r -p 'Type FLASH-ALL to authorize this host-side operation: ' answer
     [[ $answer == FLASH-ALL ]] || die 'full-flash authorization was not provided'
+}
+
+activate_bootloader_recovery() {
+    [[ $MODE == modern ]] || die 'bootloader UART recovery requires the modern manifest-aware artifact contract'
+    [[ $SELECTED_TYPE == full ]] || \
+        die 'bootloader UART recovery requires a supported 16 MiB postmerkOS full image'
+    BOOTLOADER_RECOVERY=1
+    CONTROL_PATH=bootloader
+    if [[ $FLASH_SCOPE != full ]]; then
+        log 'bootloader UART recovery always writes the complete 16 MiB SPI image; forcing full-flash scope'
+    fi
+    FLASH_SCOPE=full
+    FLASH_SCOPE_REQUESTED=1
+    OVERLAY_POLICY=image
+}
+
+select_bootloader_recovery_path() {
+    local choice
+    printf '
+Bootloader recovery entry path:
+'
+    printf '  1) Upload corrected recovery utility through RAM loader (menu option 1; recommended for v0.7.0)
+'
+    printf '  2) Embedded recovery utility (menu option 2; requires fixed-entry loader)
+'
+    printf '  3) Try embedded recovery, then wait for reset and fall back to RAM upload
+'
+    while :; do
+        read -r -p 'Select recovery path [1]: ' choice
+        case ${choice:-1} in
+            1) BOOTLOADER_RECOVERY_PATH=ram-upload; return ;;
+            2) BOOTLOADER_RECOVERY_PATH=embedded; return ;;
+            3) BOOTLOADER_RECOVERY_PATH=auto; return ;;
+            *) warn 'invalid selection' ;;
+        esac
+    done
+}
+
+select_control_path() {
+    local choice
+    [[ -z $CONTROL_PATH ]] || return 0
+    printf '\nFirmware upload/control path:\n'
+    printf '  1) SSH to running postmerkOS (TFTP firmware source)\n'
+    printf '  2) Hardware serial to running postmerkOS (TFTP or PMOSUART/1)\n'
+    if [[ $MODE == modern && $SELECTED_TYPE == full ]]; then
+        printf '  3) meraki-redboot UART recovery (pre-kernel full-image upload)\n'
+    fi
+    while :; do
+        read -r -p 'Select upload/control path [1]: ' choice
+        case ${choice:-1} in
+            1) CONTROL_PATH=ssh; return ;;
+            2) CONTROL_PATH=serial; return ;;
+            3)
+                if [[ $MODE != modern || $SELECTED_TYPE != full ]]; then
+                    warn 'bootloader UART recovery requires a modern 16 MiB full image'
+                    continue
+                fi
+                activate_bootloader_recovery
+                select_bootloader_recovery_path
+                return
+                ;;
+            *) warn 'invalid selection' ;;
+        esac
+    done
 }
 
 select_operation() {
@@ -655,8 +739,12 @@ prepare_ssh_auth() {
 }
 
 clear_expected_changed_host_key() {
-    [[ $FLASH_SCOPE == full || $OVERLAY_POLICY == reset || $OVERLAY_POLICY == image ]] || return
-    command -v ssh-keygen >/dev/null 2>&1 || return
+    if [[ $FLASH_SCOPE != full && $OVERLAY_POLICY != reset && $OVERLAY_POLICY != image ]]; then
+        return 0
+    fi
+    if ! command -v ssh-keygen >/dev/null 2>&1; then
+        return 0
+    fi
     if [[ $SSH_PORT == 22 ]]; then
         ssh-keygen -q -R "$SSH_TARGET" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
     else
@@ -831,7 +919,9 @@ select_serial_device() {
 }
 
 ensure_serial_access() {
-    [[ -r $SERIAL_DEVICE && -w $SERIAL_DEVICE ]] && return
+    if [[ -r $SERIAL_DEVICE && -w $SERIAL_DEVICE ]]; then
+        return 0
+    fi
     warn "current user cannot read and write $SERIAL_DEVICE"
     if command -v setfacl >/dev/null 2>&1 && prompt_yes_no 'Grant temporary access with sudo setfacl?' y; then
         sudo setfacl -m "u:$USER:rw" "$SERIAL_DEVICE"
@@ -910,7 +1000,7 @@ run_bootloader_recovery_mode() {
         *) die "unsupported exact target model for pre-kernel recovery: $TARGET_MODEL" ;;
     esac
     default_payload="$ARTIFACTS_DIR/recovery/recovery-$family.bin"
-    if [[ $BOOTLOADER_RECOVERY_PATH == ram-upload || -n $BOOTLOADER_PAYLOAD ]]; then
+    if [[ $BOOTLOADER_RECOVERY_PATH == ram-upload || $BOOTLOADER_RECOVERY_PATH == auto || -n $BOOTLOADER_PAYLOAD ]]; then
         [[ -n $BOOTLOADER_PAYLOAD ]] || BOOTLOADER_PAYLOAD=$default_payload
         [[ -f $BOOTLOADER_PAYLOAD ]] || die "target-specific external recovery payload not found: $BOOTLOADER_PAYLOAD"
     fi
@@ -922,7 +1012,12 @@ run_bootloader_recovery_mode() {
       --manifest "$SELECTED_FIRMWARE.manifest.json"
       --target-model "$TARGET_MODEL"
     )
-    [[ -n $BOOTLOADER_PAYLOAD ]] && args+=(--payload "$BOOTLOADER_PAYLOAD")
+    if [[ -n $BOOTLOADER_PAYLOAD ]]; then
+        args+=(--payload "$BOOTLOADER_PAYLOAD")
+        local payload_descriptor="${BOOTLOADER_PAYLOAD%.bin}.descriptor.json"
+        [[ -f $payload_descriptor ]] || die "corrected recovery payload descriptor not found: $payload_descriptor"
+        args+=(--payload-descriptor "$payload_descriptor")
+    fi
     (( FORCE_FLASH )) && args+=(--force)
 
     printf '\nPre-kernel UART recovery\n'
@@ -946,7 +1041,18 @@ run_bootloader_recovery_mode() {
     else
         prompt_yes_no 'Begin non-destructive recovery dry-run?' y || die 'cancelled'
     fi
-    python3 "$SCRIPT_DIR/bootloader-ramload.py" "${args[@]}"
+    mkdir -p "$LOG_DIR"
+    local log_file rc
+    log_file="$LOG_DIR/bootloader-uart-recovery-$(date +%Y%m%d-%H%M%S).log"
+    printf 'Recovery log:      %s\n' "$log_file"
+    set +e
+    SUPPRESS_ERR_REPORT=1
+    python3 "$SCRIPT_DIR/bootloader-ramload.py" "${args[@]}" 2>&1 | tee "$log_file"
+    rc=${PIPESTATUS[0]}
+    SUPPRESS_ERR_REPORT=0
+    set -e
+    (( rc == 0 )) || die "bootloader UART recovery ended with status $rc; inspect $log_file"
+    log 'bootloader UART recovery completed'
 }
 
 self_test() {
@@ -1038,16 +1144,21 @@ main() {
     [[ $CONTROL_PATH == '' || $CONTROL_PATH == ssh || $CONTROL_PATH == serial || $CONTROL_PATH == bootloader ]] || die '--control must be ssh, serial, or bootloader'
     [[ $TRANSPORT == tftp || $TRANSPORT == uart ]] || die '--transport must be tftp or uart'
     [[ $MODE == modern || $MODE == checksum || $MODE == legacy ]] || die 'invalid firmware contract mode'
-    [[ $TRANSPORT != uart || -z $CONTROL_PATH || $CONTROL_PATH == serial ]] || die '--transport uart requires --control serial'
+    [[ $TRANSPORT != uart || -z $CONTROL_PATH || $CONTROL_PATH == serial || $CONTROL_PATH == bootloader ]] || die '--transport uart requires --control serial or bootloader'
     [[ $TRANSPORT != uart || $MODE != legacy ]] || die '--transport uart is unavailable with --legacy'
     [[ $FLASH_SCOPE == system || $FLASH_SCOPE == full ]] || die 'invalid flash scope'
     [[ ${#FIRMWARE_VERSION} -le 127 && $FIRMWARE_VERSION != *$'\n'* && $FIRMWARE_VERSION != *$'\r'* ]] || die 'invalid version hint'
     [[ $MODE != legacy || $FLASH_SCOPE != full ]] || die '--full-flash is unavailable with --legacy'
     [[ $BOOTLOADER_RECOVERY -eq 0 || $MODE == modern ]] || die '--bootloader-recovery requires --modern'
     [[ $BOOTLOADER_RECOVERY_PATH == embedded || $BOOTLOADER_RECOVERY_PATH == auto || $BOOTLOADER_RECOVERY_PATH == ram-upload ]] || die '--recovery-path must be embedded, auto, or ram-upload'
+    if [[ $CONTROL_PATH == bootloader ]]; then
+        BOOTLOADER_RECOVERY=1
+        FLASH_SCOPE=full
+        FLASH_SCOPE_REQUESTED=1
+    fi
     [[ $TFTP_PORT =~ ^[0-9]+$ ]] && (( TFTP_PORT >= 1024 && TFTP_PORT <= 65535 )) || die 'TFTP port must be from 1024 through 65535'
 
-    for command in bash python3 sha256sum dd awk stat od tr readlink truncate head; do need "$command"; done
+    for command in bash python3 sha256sum dd awk stat od tr readlink truncate head tee; do need "$command"; done
     [[ -x $SCRIPT_DIR/tftp-server.py && -x $SCRIPT_DIR/serial-runner.py ]] || die 'private flasher helpers are missing or not executable'
     (( self_test_requested )) && { self_test; return; }
     for command in find ip sort; do need "$command"; done
@@ -1058,6 +1169,13 @@ main() {
     select_flash_scope
     prepare_version_hint
     select_operation
+
+    if (( BOOTLOADER_RECOVERY )); then
+        activate_bootloader_recovery
+    else
+        select_control_path
+    fi
+
     select_overlay_policy
     confirm_full_flash
 
@@ -1066,18 +1184,11 @@ main() {
         return
     fi
 
-    if [[ -z $CONTROL_PATH ]]; then
-        printf '\nControl path:\n  1) SSH\n  2) Hardware serial\n'
-        while :; do
-            read -r -p 'Select control path [1]: ' CONTROL_PATH
-            case ${CONTROL_PATH:-1} in 1) CONTROL_PATH=ssh; break ;; 2) CONTROL_PATH=serial; break ;; *) warn 'invalid selection' ;; esac
-        done
-    fi
-
     [[ $TRANSPORT != uart || $CONTROL_PATH == serial ]] || die 'UART transport requires hardware serial control'
     case $CONTROL_PATH in
         ssh) need ssh; need setsid; run_ssh_mode ;;
         serial) run_serial_mode ;;
+        *) die "unsupported control path: $CONTROL_PATH" ;;
     esac
 }
 
