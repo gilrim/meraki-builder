@@ -85,17 +85,38 @@ truncate -s "$ROOTFS_REGION" "$WORK/rootfs.region"
 if [[ -n "${TARGET_DIR:-}" && -f "$TARGET_DIR/etc/postmerkos-release.json" && "$rootfs_remaining" -ge 4096 ]]; then
     python3 - "$WORK/rootfs.region" "$TARGET_DIR/etc/postmerkos-release.json" "$ROOTFS_REGION" <<'PYMETA'
 from pathlib import Path
+import json
 import sys
+
 image = Path(sys.argv[1])
-manifest = Path(sys.argv[2]).read_bytes()
+source_path = Path(sys.argv[2])
 region = int(sys.argv[3])
 slot = 4096
+
+# The complete release manifest grows as recovery and hardware capabilities are
+# added. The fixed 4 KiB trailer is only a fallback update index; the complete
+# manifest remains inside the SquashFS and in the checksummed sidecar artifact.
+source = json.loads(source_path.read_text(encoding="utf-8"))
+required = ("version", "target_family", "image_format", "config_schema",
+            "fwupdate_api", "web_api", "models")
+missing = [key for key in ("version", "models") if key not in source]
+if missing:
+    raise SystemExit("postmerkOS release manifest lacks embedded-index field(s): " + ", ".join(missing))
+embedded = {key: source[key] for key in required if key in source}
+embedded["metadata_profile"] = "embedded-update-index-v1"
+manifest = json.dumps(embedded, sort_keys=True, separators=(",", ":")).encode("utf-8")
 if len(manifest) > slot - 16:
-    raise SystemExit("postmerkOS release manifest exceeds metadata slot")
+    print(
+        f"postmerkOS embedded update index is {len(manifest)} bytes and exceeds "
+        f"the {slot - 16}-byte trailer payload; trailer omitted, sidecar remains authoritative.",
+        file=sys.stderr,
+    )
+    raise SystemExit(0)
 payload = b"PMOSMETA" + f"{len(manifest):08x}".encode() + manifest
 with image.open("r+b") as stream:
     stream.seek(region - slot)
     stream.write(payload)
+print(f"Embedded compact postmerkOS update index: {len(manifest)} bytes")
 PYMETA
 elif [[ -n "${TARGET_DIR:-}" && -f "$TARGET_DIR/etc/postmerkos-release.json" ]]; then
     printf '%s\n' 'SquashFS leaves less than 4 KiB padding; embedded metadata omitted.'

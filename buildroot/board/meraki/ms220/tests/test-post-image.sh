@@ -92,7 +92,50 @@ cmp "$TMP/padded.squashfs" "$TMP/padded-prefix"
 magic=$(dd if="$TMP/padded-output/rootfs.region" bs=1 skip=$((0x800000-4096)) \
         count=8 status=none)
 [ "$magic" = PMOSMETA ]
+python3 - "$TMP/padded-output/rootfs.region" <<'PYMETA'
+import json
+from pathlib import Path
+import sys
+region = Path(sys.argv[1]).read_bytes()
+slot = region[-4096:]
+assert slot[:8] == b"PMOSMETA"
+length = int(slot[8:16], 16)
+assert 0 < length <= 4080
+embedded = json.loads(slot[16:16 + length])
+assert embedded["version"] == "image-test"
+assert embedded["models"]["MS42P"] == "untested"
+assert embedded["metadata_profile"] == "embedded-update-index-v1"
+assert "recovery" not in embedded
+PYMETA
 
+# A large authoritative manifest must not fail image generation or be copied
+# verbatim into the fixed 4 KiB fallback trailer.
+python3 - "$TMP/target/etc/postmerkos-release.json" <<'PYLARGE'
+import json
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["recovery"] = {"fixture": "x" * 16384}
+path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+PYLARGE
+run_image "$TMP/oversized-output" "$TMP/padded.squashfs"
+python3 - "$TMP/oversized-output/rootfs.region" "$TMP/oversized-output/postmerkos-release.json" <<'PYOVERSIZED'
+import json
+from pathlib import Path
+import sys
+region = Path(sys.argv[1]).read_bytes()
+authoritative = json.loads(Path(sys.argv[2]).read_text())
+assert len(Path(sys.argv[2]).read_bytes()) > 4080
+assert len(authoritative["recovery"]["fixture"]) == 16384
+slot = region[-4096:]
+assert slot[:8] == b"PMOSMETA"
+length = int(slot[8:16], 16)
+assert length <= 4080
+embedded = json.loads(slot[16:16 + length])
+assert embedded["metadata_profile"] == "embedded-update-index-v1"
+assert "recovery" not in embedded
+PYOVERSIZED
 
 python3 "$(cd -- "$HERE/../../../../../scripts" && pwd)/validate-vcoreiii-payload.py" \
   "$TMP/full-output/ms42p-firmware.bin" --offset 0x40000 --region-bytes 0x2c0000 \

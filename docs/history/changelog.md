@@ -1,3 +1,10 @@
+# 2026-06-20 bounded embedded release metadata
+
+- Replace the fixed 4 KiB trailer copy of the complete release manifest with a compact `embedded-update-index-v1` record.
+- Keep complete recovery, hardware-preflight, loader, and digest metadata in the in-rootfs and checksummed sidecar manifests.
+- Prevent release-manifest growth from aborting post-image generation while preserving legacy image-only version/model discovery.
+- Add regression coverage using an authoritative manifest larger than the trailer slot.
+
 # 2026-06-19 integrated VCore-III stabilization
 
 - Restore platform-agnostic inclusion and hash verification of common, Luton26, Jaguar1, Jaguar Dual, and auxiliary donor kernel modules.
