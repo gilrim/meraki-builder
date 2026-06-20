@@ -285,6 +285,10 @@ def main() -> int:
     parser.add_argument("--host-full-flash-authorized", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--verbose-acks", action="store_true")
     parser.add_argument("--skip-baud-negotiation", action="store_true")
+    parser.add_argument(
+        "--diagnostic-baud-scan", action="store_true",
+        help="try the legacy broad divisor scan and midpoint refinement",
+    )
     parser.add_argument("--preflight-scratch", default="0x00ff0000")
     parser.add_argument("--preflight-seed", default="0x504d4f53")
     parser.add_argument("--preflight-receipt", type=Path)
@@ -365,7 +369,12 @@ def main() -> int:
             )
         print(f"target PMOSREC v3 ready through {selected_path}", flush=True)
 
-        baud = args.baud if args.skip_baud_negotiation else negotiate_fastest_baud(link, controller)
+        baud = (
+            args.baud if args.skip_baud_negotiation
+            else negotiate_fastest_baud(
+                link, controller, diagnostic_scan=args.diagnostic_baud_scan
+            )
+        )
         transport = qualify_transport(link, baud, verbose_acks=args.verbose_acks)
 
         if args.operation == "preflight":

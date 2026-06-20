@@ -52,7 +52,12 @@ BOTHER = 0x1000
 CBAUD = 0x100F
 TERMIOS2 = struct.Struct("=IIIIB19BII")
 
-STANDARD_BAUDS = (
+# The normal path makes one descending pass over conventional UART rates and
+# stops at the first passing candidate. The broad divisor scan is retained only
+# for explicit diagnostics because every failed candidate requires target-side
+# rollback and materially delays recovery.
+DEFAULT_BAUD_CANDIDATES = (921600, 460800, 230400)
+DIAGNOSTIC_BAUD_CANDIDATES = (
     115200, 153600, 230400, 250000, 256000, 307200, 460800, 500000,
     576000, 614400, 750000, 921600, 1_000_000, 1_152_000, 1_500_000,
     2_000_000, 2_500_000, 3_000_000, 3_500_000, 4_000_000, 5_000_000,
@@ -384,14 +389,46 @@ class ProgressTracker:
 
 
 def _read_ack(link: SerialLink, object_id: int, timeout: float) -> tuple[int, int, int, int]:
+    """Read a compact ACK while recovering byte alignment from damaged records."""
+    deadline = time.monotonic() + timeout
+    magic_bytes = struct.pack("<I", ACK_MAGIC)
+    buffered = bytearray()
     last_error = "compact ACK was not received"
-    per_attempt = min(max(timeout / ACK_CONFIRM_ATTEMPTS, 1.75), 3.0)
-    for _ in range(ACK_CONFIRM_ATTEMPTS):
-        try:
-            raw = link.read_exact(ACK_RECORD.size, per_attempt, echo=False)
-        except ProtocolError as exc:
-            last_error = str(exc)
+    scanned = 0
+    scan_limit = ACK_RECORD.size * ACK_CONFIRM_ATTEMPTS * 3
+
+    while time.monotonic() < deadline and scanned < scan_limit:
+        marker = buffered.find(magic_bytes)
+        if marker < 0:
+            if len(buffered) > len(magic_bytes) - 1:
+                del buffered[: -(len(magic_bytes) - 1)]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                buffered.extend(link.read_exact(1, min(remaining, 0.75), echo=False))
+                scanned += 1
+            except ProtocolError as exc:
+                last_error = str(exc)
             continue
+
+        if marker:
+            del buffered[:marker]
+        while len(buffered) < ACK_RECORD.size:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                buffered.extend(link.read_exact(1, min(remaining, 0.75), echo=False))
+                scanned += 1
+            except ProtocolError as exc:
+                last_error = str(exc)
+                break
+        if len(buffered) < ACK_RECORD.size:
+            continue
+
+        raw = bytes(buffered[: ACK_RECORD.size])
+        del buffered[: ACK_RECORD.size]
         magic, observed_object, base, count, retry_bitmap, status, crc = ACK_RECORD.unpack(raw)
         if zlib.crc32(raw[:-4]) & 0xFFFFFFFF != crc:
             last_error = "compact ACK CRC mismatch"
@@ -566,12 +603,14 @@ def test_baud_candidate(link: SerialLink, controller: BaudController, requested:
 
 
 def negotiate_fastest_baud(link: SerialLink, controller: BaudController,
-                            *, refine_percent: float = 2.0) -> int:
+                            *, diagnostic_scan: bool = False,
+                            refine_percent: float = 2.0) -> int:
     current = controller.current_rate
-    passed = {current}
     failed: set[int] = set()
     tested: set[int] = set()
-    for requested in STANDARD_BAUDS:
+    candidates = DIAGNOSTIC_BAUD_CANDIDATES if diagnostic_scan else DEFAULT_BAUD_CANDIDATES
+
+    for requested in candidates:
         if requested <= current:
             continue
         try:
@@ -584,31 +623,55 @@ def negotiate_fastest_baud(link: SerialLink, controller: BaudController,
         tested.add(actual)
         if ok:
             current = actual
-            passed.add(actual)
+            if not diagnostic_scan:
+                break
         elif actual > current:
             failed.add(actual)
-    while True:
-        higher_failures = sorted(rate for rate in failed if rate > current)
-        if not higher_failures:
-            break
-        upper = higher_failures[0]
-        if (upper - current) * 100.0 / current <= refine_percent:
-            break
-        requested = (current + upper) // 2
+
+    if diagnostic_scan:
+        while True:
+            higher_failures = sorted(rate for rate in failed if rate > current)
+            if not higher_failures:
+                break
+            upper = higher_failures[0]
+            if (upper - current) * 100.0 / current <= refine_percent:
+                break
+            requested = (current + upper) // 2
+            try:
+                ok, actual = test_baud_candidate(link, controller, requested, current, tested)
+            except ProtocolError:
+                break
+            if actual in tested or actual <= current:
+                break
+            tested.add(actual)
+            if ok:
+                current = actual
+            else:
+                failed.add(actual)
+
+    policy = "diagnostic scan" if diagnostic_scan else "conservative one-pass scan"
+    print(f"[flasher] Selected UART rate: {current} baud ({policy}).", flush=True)
+    return current
+
+
+def _synchronize_failed_feature(link: SerialLink, mode: int, timeout: float = 8.0) -> bool:
+    """Wait until the target has left ACK-confirmation state before another command."""
+    if not hasattr(link, "read_line"):
+        return False
+    deadline = time.monotonic() + timeout
+    terminal = f"PMOS3 FEATURE-FAIL MODE={mode}"
+    while time.monotonic() < deadline:
         try:
-            ok, actual = test_baud_candidate(link, controller, requested, current, tested)
+            line = link.read_line(deadline - time.monotonic())
         except ProtocolError:
             break
-        if actual in tested or actual <= current:
-            break
-        tested.add(actual)
-        if ok:
-            current = actual
-            passed.add(actual)
-        else:
-            failed.add(actual)
-    print(f"[flasher] Selected fastest qualified UART rate: {current} baud.", flush=True)
-    return current
+        if line == terminal or line == f"PMOS3 FEATURE-PASS MODE={mode}":
+            if hasattr(link, "discard_buffer"):
+                link.discard_buffer()
+            return True
+        # Binary ACK retries may decode as garbage lines. Keep consuming until
+        # the target reports its terminal feature result.
+    return False
 
 
 def feature_test(link: SerialLink, mode: int, frame_size: int, window_size: int,
@@ -627,7 +690,10 @@ def feature_test(link: SerialLink, mode: int, frame_size: int, window_size: int,
             baud=baud, label=f"{plan.name} transport qualification",
             verbose_acks=verbose_acks,
         )
-        link.wait_for((f"PMOS3 FEATURE-PASS MODE={mode}",), 5.0)
+        link.wait_for(
+            (f"PMOS3 FEATURE-PASS MODE={mode}",), 5.0,
+            error_prefixes=(f"PMOS3 FEATURE-FAIL MODE={mode}",),
+        )
         if retries:
             print(
                 f"[flasher] {REP_NAMES[mode]} qualification needed {retries} frame retries; "
@@ -637,7 +703,21 @@ def feature_test(link: SerialLink, mode: int, frame_size: int, window_size: int,
             return False
         return True
     except ProtocolError as exc:
-        print(f"[flasher] {REP_NAMES[mode]} transport qualification failed: {exc}", flush=True)
+        message = str(exc)
+        explicit_failure = message.startswith(f"PMOS3 FEATURE-FAIL MODE={mode}")
+        synchronized = explicit_failure
+        if not explicit_failure:
+            synchronized = _synchronize_failed_feature(link, mode)
+        print(f"[flasher] {REP_NAMES[mode]} transport qualification failed: {message}", flush=True)
+        if "compact ACK" in message or "ACK-CONFIRM-TIMEOUT" in message:
+            if not synchronized:
+                raise ProtocolError(
+                    f"transport stream did not resynchronize after {message}"
+                ) from exc
+            if mode == REP_RAW:
+                raise ProtocolError(
+                    f"fundamental raw transport ACK qualification failed: {message}"
+                ) from exc
         return False
 
 

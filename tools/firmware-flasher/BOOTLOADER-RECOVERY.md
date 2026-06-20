@@ -66,9 +66,9 @@ Equivalent command-line use:
    menu option 1.
 3. Require `PMOSREC READY 3`, the complete `PMOSRECOVERY3` descriptor, UART
    capability record and early SPI NOR preflight.
-4. Propose target-generated UART rates and qualify each candidate
-   bidirectionally with deterministic CRC-32 streams.
-5. Select the fastest passing rate; independently roll back on failure.
+4. Try conventional UART rates 921600, 460800, and 230400 once each, fastest
+   first, with deterministic bidirectional CRC-32 streams.
+5. Select the first passing rate; independently roll back after each failure.
 6. Qualify 4096-byte framing, windows, compact acknowledgements, sparse
    reconstruction and LZ4 blocks. Fall back independently where necessary.
 7. Transfer and validate the manifest before the firmware object.
@@ -101,6 +101,8 @@ and waits forever. Power cycle the switch to cancel without writing flash.
 
 - `--skip-baud-negotiation` keeps PMOSREC at 115200 baud while retaining v3
   framing and integrity checks.
+- `--diagnostic-baud-scan` enables the legacy broad divisor scan and midpoint
+  refinement for engineering diagnostics; it is intentionally not the default.
 - `--verbose-acks` prints each decoded compact acknowledgement in addition to
   normal progress.
 - USB-serial latency is reduced to 1 ms where the Linux driver exposes a

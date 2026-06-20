@@ -44,11 +44,11 @@ emits repeated fallback beacons. The host independently restores the previous
 rate and waits for the fallback-ready marker. No recovery message has to cross
 the failed baud rate.
 
-Conventional rates are tested first. An isolated failure does not prevent later
-higher rates from being attempted because a different UART divisor can have a
-smaller error. After the highest passing rate is found, the host refines between
-it and the nearest higher failure using target-generated intermediate rates.
-Refinement stops when the remaining interval is no more than two percent.
+The normal host policy tries 921600, 460800, and 230400 baud once each, fastest
+first, and stops at the first passing candidate. This bounds negotiation time and
+avoids speculative nonstandard divisors during ordinary recovery. The target
+still accepts arbitrary proposals, and `--diagnostic-baud-scan` retains the broad
+rate sweep and midpoint refinement for engineering work.
 
 ## Framing and windows
 
@@ -65,10 +65,11 @@ frames. Window size is reduced independently. A failed frame retransmits only
 that frame.
 
 The compact acknowledgement retains object ID, window base, frame count,
-selective retry bitmap, status and its own CRC-32. The host confirms each valid
-acknowledgement. PMOSREC also recognizes the first byte of the next frame if a
-one-byte ACK confirmation is lost and preserves it in a pushback slot, avoiding
-stream desynchronization.
+selective retry bitmap, status and its own CRC-32. The target transmits the record
+through a byte-transparent UART writer, and the host scans for ACK magic so it can
+recover alignment after a damaged or shortened record. The host confirms each
+valid acknowledgement. PMOSREC also recognizes the first byte of the next frame
+if a one-byte ACK confirmation is lost and preserves it in a pushback slot.
 
 ## Feature qualification
 
