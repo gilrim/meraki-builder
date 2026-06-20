@@ -85,7 +85,11 @@ class ArtifactManifestTests(unittest.TestCase):
             payload = self.recovery / f"recovery-{family}.bin"
             payload.write_bytes(b"payload-prefix\0" + marker + b"\0payload-suffix")
             digest = hashlib.sha256(payload.read_bytes()).hexdigest()
-            embedded[family] = {"path": str(payload), "size": payload.stat().st_size, "sha256": digest}
+            embedded[family] = {
+                "path": str(payload), "size": payload.stat().st_size, "sha256": digest,
+                "load_address": 0x81000000, "entry_address": 0x81000000,
+                "entry_contract": "flat-binary-byte-zero-v1",
+            }
             descriptor = {
                 "format": "postmerkos.uart-recovery-payload.v2",
                 "protocol_version": 2,
@@ -98,6 +102,9 @@ class ArtifactManifestTests(unittest.TestCase):
                 "flash_geometry": GEOMETRY,
                 "operations": ["verify", "dry-run", "flash"],
                 "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
+                "load_address": 0x81000000,
+                "entry_address": 0x81000000,
+                "entry_contract": "flat-binary-byte-zero-v1",
                 "binary": {
                     "filename": payload.name,
                     "bytes": payload.stat().st_size,
@@ -183,6 +190,9 @@ class ArtifactManifestTests(unittest.TestCase):
             self.assertEqual(record["accepted_models"], target["models"])
             self.assertEqual(record["soc_family_id"], target["id"])
             self.assertEqual(record["spi_software_mode_address"], target["spi"])
+            self.assertEqual(record["load_address"], 0x81000000)
+            self.assertEqual(record["entry_address"], 0x81000000)
+            self.assertEqual(record["entry_contract"], "flat-binary-byte-zero-v1")
 
     def test_tampered_payload_is_rejected(self) -> None:
         payload = self.recovery / "recovery-jaguar1.bin"

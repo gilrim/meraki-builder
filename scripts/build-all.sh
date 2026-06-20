@@ -88,9 +88,27 @@ assert policies.get("payload_slot_end") == 0x300000 and policies.get("hard_paylo
 assert manifest.get("boot_region", {}).get("sha256") == hashlib.sha256(data).hexdigest()
 assert source_record.get("project") == "Gadorach/meraki-redboot"
 assert source_record.get("revision") == selected_revision
+embedded = cap.get("embedded_recovery", {})
 for family in ("luton26", "jaguar1"):
-    assert (recovery_dir / f"recovery-{family}.bin").is_file()
-    assert (recovery_dir / f"recovery-{family}.descriptor.json").is_file()
+    payload = recovery_dir / f"recovery-{family}.bin"
+    descriptor_path = recovery_dir / f"recovery-{family}.descriptor.json"
+    assert payload.is_file() and descriptor_path.is_file()
+    raw = payload.read_bytes()
+    descriptor = json.loads(descriptor_path.read_text())
+    assert descriptor.get("load_address") == 0x81000000
+    assert descriptor.get("entry_address") == 0x81000000
+    assert descriptor.get("entry_contract") == "flat-binary-byte-zero-v1"
+    binary = descriptor.get("binary", {})
+    digest = hashlib.sha256(raw).hexdigest()
+    assert binary.get("filename") == payload.name
+    assert binary.get("bytes") == len(raw)
+    assert str(binary.get("sha256", "")).lower() == digest
+    record = embedded.get(family, {})
+    assert record.get("size") == len(raw)
+    assert str(record.get("sha256", "")).lower() == digest
+    assert record.get("load_address") == 0x81000000
+    assert record.get("entry_address") == 0x81000000
+    assert record.get("entry_contract") == "flat-binary-byte-zero-v1"
 PY_LOADER
   then
     warn "The cached loader does not match the selected meraki-redboot source release; rebuilding it."

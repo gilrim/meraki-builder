@@ -146,6 +146,10 @@ def main(argv: list[str]) -> int:
             raise SystemExit(f"recovery descriptor flash geometry mismatch: {descriptor_path}")
         if descriptor.get("operations") != ["verify", "dry-run", "flash"]:
             raise SystemExit(f"recovery descriptor operation contract mismatch: {descriptor_path}")
+        if descriptor.get("load_address") != 0x81000000 or descriptor.get("entry_address") != 0x81000000:
+            raise SystemExit(f"recovery descriptor load/entry address mismatch: {descriptor_path}")
+        if descriptor.get("entry_contract") != "flat-binary-byte-zero-v1":
+            raise SystemExit(f"recovery descriptor lacks corrected byte-zero entry contract: {descriptor_path}")
         if descriptor.get("transport_integrity") != ["frame-crc32", "object-crc32", "object-sha256"]:
             raise SystemExit(f"recovery descriptor integrity contract mismatch: {descriptor_path}")
         accepted_models = descriptor.get("accepted_models")
@@ -174,6 +178,10 @@ def main(argv: list[str]) -> int:
             raise SystemExit(f"loader manifest has no embedded recovery record for {family}")
         if embedded_record.get("size") != len(payload_data) or str(embedded_record.get("sha256", "")).lower() != digest:
             raise SystemExit(f"loader embedded recovery binding does not match {binary_path.name}")
+        if embedded_record.get("load_address") != 0x81000000 or embedded_record.get("entry_address") != 0x81000000:
+            raise SystemExit(f"loader embedded recovery load/entry address mismatch: {binary_path.name}")
+        if embedded_record.get("entry_contract") != "flat-binary-byte-zero-v1":
+            raise SystemExit(f"loader embedded recovery lacks corrected byte-zero entry contract: {binary_path.name}")
         if common_geometry is None:
             common_geometry = geometry
             common_jedec = jedec
@@ -186,6 +194,9 @@ def main(argv: list[str]) -> int:
             "soc_family_id": expected[family]["id"],
             "spi_software_mode_address": expected[family]["spi"],
             "accepted_models": list(accepted_models),
+            "load_address": descriptor["load_address"],
+            "entry_address": descriptor["entry_address"],
+            "entry_contract": descriptor["entry_contract"],
         }
 
     manifest["recovery"] = {
@@ -210,6 +221,9 @@ def main(argv: list[str]) -> int:
                 family: {
                     "bytes": recovery_payloads[family]["bytes"],
                     "sha256": recovery_payloads[family]["sha256"],
+                    "load_address": recovery_payloads[family]["load_address"],
+                    "entry_address": recovery_payloads[family]["entry_address"],
+                    "entry_contract": recovery_payloads[family]["entry_contract"],
                 } for family in ("luton26", "jaguar1")
             },
             "loader_sha256": loader_digest,

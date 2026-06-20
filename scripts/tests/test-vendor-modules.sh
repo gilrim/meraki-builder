@@ -108,7 +108,11 @@ for family, target in targets.items():
     payload.write_bytes(b"module-test-payload\0" + marker + b"\0")
     raw = payload.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
-    embedded[family] = {"path": str(payload), "size": len(raw), "sha256": digest}
+    embedded[family] = {
+        "path": str(payload), "size": len(raw), "sha256": digest,
+        "load_address": 0x81000000, "entry_address": 0x81000000,
+        "entry_contract": "flat-binary-byte-zero-v1",
+    }
     descriptor = {
         "format": "postmerkos.uart-recovery-payload.v2",
         "protocol_version": 2,
@@ -121,6 +125,9 @@ for family, target in targets.items():
         "flash_geometry": geometry,
         "operations": ["verify", "dry-run", "flash"],
         "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
+        "load_address": 0x81000000,
+        "entry_address": 0x81000000,
+        "entry_contract": "flat-binary-byte-zero-v1",
         "binary": {
             "filename": payload.name,
             "bytes": len(raw),

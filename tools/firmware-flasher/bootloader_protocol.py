@@ -59,6 +59,10 @@ class ProtocolError(RuntimeError):
     pass
 
 
+class EmbeddedRecoveryEntryError(ProtocolError):
+    """The loader jumped to an embedded payload that never reached its byte-zero entry."""
+
+
 @dataclass(frozen=True)
 class PayloadDescriptor:
     family: str
@@ -66,6 +70,9 @@ class PayloadDescriptor:
     spi_address: int
     sha256: str
     size: int
+    load_address: int
+    entry_address: int
+    entry_contract: str
 
 
 @dataclass(frozen=True)
@@ -98,7 +105,7 @@ def crc32_file(path: Path) -> int:
     return value & 0xFFFFFFFF
 
 
-def inspect_payload(path: Path) -> PayloadDescriptor:
+def inspect_payload(path: Path, descriptor_path: Path | None = None) -> PayloadDescriptor:
     data = path.read_bytes()
     matches = list(DESCRIPTOR_RE.finditer(data))
     if len(matches) != 1:
@@ -108,12 +115,49 @@ def inspect_payload(path: Path) -> PayloadDescriptor:
     family_id = int(match.group(2))
     if FAMILY_ID[family] != family_id:
         raise ProtocolError("recovery payload descriptor family ID is inconsistent")
+
+    if descriptor_path is None:
+        descriptor_path = path.with_suffix(".descriptor.json")
+    if not descriptor_path.is_file():
+        raise ProtocolError(
+            f"recovery payload entry descriptor is missing: {descriptor_path}; "
+            "rebuild meraki-redboot with the flat-binary entry fix"
+        )
+    try:
+        metadata = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProtocolError(f"invalid recovery payload descriptor: {exc}") from exc
+    binary = metadata.get("binary")
+    if not isinstance(binary, dict):
+        raise ProtocolError("recovery payload descriptor has no binary record")
+    digest = hashlib.sha256(data).hexdigest()
+    if binary.get("filename") != path.name or binary.get("bytes") != len(data):
+        raise ProtocolError("recovery payload descriptor binary size/name mismatch")
+    if str(binary.get("sha256", "")).lower() != digest:
+        raise ProtocolError("recovery payload descriptor SHA-256 mismatch")
+    if metadata.get("soc_family") != family or metadata.get("soc_family_id") != family_id:
+        raise ProtocolError("recovery payload sidecar family does not match its embedded marker")
+    if metadata.get("spi_software_mode_address") != int(match.group(3), 16):
+        raise ProtocolError("recovery payload sidecar SPI address does not match its embedded marker")
+    load_address = metadata.get("load_address")
+    entry_address = metadata.get("entry_address")
+    entry_contract = metadata.get("entry_contract")
+    if load_address != 0x81000000 or entry_address != 0x81000000:
+        raise ProtocolError("recovery payload is not linked for load/entry address 0x81000000")
+    if entry_contract != "flat-binary-byte-zero-v1":
+        raise ProtocolError(
+            "recovery payload lacks the flat-binary-byte-zero-v1 entry contract; "
+            "the v0.7.0 payload can hang immediately after PASS-RECOVERY-EXEC"
+        )
     return PayloadDescriptor(
         family=family,
         family_id=family_id,
         spi_address=int(match.group(3), 16),
-        sha256=hashlib.sha256(data).hexdigest(),
+        sha256=digest,
         size=len(data),
+        load_address=load_address,
+        entry_address=entry_address,
+        entry_contract=entry_contract,
     )
 
 
@@ -143,6 +187,13 @@ def _validate_loader_capability(manifest: dict, loader_sha256: str, family: str)
     record = embedded.get(family) if isinstance(embedded, dict) else None
     if not isinstance(record, dict) or not re.fullmatch(r"[0-9a-fA-F]{64}", str(record.get("sha256", ""))):
         raise ProtocolError(f"firmware loader does not bind an embedded recovery payload for {family}")
+    if record.get("load_address") != 0x81000000 or record.get("entry_address") != 0x81000000:
+        raise ProtocolError("firmware loader embedded recovery has an invalid load/entry address")
+    if record.get("entry_contract") != "flat-binary-byte-zero-v1":
+        raise ProtocolError(
+            "firmware image contains the affected v0.7.0 recovery layout; rebuild meraki-redboot "
+            "with the flat-binary-byte-zero-v1 entry fix before flashing"
+        )
 
 
 def validate_spim_kernel(image: Path, artifact: dict | None = None) -> dict[str, int | str]:
@@ -236,6 +287,10 @@ def _recovery_payload_record(manifest: dict, family: str, model: str) -> dict:
         raise ProtocolError("manifest recovery payload size is invalid")
     if not re.fullmatch(r"[0-9a-fA-F]{64}", str(record.get("sha256", ""))):
         raise ProtocolError("manifest recovery payload SHA-256 is invalid")
+    if record.get("load_address") != 0x81000000 or record.get("entry_address") != 0x81000000:
+        raise ProtocolError("manifest recovery payload load/entry address is invalid")
+    if record.get("entry_contract") != "flat-binary-byte-zero-v1":
+        raise ProtocolError("manifest recovery payload lacks the corrected byte-zero entry contract")
     return record
 
 
@@ -253,6 +308,10 @@ def validate_recovery_payload(path: Path, descriptor: PayloadDescriptor, bundle:
         raise ProtocolError("recovery payload size does not match the release manifest")
     if descriptor.sha256.lower() != str(record["sha256"]).lower():
         raise ProtocolError("recovery payload SHA-256 does not match the release manifest")
+    if descriptor.load_address != record["load_address"] or descriptor.entry_address != record["entry_address"]:
+        raise ProtocolError("recovery payload entry addresses do not match the release manifest")
+    if descriptor.entry_contract != record["entry_contract"]:
+        raise ProtocolError("recovery payload entry contract does not match the release manifest")
 
 
 def validate_bundle(image: Path, manifest_path: Path, model: str, *, force: bool) -> BundleInfo:
@@ -351,6 +410,14 @@ class SerialLink:
             sys.stdout.buffer.write(data)
             sys.stdout.buffer.flush()
         return data
+
+    def discard_buffer(self) -> None:
+        self.buffer.clear()
+        try:
+            while self._read_once(0.0):
+                pass
+        except OSError:
+            pass
 
     def read_line(self, timeout: float) -> str:
         deadline = time.monotonic() + timeout

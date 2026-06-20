@@ -29,9 +29,9 @@ cannot run. Requirements:
   --serial-device /dev/ttyUSB0
 ```
 
-The flasher triggers `PMOSBOOT MENU-PROBE`, selects menu option 2, and uses the
-family recovery stage embedded in meraki-redboot. A separate recovery binary is
-not required. Local verification includes the loader source capability, model
+The flasher triggers `PMOSBOOT MENU-PROBE`, uses menu option 1 by default to upload the corrected family recovery stage.
+Menu option 2 is used only after a loader with the byte-zero entry correction is
+installed. Local verification includes the loader source capability, model
 family, embedded recovery digest, image SHA-256, SPIM alignment and CRC, and
 flash geometry before serial transfer.
 

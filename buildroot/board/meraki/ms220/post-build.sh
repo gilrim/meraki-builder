@@ -131,6 +131,10 @@ for family in ("luton26", "jaguar1"):
         raise SystemExit(f"Recovery descriptor flash geometry mismatch: {descriptor_path}")
     if descriptor.get("operations") != ["verify", "dry-run", "flash"]:
         raise SystemExit(f"Recovery descriptor operation contract mismatch: {descriptor_path}")
+    if descriptor.get("load_address") != 0x81000000 or descriptor.get("entry_address") != 0x81000000:
+        raise SystemExit(f"Recovery descriptor load/entry address mismatch: {descriptor_path}")
+    if descriptor.get("entry_contract") != "flat-binary-byte-zero-v1":
+        raise SystemExit(f"Recovery descriptor lacks corrected byte-zero entry contract: {descriptor_path}")
     if descriptor.get("transport_integrity") != ["frame-crc32", "object-crc32", "object-sha256"]:
         raise SystemExit(f"Recovery descriptor integrity contract mismatch: {descriptor_path}")
     if not isinstance(jedec, list) or not jedec or any(not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{6}", item) is None for item in jedec):
@@ -152,6 +156,10 @@ for family in ("luton26", "jaguar1"):
     embedded_record = embedded.get(family)
     if not isinstance(embedded_record, dict) or embedded_record.get("size") != len(payload_data) or str(embedded_record.get("sha256", "")).lower() != digest:
         raise SystemExit(f"meraki-redboot embedded recovery binding mismatch: {family}")
+    if embedded_record.get("load_address") != 0x81000000 or embedded_record.get("entry_address") != 0x81000000:
+        raise SystemExit(f"meraki-redboot embedded recovery load/entry mismatch: {family}")
+    if embedded_record.get("entry_contract") != "flat-binary-byte-zero-v1":
+        raise SystemExit(f"meraki-redboot embedded recovery lacks corrected byte-zero entry contract: {family}")
     if common_geometry is None:
         common_geometry, common_jedec = geometry, jedec
     elif common_geometry != geometry or common_jedec != jedec:
@@ -163,6 +171,9 @@ for family in ("luton26", "jaguar1"):
         "soc_family_id": expected[family]["id"],
         "spi_software_mode_address": expected[family]["spi"],
         "accepted_models": list(accepted_models),
+        "load_address": descriptor["load_address"],
+        "entry_address": descriptor["entry_address"],
+        "entry_contract": descriptor["entry_contract"],
     }
 data = {
     "version": release,
@@ -189,6 +200,15 @@ data = {
             "supported_soc_families": list(uart["supported_soc_families"]),
             "transport_integrity": list(uart["transport_integrity"]),
             "loader_sha256": str(loader_manifest["boot_region"]["sha256"]),
+            "embedded_recovery": {
+                family: {
+                    "bytes": payloads[family]["bytes"],
+                    "sha256": payloads[family]["sha256"],
+                    "load_address": payloads[family]["load_address"],
+                    "entry_address": payloads[family]["entry_address"],
+                    "entry_contract": payloads[family]["entry_contract"],
+                } for family in ("luton26", "jaguar1")
+            },
         },
         "uart_firmware": {
             "enabled": True,

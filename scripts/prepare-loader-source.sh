@@ -31,6 +31,7 @@ PY
     chmod 0755 "$helper"
   done < <(find "$LOADER_SOURCE_DIR/scripts" "$LOADER_SOURCE_DIR/tools" \
     -type f \( -name '*.sh' -o -name '*.py' \) -print0 2>/dev/null)
+  chmod 0755 "$LOADER_SOURCE_DIR/payloads/uart-firmware-recovery/write_descriptor.py" 2>/dev/null || true
 
   version="$(tr -d '[:space:]' < "$LOADER_SOURCE_DIR/VERSION")"
   git -C "$LOADER_SOURCE_DIR" init -q
@@ -48,10 +49,34 @@ if [[ ! -d "$LOADER_SOURCE_DIR/.git" && -n "$LOADER_SOURCE_ARCHIVE" ]]; then
 fi
 
 clone_or_update_git_ref "$LOADER_REPO_URL" "$LOADER_SOURCE_DIR" "$LOADER_REF" "meraki-redboot"
+
+entry_fix_patch="$REPO_ROOT/patches/meraki-redboot/0001-recovery-flat-binary-byte-zero-entry.patch"
+entry_descriptor="$LOADER_SOURCE_DIR/payloads/uart-firmware-recovery/write_descriptor.py"
+if ! grep -q 'flat-binary-byte-zero-v1' "$entry_descriptor" 2>/dev/null; then
+  [[ -f "$entry_fix_patch" ]] || die "meraki-redboot recovery entry patch is missing: $entry_fix_patch"
+  log "Applying meraki-redboot flat-binary recovery entry correction"
+  if ! git -C "$LOADER_SOURCE_DIR" apply --check "$entry_fix_patch"; then
+    die "meraki-redboot source does not contain the expected v0.7.0 recovery layout and lacks the corrected entry contract"
+  fi
+  git -C "$LOADER_SOURCE_DIR" apply "$entry_fix_patch"
+  git -C "$LOADER_SOURCE_DIR" config user.name postmerkOS-builder
+  git -C "$LOADER_SOURCE_DIR" config user.email builder@localhost
+  git -C "$LOADER_SOURCE_DIR" add -A
+  GIT_AUTHOR_DATE='2026-06-20T00:00:00Z' GIT_COMMITTER_DATE='2026-06-20T00:00:00Z' \
+    git -C "$LOADER_SOURCE_DIR" commit -q -m 'Fix recovery flat-binary byte-zero entry'
+  RESOLVED_GIT_REF="$(git -C "$LOADER_SOURCE_DIR" rev-parse HEAD)"
+  RESOLVED_GIT_DESCRIBE="$(git -C "$LOADER_SOURCE_DIR" describe --tags --always --dirty)"
+fi
+
 [[ -f "$LOADER_SOURCE_DIR/Makefile" ]] || die "meraki-redboot Makefile is missing"
 [[ -f "$LOADER_SOURCE_DIR/VERSION" ]] || die "meraki-redboot VERSION is missing"
 [[ -f "$LOADER_PAYLOAD_PACKER" ]] || die "meraki-redboot payload packer is missing"
 
 printf '%s\n' "$RESOLVED_GIT_REF" > "$LOADER_SOURCE_REVISION_FILE"
 cat "$LOADER_SOURCE_DIR/VERSION" > "$LOADER_SOURCE_VERSION_FILE"
+if grep -q 'flat-binary-byte-zero-v1' "$entry_descriptor"; then
+  log "meraki-redboot recovery entry contract: flat-binary-byte-zero-v1"
+else
+  die "selected meraki-redboot source lacks the corrected recovery entry contract"
+fi
 log "meraki-redboot $(cat "$LOADER_SOURCE_VERSION_FILE") selected at $RESOLVED_GIT_REF"

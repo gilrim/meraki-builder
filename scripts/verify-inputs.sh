@@ -94,6 +94,10 @@ for family, (fid, spi, expected_models) in expected_targets.items():
         raise SystemExit(f"{payload.name} descriptor flash geometry mismatch")
     if descriptor.get("operations") != ["verify", "dry-run", "flash"]:
         raise SystemExit(f"{payload.name} descriptor operation contract mismatch")
+    if descriptor.get("load_address") != 0x81000000 or descriptor.get("entry_address") != 0x81000000:
+        raise SystemExit(f"{payload.name} descriptor load/entry address mismatch")
+    if descriptor.get("entry_contract") != "flat-binary-byte-zero-v1":
+        raise SystemExit(f"{payload.name} descriptor lacks corrected byte-zero entry contract")
     if descriptor.get("transport_integrity") != ["frame-crc32", "object-crc32", "object-sha256"]:
         raise SystemExit(f"{payload.name} descriptor integrity contract mismatch")
     jedec = descriptor.get("accepted_jedec_ids")
@@ -109,6 +113,10 @@ for family, (fid, spi, expected_models) in expected_targets.items():
     embedded_record = embedded.get(family)
     if not isinstance(embedded_record, dict) or embedded_record.get("size") != len(raw) or str(embedded_record.get("sha256", "")).lower() != digest:
         raise SystemExit(f"{payload.name} does not match meraki-redboot embedded recovery metadata")
+    if embedded_record.get("load_address") != 0x81000000 or embedded_record.get("entry_address") != 0x81000000:
+        raise SystemExit(f"{payload.name} embedded recovery load/entry mismatch")
+    if embedded_record.get("entry_contract") != "flat-binary-byte-zero-v1":
+        raise SystemExit(f"{payload.name} embedded recovery lacks corrected byte-zero entry contract")
 PY
 
 entry="$(readelf -h "$KERNEL_ARTIFACT_DIR/vmlinuz" | awk '/Entry point address/ {print $4}')"
