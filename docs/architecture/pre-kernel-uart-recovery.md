@@ -36,9 +36,11 @@ sending commands. PMOSREC then negotiates the fastest target-generated UART
 rate that passes deterministic bidirectional CRC testing. Every failed switch
 rolls back independently to the previous known-good rate.
 
-Production transfer prefers 4096-byte frames and up to 16 frames in flight.
+Production transfer prefers 4096-byte frames with one frame in flight.
 Compact CRC-protected acknowledgements carry a cumulative window and selective
-retry bitmap. Frame size and window fall back independently.
+retry bitmap. Production uses a one-frame window so the target can complete
+CRC/decode/copy work before the next frame arrives without hardware flow
+control. Larger paced windows are diagnostic-only.
 
 The manifest is sent and validated first. The host then chooses the smallest
 qualified representation among raw, sparse, LZ4 and sparse-LZ4. PMOSREC

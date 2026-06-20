@@ -55,20 +55,31 @@ rate sweep and midpoint refinement for engineering work.
 Preferred production framing is:
 
 - 4096-byte decoded frames;
-- a negotiated window of 16, 8, 4 or 1 frames;
+- a one-frame production window;
 - binary cumulative acknowledgements;
 - a selective retry bitmap;
 - CRC-32 for the frame header, wire payload and decoded payload.
 
 If 4096-byte framing fails qualification, the host falls back to 1024-byte
-frames. Window size is reduced independently. A failed frame retransmits only
-that frame.
+frames. A failed frame retransmits only that frame. The production window stays
+at one because the recovery UART has no RTS/CTS flow control: after each frame,
+the target must CRC, decode and copy data before it can safely receive another
+header. A continuous multi-frame USB-serial burst can overrun the target FIFO at
+higher baud rates.
+
+`--diagnostic-window-scan` retains ascending 1, 2, 4, 8 and 16-frame tests.
+Diagnostic multi-frame transfers wait for the host TTY output queue to drain and
+insert a conservative wire-idle guard between frames. The first failing larger
+window ends the scan and leaves the last passing value selected.
 
 The compact acknowledgement retains object ID, window base, frame count,
-selective retry bitmap, status and its own CRC-32. The target transmits the record
+selective retry bitmap, UART/retry status and its own CRC-32. The target
+transmits the record
 through a byte-transparent UART writer, and the host scans for ACK magic so it can
-recover alignment after a damaged or shortened record. The host confirms each
-valid acknowledgement. PMOSREC also recognizes the first byte of the next frame
+recover alignment after a damaged or shortened record. If no ACK is recovered,
+non-ACK target output is restored to the line parser so a structured
+`FEATURE-FAIL` remains visible. The host confirms each valid acknowledgement.
+PMOSREC also recognizes the first byte of the next frame
 if a one-byte ACK confirmation is lost and preserves it in a pushback slot.
 
 ## Feature qualification
@@ -81,8 +92,9 @@ same production framing. It qualifies:
 - independent LZ4 blocks;
 - combined sparse plus LZ4 reconstruction.
 
-Any configuration that requires a frame retransmission during qualification is
-not selected for production use. A failed optional representation is disabled
+Any configuration that requires a frame retransmission or reports UART receive
+status during qualification is not selected for production use. A failed
+optional representation is disabled
 without ending recovery. Raw framed transfer remains the final fallback.
 
 ## Manifest-first package order

@@ -35,6 +35,7 @@ MANUAL_TARGET_CONFIRMATION=0
 VERBOSE_ACKS=0
 SKIP_BAUD_NEGOTIATION=0
 DIAGNOSTIC_BAUD_SCAN=0
+DIAGNOSTIC_WINDOW_SCAN=0
 
 usage() {
     cat <<'USAGE'
@@ -63,6 +64,7 @@ Options:
   --verbose-acks        print every decoded compact ACK (always retained in logs)
   --skip-baud-negotiation keep PMOSREC at 115200 for diagnostics
   --diagnostic-baud-scan use the legacy broad rate scan and midpoint refinement
+  --diagnostic-window-scan test paced multi-frame windows after safe window 1
   --serial-device DEV   serial character device
   --modern              current manifest-aware workflow (default)
   --checksum-only       current updater with image + .sha256 only
@@ -1058,6 +1060,7 @@ run_bootloader_recovery_mode() {
     (( VERBOSE_ACKS )) && args+=(--verbose-acks)
     (( SKIP_BAUD_NEGOTIATION )) && args+=(--skip-baud-negotiation)
     (( DIAGNOSTIC_BAUD_SCAN )) && args+=(--diagnostic-baud-scan)
+    (( DIAGNOSTIC_WINDOW_SCAN )) && args+=(--diagnostic-window-scan)
 
     printf '\nPre-kernel UART recovery\n'
     printf 'Operation:         %s\n' "$OPERATION"
@@ -1181,6 +1184,7 @@ main() {
             --verbose-acks) VERBOSE_ACKS=1; shift ;;
             --skip-baud-negotiation) SKIP_BAUD_NEGOTIATION=1; shift ;;
             --diagnostic-baud-scan) DIAGNOSTIC_BAUD_SCAN=1; shift ;;
+            --diagnostic-window-scan) DIAGNOSTIC_WINDOW_SCAN=1; shift ;;
             --serial-device) (($# >= 2)) || die '--serial-device requires a device'; SERIAL_DEVICE=$2; shift 2 ;;
             --modern) MODE=modern; shift ;;
             --checksum-only|--original-artifacts) MODE=checksum; shift ;;

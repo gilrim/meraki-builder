@@ -69,8 +69,9 @@ Equivalent command-line use:
 4. Try conventional UART rates 921600, 460800, and 230400 once each, fastest
    first, with deterministic bidirectional CRC-32 streams.
 5. Select the first passing rate; independently roll back after each failure.
-6. Qualify 4096-byte framing, windows, compact acknowledgements, sparse
-   reconstruction and LZ4 blocks. Fall back independently where necessary.
+6. Qualify 4096-byte framing with the flow-control-safe one-frame compact-ACK
+   window, then qualify sparse reconstruction and LZ4 blocks. Fall back to
+   1024-byte frames if necessary.
 7. Transfer and validate the manifest before the firmware object.
 8. Select the smallest qualified raw, sparse, LZ4 or sparse-LZ4
    representation.
@@ -103,6 +104,9 @@ and waits forever. Power cycle the switch to cancel without writing flash.
   framing and integrity checks.
 - `--diagnostic-baud-scan` enables the legacy broad divisor scan and midpoint
   refinement for engineering diagnostics; it is intentionally not the default.
+- `--diagnostic-window-scan` tests paced windows 1, 2, 4, 8 and 16 in ascending
+  order. The host drains its TTY output queue and inserts a 3 ms wire-idle guard
+  between frames. Normal flashing uses window 1 because PMOSREC has no RTS/CTS.
 - `--verbose-acks` prints each decoded compact acknowledgement in addition to
   normal progress.
 - USB-serial latency is reduced to 1 ms where the Linux driver exposes a

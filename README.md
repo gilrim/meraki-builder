@@ -58,8 +58,8 @@ This project is provided without warranty. Keep a direct hardware recovery metho
 The full-image UART recovery path keeps meraki-redboot and `PMOSRAM2` at
 115200 baud, then tries 921600, 460800, and 230400 baud once each inside the
 RAM-resident PMOSREC stage, fastest first. It qualifies bidirectional deterministic
-CRC traffic, 4 KiB frames, windowed compact acknowledgements, sparse reconstruction
-and LZ4 blocks before transferring the manifest and image. The complete reconstructed
+CRC traffic, 4 KiB frames, flow-control-safe one-frame compact
+acknowledgements, sparse reconstruction and LZ4 blocks before transferring the manifest and image. The complete reconstructed
 16 MiB image is still SHA-256 verified before erase authorization. See
 [`docs/architecture/pmosrec-v3-adaptive-uart.md`](docs/architecture/pmosrec-v3-adaptive-uart.md).
 

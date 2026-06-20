@@ -64,6 +64,14 @@ DIAGNOSTIC_BAUD_CANDIDATES = (
     6_000_000, 8_000_000, 10_000_000, 12_000_000,
 )
 
+# VCore-III recovery has no RTS/CTS flow control. A one-frame production window
+# guarantees that the target can CRC/decode/copy a frame before the host starts
+# the next one. Larger windows remain available only for explicit diagnostics
+# and receive an inter-frame wire-idle guard.
+DEFAULT_WINDOW_SIZE = 1
+DIAGNOSTIC_WINDOW_CANDIDATES = (1, 2, 4, 8, 16)
+MULTI_FRAME_GUARD_SECONDS = 0.003
+
 BAUD_CANDIDATE_RE = re.compile(
     r"^PMOS3 BAUD-CANDIDATE REQUESTED=(\d+) ACTUAL=(\d+) DIV=(\d+) "
     r"ERROR_PPM=(\d+) CURRENT=(\d+) NONCE=([0-9a-fA-F]{8})$"
@@ -389,10 +397,16 @@ class ProgressTracker:
 
 
 def _read_ack(link: SerialLink, object_id: int, timeout: float) -> tuple[int, int, int, int]:
-    """Read a compact ACK while recovering byte alignment from damaged records."""
+    """Read a compact ACK while recovering byte alignment from damaged records.
+
+    Non-ACK target output is restored to SerialLink's line buffer on failure so
+    FEATURE-FAIL and other terminal status records remain available to the
+    command-level resynchronizer.
+    """
     deadline = time.monotonic() + timeout
     magic_bytes = struct.pack("<I", ACK_MAGIC)
     buffered = bytearray()
+    captured = bytearray()
     last_error = "compact ACK was not received"
     scanned = 0
     scan_limit = ACK_RECORD.size * ACK_CONFIRM_ATTEMPTS * 3
@@ -406,7 +420,9 @@ def _read_ack(link: SerialLink, object_id: int, timeout: float) -> tuple[int, in
             if remaining <= 0:
                 break
             try:
-                buffered.extend(link.read_exact(1, min(remaining, 0.75), echo=False))
+                byte = link.read_exact(1, min(remaining, 0.75), echo=False)
+                buffered.extend(byte)
+                captured.extend(byte)
                 scanned += 1
             except ProtocolError as exc:
                 last_error = str(exc)
@@ -419,7 +435,9 @@ def _read_ack(link: SerialLink, object_id: int, timeout: float) -> tuple[int, in
             if remaining <= 0:
                 break
             try:
-                buffered.extend(link.read_exact(1, min(remaining, 0.75), echo=False))
+                byte = link.read_exact(1, min(remaining, 0.75), echo=False)
+                buffered.extend(byte)
+                captured.extend(byte)
                 scanned += 1
             except ProtocolError as exc:
                 last_error = str(exc)
@@ -440,7 +458,18 @@ def _read_ack(link: SerialLink, object_id: int, timeout: float) -> tuple[int, in
         # arrives. A corrupt or lost ACK is therefore safely retransmitted.
         link.write_all(ACK_CONFIRM_BYTE)
         return base, count, retry_bitmap, status
+    if captured and hasattr(link, "prepend_buffer"):
+        link.prepend_buffer(bytes(captured))
     raise ProtocolError(last_error)
+
+
+def _guard_multi_frame_window(link: SerialLink, baud: int) -> None:
+    if hasattr(link, "drain_output"):
+        link.drain_output()
+    # tcdrain() prevents the sleep from overlapping queued USB-serial output.
+    # Three milliseconds is intentionally conservative relative to the target's
+    # CRC/decode/copy time and the small 16550-compatible receive FIFO.
+    time.sleep(MULTI_FRAME_GUARD_SECONDS)
 
 
 def send_frames(
@@ -475,6 +504,8 @@ def send_frames(
         count = min(window_size, len(frames) - base)
         for index in range(base, base + count):
             link.write_all(wires[index], timeout=max(10.0, len(wires[index]) * 12 / max(baud, 1)))
+            if count > 1 and index + 1 < base + count:
+                _guard_multi_frame_window(link, baud)
         ack_base, ack_count, bitmap, status = _read_ack(link, object_id, ack_timeout)
         if ack_base != base or ack_count != count:
             raise ProtocolError(f"unexpected compact ACK window: base={ack_base} count={ack_count}")
@@ -482,6 +513,13 @@ def send_frames(
             f"PMOS3 ACK object={object_id:02x} base={base:04x} count={count:02x} "
             f"retry={bitmap:08x} status={status:08x}", flush=True,
         )
+        if status & 0xFFFF:
+            retransmitted_frames += 1
+            print(
+                f"[flasher] Target reported UART receive status 0x{status & 0xFFFF:04x} "
+                f"for frame window {base:#x}; qualification will reject this configuration.",
+                flush=True,
+            )
         attempt = 0
         while bitmap:
             attempt += 1
@@ -665,7 +703,7 @@ def _synchronize_failed_feature(link: SerialLink, mode: int, timeout: float = 8.
             line = link.read_line(deadline - time.monotonic())
         except ProtocolError:
             break
-        if line == terminal or line == f"PMOS3 FEATURE-PASS MODE={mode}":
+        if terminal in line or f"PMOS3 FEATURE-PASS MODE={mode}" in line:
             if hasattr(link, "discard_buffer"):
                 link.discard_buffer()
             return True
@@ -721,19 +759,28 @@ def feature_test(link: SerialLink, mode: int, frame_size: int, window_size: int,
         return False
 
 
-def qualify_transport(link: SerialLink, baud: int, *, verbose_acks: bool = False) -> TransportSelection:
+def qualify_transport(link: SerialLink, baud: int, *, verbose_acks: bool = False,
+                      diagnostic_window_scan: bool = False) -> TransportSelection:
     frame_size = 4096
     window = 0
-    for candidate in (16, 8, 4, 1):
-        if feature_test(link, REP_RAW, frame_size, candidate, baud, verbose_acks=verbose_acks):
-            window = candidate
-            break
-    if window == 0:
-        frame_size = 1024
-        for candidate in (8, 4, 1):
+    frame_sizes = (4096, 1024)
+    for candidate_frame_size in frame_sizes:
+        frame_size = candidate_frame_size
+        candidates = (
+            DIAGNOSTIC_WINDOW_CANDIDATES
+            if diagnostic_window_scan else (DEFAULT_WINDOW_SIZE,)
+        )
+        for candidate in candidates:
             if feature_test(link, REP_RAW, frame_size, candidate, baud, verbose_acks=verbose_acks):
                 window = candidate
-                break
+                continue
+            # Window 1 is the required lossless baseline. Larger diagnostic
+            # windows stop at the first failure and retain the last safe value.
+            if candidate == DEFAULT_WINDOW_SIZE:
+                window = 0
+            break
+        if window:
+            break
     if window == 0:
         raise ProtocolError("no frame/window transport configuration passed qualification")
     sparse_ok = feature_test(link, REP_SPARSE, frame_size, window, baud, verbose_acks=verbose_acks)
@@ -744,8 +791,9 @@ def qualify_transport(link: SerialLink, baud: int, *, verbose_acks: bool = False
         if not combined_ok:
             # Individual modes remain safe and selectable.
             print("[flasher] Combined sparse-LZ4 test failed; individual sparse/LZ4 modes remain enabled.", flush=True)
+    policy = "diagnostic ascending scan" if diagnostic_window_scan else "flow-control-safe production window"
     print(
-        f"[flasher] Qualified transport: frame={frame_size} bytes, window={window}, "
+        f"[flasher] Qualified transport: frame={frame_size} bytes, window={window} ({policy}), "
         f"sparse={'yes' if sparse_ok else 'no'}, lz4={'yes' if lz4_ok else 'no'}, "
         f"sparse-lz4={'yes' if combined_ok else 'no'}",
         flush=True,

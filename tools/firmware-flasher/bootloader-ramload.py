@@ -289,6 +289,10 @@ def main() -> int:
         "--diagnostic-baud-scan", action="store_true",
         help="try the legacy broad divisor scan and midpoint refinement",
     )
+    parser.add_argument(
+        "--diagnostic-window-scan", action="store_true",
+        help="test paced multi-frame windows after the safe one-frame baseline",
+    )
     parser.add_argument("--preflight-scratch", default="0x00ff0000")
     parser.add_argument("--preflight-seed", default="0x504d4f53")
     parser.add_argument("--preflight-receipt", type=Path)
@@ -375,7 +379,10 @@ def main() -> int:
                 link, controller, diagnostic_scan=args.diagnostic_baud_scan
             )
         )
-        transport = qualify_transport(link, baud, verbose_acks=args.verbose_acks)
+        transport = qualify_transport(
+            link, baud, verbose_acks=args.verbose_acks,
+            diagnostic_window_scan=args.diagnostic_window_scan,
+        )
 
         if args.operation == "preflight":
             link.write_all(
