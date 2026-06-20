@@ -235,7 +235,7 @@ start() {
     # waits a bounded period for DHCP before applying the fallback address.
     CONFIGD_OWNS_NETWORK=0
     if [ -x /bin/configd ]; then
-      if /bin/configd -N -W "${CONFIGD_NETWORK_WAIT:-60}" \
+      if /bin/configd -N --boot-output -W "${CONFIGD_NETWORK_WAIT:-60}" \
           -c /etc/switch.json; then
         CONFIGD_OWNS_NETWORK=1
       else

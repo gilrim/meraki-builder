@@ -10,6 +10,8 @@ CTL=${POSTMERKOSCTL:-/usr/bin/postmerkosctl}
 ROLE=none
 USERNAME=
 CAPABILITIES=
+SESSION_STATE=unknown
+SESSION_ERROR=
 KERNEL_PRINTK=
 TMP_RESPONSE=/tmp/postmerkos-console.$$.out
 restore_console_chatter() {
@@ -83,15 +85,37 @@ valid_vlan_list() { [ -n "$1" ] && ! printf '%s' "$1" | grep -q '[^0-9,-]'; }
 valid_ipv4_text() { [ -n "$1" ] && ! printf '%s' "$1" | grep -q '[^0-9./]'; }
 valid_username() { [ -n "$1" ] && ! printf '%s' "$1" | grep -q '[^A-Za-z0-9_.-]'; }
 refresh_session() {
-    local session
-    session=$("$CTL" session --shell 2>/dev/null) || session=
-    POSTMERKOS_USERNAME= POSTMERKOS_ROLE=none POSTMERKOS_CAPABILITIES=
-    case "$session" in
-        *POSTMERKOS_ROLE=*POSTMERKOS_CAPABILITIES=*) eval "$session" ;;
-    esac
-    USERNAME=${POSTMERKOS_USERNAME:-}
-    ROLE=${POSTMERKOS_ROLE:-none}
-    CAPABILITIES=${POSTMERKOS_CAPABILITIES:-}
+    local attempts=${1:-1} session rc
+    SESSION_STATE=unavailable SESSION_ERROR=
+    ROLE=none USERNAME= CAPABILITIES=
+    while [ "$attempts" -gt 0 ]; do
+        : >"$TMP_RESPONSE"
+        if session=$("$CTL" session --shell 2>"$TMP_RESPONSE"); then
+            POSTMERKOS_USERNAME= POSTMERKOS_ROLE=none POSTMERKOS_CAPABILITIES=
+            case "$session" in
+                *POSTMERKOS_USERNAME=*POSTMERKOS_ROLE=*POSTMERKOS_CAPABILITIES=*)
+                    eval "$session"
+                    USERNAME=${POSTMERKOS_USERNAME:-}
+                    ROLE=${POSTMERKOS_ROLE:-none}
+                    CAPABILITIES=${POSTMERKOS_CAPABILITIES:-}
+                    if [ -n "$USERNAME" ] && [ "$ROLE" != none ]; then
+                        SESSION_STATE=ok
+                    else
+                        SESSION_STATE=role-none
+                    fi
+                    return 0
+                    ;;
+                *) SESSION_STATE=malformed; SESSION_ERROR='configd returned a malformed session response'; return 1 ;;
+            esac
+        else
+            rc=$?
+            SESSION_ERROR=$(cat "$TMP_RESPONSE" 2>/dev/null || true)
+            [ -n "$SESSION_ERROR" ] || SESSION_ERROR="postmerkosctl session failed with status $rc"
+        fi
+        attempts=$((attempts - 1))
+        [ "$attempts" -gt 0 ] && sleep 1
+    done
+    return 1
 }
 can() {
     case " $CAPABILITIES " in
@@ -1194,14 +1218,22 @@ main_menu() {
 }
 
 main() {
-    local command sub port path
-    refresh_session
-    if [ "$ROLE" = none ]; then
-        echo 'This account has no postmerkOS management role.' >&2
+    local command sub port path wait_attempts
+    command=${1:-menu}
+    wait_attempts=1
+    [ "$command" = menu ] && wait_attempts=${POSTMERKOS_SESSION_WAIT:-30}
+    refresh_session "$wait_attempts" || true
+    if [ "$SESSION_STATE" != ok ]; then
+        if [ "$SESSION_STATE" = role-none ]; then
+            echo 'This account has no postmerkOS management role.' >&2
+        else
+            echo 'The postmerkOS management service is unavailable.' >&2
+            [ -n "$SESSION_ERROR" ] && printf 'Reason: %s\n' "$SESSION_ERROR" >&2
+            echo 'Use "postmerkosctl management-health" or the serial console status/logs commands for diagnostics.' >&2
+        fi
         return 1
     fi
     detect_layout
-    command=${1:-menu}
     case "$command" in
         menu) main_menu ;;
         status) "$CTL" summary ;;

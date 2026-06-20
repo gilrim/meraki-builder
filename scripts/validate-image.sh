@@ -47,7 +47,8 @@ required=(
   etc/fwupdate/preserve.list
 )
 if bool_enabled "${INCLUDE_UI:-0}"; then
-  required+=(www/index.html bin/configd usr/bin/uhttpd etc/init.d/S15configd \
+  required+=(www/index.html bin/configd usr/bin/postmerkosctl usr/bin/uhttpd etc/init.d/S15configd \
+    usr/sbin/postmerkos-configd-supervisor \
     etc/init.d/S16uhttpd usr/sbin/postmerkos-network-rebind)
 fi
 for path in "${required[@]}"; do
@@ -60,10 +61,21 @@ python3 "$VENDOR_MODULE_TOOL" verify "$VERIFY_DIR/lib/modules" \
 
 if bool_enabled "${INCLUDE_UI:-0}"; then
   for path in bin/configd usr/bin/uhttpd etc/init.d/S15configd \
+    usr/sbin/postmerkos-configd-supervisor \
       etc/init.d/S16uhttpd usr/sbin/postmerkos-network-rebind; do
     [[ -x "$VERIFY_DIR/$path" ]] || \
       die "Rootfs verification failed: /$path is not executable"
   done
+
+  grep -R -a -q 'configd-ws' "$VERIFY_DIR/www" || die "Web UI lacks configd-ws protocol marker"
+  grep -R -a -q '4001' "$VERIFY_DIR/www" || die "Web UI lacks configd WebSocket port 4001"
+  grep -Fq 'management-health --quiet' "$VERIFY_DIR/etc/init.d/S15configd" || \
+    die "configd init lacks the WebSocket hello health contract"
+  grep -Fq 'postmerkOS management: restarting configd' \
+    "$VERIFY_DIR/usr/sbin/postmerkos-configd-supervisor" || \
+    die "configd supervisor restart contract is missing"
+  strings "$VERIFY_DIR/usr/bin/postmerkosctl" | grep -Fq 'WebSocket configd-ws hello' || \
+    die "postmerkosctl lacks the WebSocket hello health probe"
 fi
 
 file "$VERIFY_DIR/usr/libexec/fwupdate/fwflash" | grep -qi 'statically linked' || \

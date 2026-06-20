@@ -20,4 +20,6 @@ Power and standard are independent:
 
 The PD690xx controller implements power control. Boot-prune enables configured ports, observes controller state/power for the configured window, and runtime-disables ports that remain unused without rewriting desired configuration. Reconnect after pruning requires manual re-enablement or Normal policy.
 
-`/click/sw0_ctrl/poe_led_state` controls port LED indication only; it does **not** switch PoE power. It is registered only for MS220-8/MS220-8P. Candidate raw PoE GPIO mappings are not hardware-verified, so the shipped boot scripts perform no such writes.
+`/click/sw0_ctrl/poe_led_state` controls port LED indication only; it does **not** switch PoE power. It is registered only for MS220-8/MS220-8P.
+
+The original PD690xx reset/enable GPIO initialization has been hardware-verified across the supported Luton26, Jaguar1 single-core, and Jaguar1 dual-core PoE models. Exact model profiles own the verified GPIO pair, and `S11poe` performs writes only when immutable board identity is exact and the model is PoE-capable. Non-PoE and unidentified systems remain write-disabled.

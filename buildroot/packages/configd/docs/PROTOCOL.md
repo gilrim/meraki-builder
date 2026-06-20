@@ -127,3 +127,8 @@ configd --apply-file ./delta.json
 configd --validate ./complete.json
 postmerkosctl session --shell
 ```
+
+
+## Runtime health probe
+
+`postmerkosctl management-health` validates the local process and Unix socket, performs a role-aware local `session` request, opens a WebSocket on TCP 4001, requires the `configd-ws` subprotocol, and sends a protocol `hello`. This is the readiness contract used by `S15configd`.

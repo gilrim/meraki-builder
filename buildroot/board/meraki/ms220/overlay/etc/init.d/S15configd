@@ -1,81 +1,87 @@
 #!/bin/sh
 DAEMON=/bin/configd
-PIDFILE=/run/configd.pid
+SUPERVISOR=/usr/sbin/postmerkos-configd-supervisor
+SUPERVISOR_PIDFILE=/run/configd-supervisor.pid
+CHILD_PIDFILE=/run/configd.pid
+STOP_FILE=/run/postmerkos/configd.stop
 SOCKET=/run/postmerkos/configd.sock
 LOGFILE=/run/postmerkos/configd.log
 CONFIG=/etc/switch.json
 WEBSOCKET_PORT=4001
+CTL=/usr/bin/postmerkosctl
 
-is_running() {
-    [ -s "$PIDFILE" ] || return 1
-    pid=$(cat "$PIDFILE" 2>/dev/null) || return 1
+pid_running() {
+    [ -s "$1" ] || return 1
+    pid=$(cat "$1" 2>/dev/null) || return 1
     kill -0 "$pid" 2>/dev/null
 }
-
-websocket_enabled() {
-    "$DAEMON" --features 2>/dev/null | grep -q '^websocket: enabled$'
-}
-
+is_running() { pid_running "$CHILD_PIDFILE"; }
+supervisor_running() { pid_running "$SUPERVISOR_PIDFILE"; }
+websocket_enabled() { "$DAEMON" --features 2>/dev/null | grep -q '^websocket: enabled$'; }
 port_listening() {
     hex=$(printf '%04X' "$WEBSOCKET_PORT")
     for table in /proc/net/tcp /proc/net/tcp6; do
         [ -r "$table" ] || continue
-        awk -v suffix=":$hex" '$4 == "0A" && substr($2, length($2)-length(suffix)+1) == suffix { found=1 } END { exit found ? 0 : 1 }' "$table" && return 0
+        awk -v suffix=":$hex" '
+          $4 == "0A" && substr($2, length($2)-length(suffix)+1) == suffix {
+            split($2, address, ":");
+            if (address[1] == "00000000" || address[1] == "00000000000000000000000000000000") found=1
+          }
+          END { exit found ? 0 : 1 }' "$table" && return 0
     done
     return 1
 }
-
 wait_ready() {
     attempts=0
     need_websocket=0
     websocket_enabled && need_websocket=1
     while [ "$attempts" -lt 30 ]; do
-        is_running || return 1
-        if [ -S "$SOCKET" ]; then
-            [ "$need_websocket" -eq 0 ] && return 0
-            port_listening && return 0
+        supervisor_running || return 1
+        if is_running && [ -S "$SOCKET" ]; then
+            if [ "$need_websocket" -eq 0 ]; then return 0; fi
+            if port_listening && "$CTL" management-health --quiet >/dev/null 2>&1; then return 0; fi
         fi
-        attempts=$((attempts + 1))
-        sleep 1
+        attempts=$((attempts + 1)); sleep 1
     done
     return 1
 }
-
 start() {
     printf 'Starting configd: '
     [ -x "$DAEMON" ] || { echo 'FAIL (missing binary)'; return 1; }
+    [ -x "$SUPERVISOR" ] || { echo 'FAIL (missing supervisor)'; return 1; }
     [ -d /click ] || { echo 'FAIL (/click unavailable)'; return 1; }
     mkdir -p /run/postmerkos
-    rm -f "$SOCKET"
-    if is_running; then echo 'already running'; return 0; fi
+    rm -f "$STOP_FILE" "$SOCKET" "$CHILD_PIDFILE"
+    if supervisor_running; then echo 'already running'; return 0; fi
     : >"$LOGFILE"
     "$DAEMON" --features >>"$LOGFILE" 2>&1 || true
-    start-stop-daemon -S -q -b -m -p "$PIDFILE" -x "$DAEMON" -- \
-        -c "$CONFIG" -s "$SOCKET" -w "$WEBSOCKET_PORT" -p 3 >>"$LOGFILE" 2>&1
+    CONFIGD_DAEMON="$DAEMON" CONFIGD_CONFIG="$CONFIG" CONFIGD_SOCKET="$SOCKET" \
+      CONFIGD_WEBSOCKET_PORT="$WEBSOCKET_PORT" \
+      "$SUPERVISOR" >>"$LOGFILE" 2>&1 &
+    echo $! >"$SUPERVISOR_PIDFILE"
     if ! wait_ready; then
         echo FAIL
-        if websocket_enabled && ! port_listening; then
-            echo "configd WebSocket listener did not become ready on port $WEBSOCKET_PORT"
-        fi
-        tail -n 80 "$LOGFILE"
+        echo "configd management health did not become ready on port $WEBSOCKET_PORT"
+        tail -n 100 "$LOGFILE"
         stop >/dev/null 2>&1 || true
         return 1
     fi
     echo OK
 }
-
 stop() {
     printf 'Stopping configd: '
-    if is_running; then start-stop-daemon -K -q -p "$PIDFILE" -x "$DAEMON" || true; fi
-    rm -f "$PIDFILE" "$SOCKET"
+    mkdir -p /run/postmerkos; : >"$STOP_FILE"
+    if is_running; then kill "$(cat "$CHILD_PIDFILE")" 2>/dev/null || true; fi
+    if supervisor_running; then kill "$(cat "$SUPERVISOR_PIDFILE")" 2>/dev/null || true; fi
+    attempts=0
+    while supervisor_running && [ "$attempts" -lt 10 ]; do sleep 1; attempts=$((attempts+1)); done
+    rm -f "$SUPERVISOR_PIDFILE" "$CHILD_PIDFILE" "$SOCKET" "$STOP_FILE"
     echo OK
 }
-
 status() {
-    is_running && [ -S "$SOCKET" ] || return 1
-    websocket_enabled && port_listening || ! websocket_enabled
+    supervisor_running && is_running && [ -S "$SOCKET" ] || return 1
+    websocket_enabled && "$CTL" management-health --quiet >/dev/null 2>&1 || ! websocket_enabled
 }
-
 case "$1" in
     start) start ;;
     stop) stop ;;

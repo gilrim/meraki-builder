@@ -36,8 +36,24 @@ if POSTMERKOS_RUN_DIR="$TMP/run" POSTMERKOS_BOARDINFO="$TMP/run/boardinfo" \
   echo 'identity unexpectedly accepted missing EEPROM data' >&2; exit 1
 fi
 [ ! -e "$TMP/run/boardinfo" ]
-# Production profiles must not enable candidate raw PoE GPIO mappings.
-for model in MS22 MS22P MS220-8 MS220-8P MS220-24 MS220-24P MS220-48 MS220-48P MS220-48LP MS220-48FP MS320-24 MS320-24P MS320-48 MS320-48P MS320-48LP MS320-48FP MS42 MS42P; do
-  ! "$PROFILE" "$model" | grep -q '^POE_GPIO_VERIFIED=1$'
+# Hardware-verified PoE profiles must expose their exact GPIO pair; non-PoE
+# profiles remain write-disabled.
+check_poe() {
+  model=$1 a=$2 b=$3 output=$("$PROFILE" "$model")
+  printf '%s\n' "$output" | grep -q '^POE_CAPABLE=1$'
+  printf '%s\n' "$output" | grep -q '^POE_GPIO_VERIFIED=1$'
+  printf '%s\n' "$output" | grep -q "^POE_GPIO_A=$a$"
+  printf '%s\n' "$output" | grep -q "^POE_GPIO_B=$b$"
+}
+check_poe MS220-8P 7 12
+check_poe MS22P 82 81
+check_poe MS220-24P 82 81
+check_poe MS320-24P 9 8
+for model in MS220-48P MS220-48LP MS220-48FP MS320-48P MS320-48LP MS320-48FP; do check_poe "$model" 41 40; done
+check_poe MS42P 41 8
+for model in MS22 MS220-8 MS220-24 MS220-48 MS320-24 MS320-48 MS42; do
+  output=$("$PROFILE" "$model")
+  printf '%s\n' "$output" | grep -q '^POE_CAPABLE=0$'
+  printf '%s\n' "$output" | grep -q '^POE_GPIO_VERIFIED=0$'
 done
 printf '%s\n' 'board identity tests passed'

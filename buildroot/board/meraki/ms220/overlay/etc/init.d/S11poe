@@ -4,6 +4,7 @@ set -u
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 BOARDINFO=${POSTMERKOS_BOARDINFO:-/run/postmerkos/boardinfo}
 STATUS=${POSTMERKOS_POE_INIT_STATUS:-/run/postmerkos/poe-init.status}
+GPIO_ROOT=${POSTMERKOS_GPIO_ROOT:-/sys/class/gpio}
 
 status() {
   state=$1; shift
@@ -12,50 +13,42 @@ status() {
   mv -f "$STATUS.tmp.$$" "$STATUS"
 }
 
-candidate_gpio() {
-  case "$MODEL" in
-    MS220-8P) echo '7 12' ;;
-    MS22P|MS220-24P) echo '82 81' ;;
-    MS320-24P) echo '9 8' ;;
-    MS220-48P|MS220-48LP|MS220-48FP|MS320-48P|MS320-48LP|MS320-48FP) echo '41 40' ;;
-    MS42P) echo '41 8' ;;
-    *) return 1 ;;
-  esac
-}
-
 write_gpio() {
   gpio=$1 value=$2
-  [ -d "/sys/class/gpio/gpio$gpio" ] || echo "$gpio" > /sys/class/gpio/export
-  echo out > "/sys/class/gpio/gpio$gpio/direction"
-  echo "$value" > "/sys/class/gpio/gpio$gpio/value"
+  [ -d "$GPIO_ROOT/gpio$gpio" ] || echo "$gpio" > "$GPIO_ROOT/export"
+  echo out > "$GPIO_ROOT/gpio$gpio/direction"
+  echo "$value" > "$GPIO_ROOT/gpio$gpio/value"
 }
 
 start() {
   if [ ! -r "$BOARDINFO" ]; then
-    echo 'PoE init: exact runtime board identity unavailable; no GPIO writes'
+    echo 'postmerkOS PoE: SKIP reason=exact-board-identity-unavailable'
     status disabled 'exact board identity unavailable'
     return 0
   fi
   . "$BOARDINFO"
   if [ "${IDENTITY_EXACT:-0}" != 1 ] || [ "${POE_CAPABLE:-0}" != 1 ]; then
-    echo "PoE init: $MODEL is not an exact PoE-capable profile; no GPIO writes"
+    echo "postmerkOS PoE: SKIP model=${MODEL:-unknown} family=${MODULE_FAMILY:-unknown} reason=not-poe-capable"
     status disabled 'profile is not exact and PoE-capable'
     return 0
   fi
-  gpios=$(candidate_gpio 2>/dev/null || true)
   if [ "${POE_GPIO_VERIFIED:-0}" != 1 ]; then
-    echo "PoE init: GPIO mapping registered but not hardware-verified for $MODEL; no GPIO writes"
-    status diagnostic-only "candidate GPIO mapping: ${gpios:-unknown}"
+    echo "postmerkOS PoE: SKIP model=$MODEL family=${MODULE_FAMILY:-unknown} reason=gpio-mapping-not-verified"
+    status diagnostic-only 'GPIO mapping is not verified'
     return 0
   fi
-  [ -n "$gpios" ] || { echo "PoE init: verified profile lacks a GPIO mapping for $MODEL" >&2; status failed 'verified profile lacks GPIO mapping'; return 1; }
-  set -- $gpios; gpio1=$1; gpio2=$2
+  [ -n "${POE_GPIO_A:-}" ] && [ -n "${POE_GPIO_B:-}" ] || {
+    echo "postmerkOS PoE: FAIL model=$MODEL reason=verified-profile-missing-gpio" >&2
+    status failed 'verified profile lacks GPIO mapping'; return 1;
+  }
+  gpio1=$POE_GPIO_A; gpio2=$POE_GPIO_B
   write_gpio "$gpio1" 1 || { status failed "could not assert GPIO $gpio1"; return 1; }
   write_gpio "$gpio2" 0 || { status failed "could not assert GPIO $gpio2"; return 1; }
   sleep 0.1
   write_gpio "$gpio2" 1 || { status failed "could not release GPIO $gpio2"; return 1; }
   write_gpio "$gpio1" 0 || { status failed "could not release GPIO $gpio1"; return 1; }
   command -v poe_leds >/dev/null 2>&1 && poe_leds >/dev/null 2>&1 || true
+  echo "postmerkOS PoE: PASS model=$MODEL family=${MODULE_FAMILY:-unknown} gpio_a=$gpio1 gpio_b=$gpio2"
   status ready "verified PoE GPIO initialization completed for $MODEL"
 }
 

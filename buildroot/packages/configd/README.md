@@ -27,7 +27,7 @@ Runtime feature discovery is available with:
 configd --features
 ```
 
-A web build reports the `configd-ws` subprotocol and port 4001. Its init script requires both the Unix socket and the TCP listener before declaring configd ready.
+A web build reports the `configd-ws` subprotocol and port 4001. Its init script requires the Unix socket, a valid root session request, an actual WebSocket upgrade, `configd-ws` subprotocol selection, and a protocol-2 `hello` response before declaring configd ready.
 
 One-shot recovery/automation examples:
 
@@ -41,6 +41,8 @@ configd --set-string ports.1.name uplink
 configd --validate /tmp/switch.json
 configd --replace-file /tmp/switch.json
 configd --network-bootstrap --network-wait 60
+configd --network-bootstrap --boot-output --network-wait 60
+postmerkosctl management-health
 ```
 
 Responses are JSON envelopes with `ack`, `error`, or operation-specific types. An unauthenticated WebSocket may use only `hello`, `ping`, `auth`, and `logout`; all status and management operations require a resolved role. See [the protocol](docs/PROTOCOL.md).
@@ -84,3 +86,7 @@ make -C buildroot/packages/configd test-host
 The host suite includes repeated root/admin/operator/viewer lookups to catch account-storage corruption and role instability.
 
 Module responsibilities are documented under [docs/modules](docs/modules/README.md). The Click graph is documented in [the repository architecture guide](../../../docs/architecture/click-system.md).
+
+## Diagnostics
+
+Boot-oriented network output is concise and the complete envelope is retained in `/run/postmerkos/network-bootstrap.json`. Daemon termination is recorded in `/run/postmerkos/configd.exit` with reason, exit status, timestamp, and uptime. `S15configd` uses a bounded supervisor; repeated failures remain visible on the hardware console and in `/run/postmerkos/configd.log`.
