@@ -89,3 +89,9 @@
   manifest fixtures, aggregate UI/configd contract coverage, and recovery
   payload structural builds.
 - Refreshed the UI development dependency lockfile to a zero-advisory audit.
+## 2026-06-20 UART recovery manifest digest binding
+
+- Corrected PMOSREC JSON lookup so nested digest fields cannot shadow direct object members.
+- Added the `direct-object-members-v1` recovery payload contract to loader, release-manifest, and flasher validation.
+- Forced rebuild/rejection of recovery payloads that lack the scoped manifest parser.
+

@@ -98,6 +98,8 @@ for family, (fid, spi, expected_models) in expected_targets.items():
         raise SystemExit(f"{payload.name} descriptor load/entry address mismatch")
     if descriptor.get("entry_contract") != "flat-binary-byte-zero-v1":
         raise SystemExit(f"{payload.name} descriptor lacks corrected byte-zero entry contract")
+    if descriptor.get("manifest_lookup_contract") != "direct-object-members-v1":
+        raise SystemExit(f"{payload.name} descriptor lacks direct-member manifest lookup")
     if descriptor.get("transport_integrity") != ["frame-crc32", "object-crc32", "object-sha256"]:
         raise SystemExit(f"{payload.name} descriptor integrity contract mismatch")
     jedec = descriptor.get("accepted_jedec_ids")
@@ -117,6 +119,8 @@ for family, (fid, spi, expected_models) in expected_targets.items():
         raise SystemExit(f"{payload.name} embedded recovery load/entry mismatch")
     if embedded_record.get("entry_contract") != "flat-binary-byte-zero-v1":
         raise SystemExit(f"{payload.name} embedded recovery lacks corrected byte-zero entry contract")
+    if embedded_record.get("manifest_lookup_contract") != "direct-object-members-v1":
+        raise SystemExit(f"{payload.name} embedded recovery lacks direct-member manifest lookup")
 PY
 
 entry="$(readelf -h "$KERNEL_ARTIFACT_DIR/vmlinuz" | awk '/Entry point address/ {print $4}')"

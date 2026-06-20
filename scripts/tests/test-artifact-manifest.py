@@ -89,6 +89,7 @@ class ArtifactManifestTests(unittest.TestCase):
                 "path": str(payload), "size": payload.stat().st_size, "sha256": digest,
                 "load_address": 0x81000000, "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
+                "manifest_lookup_contract": "direct-object-members-v1",
             }
             descriptor = {
                 "format": "postmerkos.uart-recovery-payload.v2",
@@ -105,6 +106,7 @@ class ArtifactManifestTests(unittest.TestCase):
                 "load_address": 0x81000000,
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
+                "manifest_lookup_contract": "direct-object-members-v1",
                 "binary": {
                     "filename": payload.name,
                     "bytes": payload.stat().st_size,
@@ -193,6 +195,7 @@ class ArtifactManifestTests(unittest.TestCase):
             self.assertEqual(record["load_address"], 0x81000000)
             self.assertEqual(record["entry_address"], 0x81000000)
             self.assertEqual(record["entry_contract"], "flat-binary-byte-zero-v1")
+            self.assertEqual(record["manifest_lookup_contract"], "direct-object-members-v1")
 
     def test_tampered_payload_is_rejected(self) -> None:
         payload = self.recovery / "recovery-jaguar1.bin"

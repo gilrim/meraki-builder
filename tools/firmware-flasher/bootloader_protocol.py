@@ -73,6 +73,7 @@ class PayloadDescriptor:
     load_address: int
     entry_address: int
     entry_contract: str
+    manifest_lookup_contract: str
 
 
 @dataclass(frozen=True)
@@ -142,12 +143,18 @@ def inspect_payload(path: Path, descriptor_path: Path | None = None) -> PayloadD
     load_address = metadata.get("load_address")
     entry_address = metadata.get("entry_address")
     entry_contract = metadata.get("entry_contract")
+    manifest_lookup_contract = metadata.get("manifest_lookup_contract")
     if load_address != 0x81000000 or entry_address != 0x81000000:
         raise ProtocolError("recovery payload is not linked for load/entry address 0x81000000")
     if entry_contract != "flat-binary-byte-zero-v1":
         raise ProtocolError(
             "recovery payload lacks the flat-binary-byte-zero-v1 entry contract; "
             "the v0.7.0 payload can hang immediately after PASS-RECOVERY-EXEC"
+        )
+    if manifest_lookup_contract != "direct-object-members-v1":
+        raise ProtocolError(
+            "recovery payload lacks direct-object-members-v1 manifest parsing; "
+            "nested kernel/region digests can shadow artifact.sha256"
         )
     return PayloadDescriptor(
         family=family,
@@ -158,6 +165,7 @@ def inspect_payload(path: Path, descriptor_path: Path | None = None) -> PayloadD
         load_address=load_address,
         entry_address=entry_address,
         entry_contract=entry_contract,
+        manifest_lookup_contract=manifest_lookup_contract,
     )
 
 
@@ -193,6 +201,11 @@ def _validate_loader_capability(manifest: dict, loader_sha256: str, family: str)
         raise ProtocolError(
             "firmware image contains the affected v0.7.0 recovery layout; rebuild meraki-redboot "
             "with the flat-binary-byte-zero-v1 entry fix before flashing"
+        )
+    if record.get("manifest_lookup_contract") != "direct-object-members-v1":
+        raise ProtocolError(
+            "firmware image contains a recovery parser that permits nested digest shadowing; "
+            "rebuild meraki-redboot with direct-object-members-v1 manifest lookup"
         )
 
 
@@ -291,6 +304,8 @@ def _recovery_payload_record(manifest: dict, family: str, model: str) -> dict:
         raise ProtocolError("manifest recovery payload load/entry address is invalid")
     if record.get("entry_contract") != "flat-binary-byte-zero-v1":
         raise ProtocolError("manifest recovery payload lacks the corrected byte-zero entry contract")
+    if record.get("manifest_lookup_contract") != "direct-object-members-v1":
+        raise ProtocolError("manifest recovery payload lacks scoped direct-member manifest parsing")
     return record
 
 
@@ -312,6 +327,8 @@ def validate_recovery_payload(path: Path, descriptor: PayloadDescriptor, bundle:
         raise ProtocolError("recovery payload entry addresses do not match the release manifest")
     if descriptor.entry_contract != record["entry_contract"]:
         raise ProtocolError("recovery payload entry contract does not match the release manifest")
+    if descriptor.manifest_lookup_contract != record["manifest_lookup_contract"]:
+        raise ProtocolError("recovery payload manifest lookup contract does not match the release manifest")
 
 
 def validate_bundle(image: Path, manifest_path: Path, model: str, *, force: bool) -> BundleInfo:

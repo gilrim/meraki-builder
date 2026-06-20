@@ -47,6 +47,7 @@ The adjacent `.descriptor.json` must declare:
 
 - load and entry address `0x81000000`;
 - `entry_contract: flat-binary-byte-zero-v1`;
+- `manifest_lookup_contract: direct-object-members-v1`;
 - exact payload size and SHA-256;
 - matching SoC family, SPI register and accepted models.
 
@@ -105,3 +106,16 @@ Current host tooling accepts both Jaguar1 and Luton26 descriptors and validates
 the family ID and SPI software-mode register before transmitting. Future-built
 recovery payloads also allow 30 seconds for the initial package header; frame
 interbyte limits remain unchanged.
+## Manifest digest shadowing correction
+
+Recovery payloads built before this correction used an unscoped minimal JSON key
+search. In a sorted artifact object, `kernel_payload.sha256` appears before the
+direct `artifact.sha256` member. The old recovery stage therefore compared the
+kernel payload digest with the full-image digest and reported
+`PMOSREC RESULT ERROR MANIFEST-IMAGE-DIGEST` even though both transferred objects
+had already passed transport CRC-32 and SHA-256 verification.
+
+Corrected payloads declare `direct-object-members-v1` and limit every JSON lookup
+to direct members of the object currently being validated. The flasher rejects
+external payloads and firmware loader records that lack this contract.
+
