@@ -98,6 +98,7 @@ for family in ("luton26", "jaguar1"):
     assert descriptor.get("load_address") == 0x81000000
     assert descriptor.get("entry_address") == 0x81000000
     assert descriptor.get("entry_contract") == "flat-binary-byte-zero-v1"
+    assert descriptor.get("manifest_lookup_contract") == "direct-object-members-v1"
     binary = descriptor.get("binary", {})
     digest = hashlib.sha256(raw).hexdigest()
     assert binary.get("filename") == payload.name
@@ -109,6 +110,7 @@ for family in ("luton26", "jaguar1"):
     assert record.get("load_address") == 0x81000000
     assert record.get("entry_address") == 0x81000000
     assert record.get("entry_contract") == "flat-binary-byte-zero-v1"
+    assert record.get("manifest_lookup_contract") == "direct-object-members-v1"
 PY_LOADER
   then
     warn "The cached loader does not match the selected meraki-redboot source release; rebuilding it."

@@ -150,6 +150,8 @@ def main(argv: list[str]) -> int:
             raise SystemExit(f"recovery descriptor load/entry address mismatch: {descriptor_path}")
         if descriptor.get("entry_contract") != "flat-binary-byte-zero-v1":
             raise SystemExit(f"recovery descriptor lacks corrected byte-zero entry contract: {descriptor_path}")
+        if descriptor.get("manifest_lookup_contract") != "direct-object-members-v1":
+            raise SystemExit(f"recovery descriptor lacks direct-member manifest lookup: {descriptor_path}")
         if descriptor.get("transport_integrity") != ["frame-crc32", "object-crc32", "object-sha256"]:
             raise SystemExit(f"recovery descriptor integrity contract mismatch: {descriptor_path}")
         accepted_models = descriptor.get("accepted_models")
@@ -182,6 +184,8 @@ def main(argv: list[str]) -> int:
             raise SystemExit(f"loader embedded recovery load/entry address mismatch: {binary_path.name}")
         if embedded_record.get("entry_contract") != "flat-binary-byte-zero-v1":
             raise SystemExit(f"loader embedded recovery lacks corrected byte-zero entry contract: {binary_path.name}")
+        if embedded_record.get("manifest_lookup_contract") != "direct-object-members-v1":
+            raise SystemExit(f"loader embedded recovery lacks direct-member manifest lookup: {binary_path.name}")
         if common_geometry is None:
             common_geometry = geometry
             common_jedec = jedec
@@ -197,6 +201,7 @@ def main(argv: list[str]) -> int:
             "load_address": descriptor["load_address"],
             "entry_address": descriptor["entry_address"],
             "entry_contract": descriptor["entry_contract"],
+            "manifest_lookup_contract": descriptor["manifest_lookup_contract"],
         }
 
     manifest["recovery"] = {
@@ -224,6 +229,7 @@ def main(argv: list[str]) -> int:
                     "load_address": recovery_payloads[family]["load_address"],
                     "entry_address": recovery_payloads[family]["entry_address"],
                     "entry_contract": recovery_payloads[family]["entry_contract"],
+                    "manifest_lookup_contract": recovery_payloads[family]["manifest_lookup_contract"],
                 } for family in ("luton26", "jaguar1")
             },
             "loader_sha256": loader_digest,

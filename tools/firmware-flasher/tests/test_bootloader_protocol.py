@@ -74,6 +74,7 @@ class BundleFixture:
                 "load_address": 0x81000000,
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
+                "manifest_lookup_contract": "direct-object-members-v1",
                 "binary": {
                     "filename": payload.name,
                     "bytes": len(raw),
@@ -95,6 +96,7 @@ class BundleFixture:
                 "load_address": 0x81000000,
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
+                "manifest_lookup_contract": "direct-object-members-v1",
             },
             "jaguar1": {
                 "filename": self.payload_jaguar.name,
@@ -106,6 +108,7 @@ class BundleFixture:
                 "load_address": 0x81000000,
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
+                "manifest_lookup_contract": "direct-object-members-v1",
             },
         }
         data = {
@@ -129,6 +132,7 @@ class BundleFixture:
                             "load_address": record["load_address"],
                             "entry_address": record["entry_address"],
                             "entry_contract": record["entry_contract"],
+                            "manifest_lookup_contract": record["manifest_lookup_contract"],
                         }
                         for family, record in payload_records.items()
                     },
@@ -346,6 +350,16 @@ class ProtocolTests(unittest.TestCase):
             data.pop("entry_contract")
             sidecar.write_text(json.dumps(data))
             with self.assertRaisesRegex(bp.ProtocolError, "flat-binary-byte-zero-v1"):
+                bp.inspect_payload(bundle.payload_jaguar)
+
+    def test_payload_without_direct_member_lookup_contract_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = BundleFixture(Path(temp))
+            sidecar = bundle.payload_jaguar.with_suffix(".descriptor.json")
+            data = json.loads(sidecar.read_text())
+            data.pop("manifest_lookup_contract")
+            sidecar.write_text(json.dumps(data))
+            with self.assertRaisesRegex(bp.ProtocolError, "direct-object-members-v1"):
                 bp.inspect_payload(bundle.payload_jaguar)
 
     def test_embedded_exec_without_ready_is_classified_as_entry_failure(self) -> None:
