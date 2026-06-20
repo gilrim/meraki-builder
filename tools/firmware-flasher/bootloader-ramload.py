@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate or run meraki-redboot UART firmware recovery protocol v2."""
+"""Validate or run meraki-redboot RAM-loader + PMOSREC v3 recovery."""
 from __future__ import annotations
 
 import argparse
@@ -16,32 +16,35 @@ from bootloader_protocol import (
     EmbeddedRecoveryEntryError,
     SerialLink,
     inspect_payload,
-    make_package_header,
-    make_preflight_header,
     MODEL_FAMILY,
-    send_object,
     send_ram_payload,
     validate_bundle,
     validate_recovery_payload,
-    OBJECT_IMAGE,
-    OBJECT_MANIFEST,
+)
+from pmosrec_v3 import (
+    BaudController,
+    negotiate_fastest_baud,
+    qualify_transport,
+    send_package_v3,
 )
 
 READY_SOC = re.compile(r"\bSOC=(luton26|jaguar1)\b")
 INFO_SOC = re.compile(r"\bSOC:\s*(luton26|jaguar1)\b")
 RECOVERY_DESCRIPTOR = re.compile(
-    r"^PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=(luton26|jaguar1);"
-    r"FAMILY=([12]);SPI=([0-9a-fA-F]{8});PROTO=2;PREFLIGHT=3;END$"
+    r"^PMOSREC DESCRIPTOR PMOSRECOVERY3;SOC=(luton26|jaguar1);"
+    r"FAMILY=([12]);SPI=([0-9a-fA-F]{8});PROTO=3;PREFLIGHT=4;"
+    r"BAUDTEST=1;FRAME_MAX=4096;WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;"
+    r"CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;END$"
 )
 MENU_BYTE = re.compile(r"\bBYTE:\s*0x([0-9a-fA-F]{8})\b")
 MENU_SELECTION = re.compile(r"\bSELECTED:\s*0x([0-9a-fA-F]{8})\b")
-CHALLENGE = re.compile(r"^PMOSREC ERASE-CHALLENGE ([0-9a-f]{8})$")
+UART_CAP = re.compile(r"^PMOSREC UART-CAP CLOCK=(\d+) DIV_MIN=1 DIV_MAX=65535 CURRENT=(\d+)$")
 
 
 def baud_constant(baud: int) -> int:
     name = f"B{baud}"
     if not hasattr(termios, name):
-        raise ProtocolError(f"termios does not support baud rate {baud}")
+        raise ProtocolError(f"termios does not support stable bootstrap baud rate {baud}")
     return getattr(termios, name)
 
 
@@ -78,45 +81,8 @@ def require_info_soc(line: str, expected: str) -> None:
         raise ProtocolError(f"embedded recovery launch did not report a parseable SoC family: {line}")
     if match.group(1) != expected:
         raise ProtocolError(
-            f"embedded recovery launch reports {match.group(1)}, "
-            f"but the selected model requires {expected}"
+            f"embedded recovery launch reports {match.group(1)}, but the selected model requires {expected}"
         )
-
-
-def wait_for_recovery_descriptor(link: SerialLink, expected_family: str) -> str:
-    """Synchronize after the target has finished all startup UART output.
-
-    PMOSREC prints READY and then a descriptor using a polling UART. Sending the
-    binary package header as soon as READY is seen can overrun the target RX FIFO
-    while it is still transmitting the descriptor. Waiting for the descriptor's
-    terminating newline creates an explicit half-duplex handoff point.
-    """
-    line = link.wait_for(("PMOSREC DESCRIPTOR ",), 5.0)
-    match = RECOVERY_DESCRIPTOR.fullmatch(line)
-    if not match:
-        raise ProtocolError(f"recovery stage emitted an invalid descriptor: {line}")
-    family = match.group(1)
-    family_id = int(match.group(2))
-    spi_address = int(match.group(3), 16)
-    expected_id = 1 if expected_family == "luton26" else 2
-    expected_spi = 0x70000064 if expected_family == "luton26" else 0x70000068
-    if family != expected_family or family_id != expected_id or spi_address != expected_spi:
-        raise ProtocolError(
-            "recovery descriptor mismatch: "
-            f"reported family={family} id={family_id} spi=0x{spi_address:08x}; "
-            f"expected family={expected_family} id={expected_id} spi=0x{expected_spi:08x}"
-        )
-    return line
-
-
-def accept_recovery_ready(link: SerialLink, ready_line: str, expected_family: str,
-                          stage: str) -> None:
-    require_soc(ready_line, expected_family, stage)
-    wait_for_recovery_descriptor(link, expected_family)
-    flash_ready = link.wait_for(("PMOSREC FLASH-PREFLIGHT-OK",), 10.0)
-    if f"ID=" not in flash_ready:
-        raise ProtocolError(f"recovery hardware preflight did not report a JEDEC ID: {flash_ready}")
-    link.wait_for(("PMOSREC COMMAND-READY 1",), 5.0)
 
 
 def require_hex_field(line: str, pattern: re.Pattern[str], expected: int, label: str) -> None:
@@ -125,19 +91,41 @@ def require_hex_field(line: str, pattern: re.Pattern[str], expected: int, label:
         raise ProtocolError(f"{label} did not report the expected hexadecimal field: {line}")
     observed = int(match.group(1), 16)
     if observed != expected:
+        raise ProtocolError(f"{label} reported 0x{observed:08x}; expected 0x{expected:08x}")
+
+
+def wait_for_recovery_descriptor(link: SerialLink, expected_family: str) -> None:
+    line = link.wait_for(("PMOSREC DESCRIPTOR ",), 5.0)
+    match = RECOVERY_DESCRIPTOR.fullmatch(line)
+    if not match:
+        raise ProtocolError(f"recovery stage emitted an invalid PMOSREC v3 descriptor: {line}")
+    family = match.group(1)
+    family_id = int(match.group(2))
+    spi_address = int(match.group(3), 16)
+    expected_id = 1 if expected_family == "luton26" else 2
+    expected_spi = 0x70000064 if expected_family == "luton26" else 0x70000068
+    if family != expected_family or family_id != expected_id or spi_address != expected_spi:
         raise ProtocolError(
-            f"{label} reported 0x{observed:08x}; expected 0x{expected:08x}"
+            f"recovery descriptor mismatch: family={family} id={family_id} spi=0x{spi_address:08x}"
         )
+    cap = link.wait_for(("PMOSREC UART-CAP ",), 5.0)
+    if not UART_CAP.fullmatch(cap):
+        raise ProtocolError(f"invalid target UART capability record: {cap}")
+
+
+def accept_recovery_ready(link: SerialLink, ready_line: str, expected_family: str,
+                          stage: str) -> None:
+    require_soc(ready_line, expected_family, stage)
+    wait_for_recovery_descriptor(link, expected_family)
+    flash_ready = link.wait_for(("PMOSREC FLASH-PREFLIGHT-OK",), 10.0)
+    if "ID=" not in flash_ready:
+        raise ProtocolError(f"recovery hardware preflight did not report a JEDEC ID: {flash_ready}")
+    link.wait_for(("PMOSREC COMMAND-READY 3",), 5.0)
 
 
 def wait_for_embedded_recovery(link: SerialLink, expected_family: str) -> None:
-    error_prefixes = (
-        "PMOSBOOT FAIL-RECOVERY",
-        "PMOSBOOT WARN-MENU-TIMEOUT",
-    )
-    info = link.wait_for(
-        ("PMOSBOOT INFO-RECOVERY",), 5.0, error_prefixes=error_prefixes
-    )
+    error_prefixes = ("PMOSBOOT FAIL-RECOVERY", "PMOSBOOT WARN-MENU-TIMEOUT")
+    info = link.wait_for(("PMOSBOOT INFO-RECOVERY",), 5.0, error_prefixes=error_prefixes)
     require_info_soc(info, expected_family)
     for marker in (
         "PMOSBOOT PASS-RECOVERY-SIZE",
@@ -159,115 +147,165 @@ def enter_recovery(
     frame_retries: int,
     ack_timeout: float,
 ) -> str:
-    """Enter menu option 2, or support an explicit/direct RAM-upload path."""
-    prefixes = ("PMOSBOOT MENU-PROBE", "PMOSREC READY 2", "PMOSRAM READY 2")
+    prefixes = ("PMOSBOOT MENU-PROBE", "PMOSREC READY 3", "PMOSRAM READY 2")
     line = link.wait_for(prefixes, timeout)
-    if line.startswith("PMOSREC READY 2"):
+    if line.startswith("PMOSREC READY 3"):
         accept_recovery_ready(link, line, expected_family, "automatic embedded recovery")
         return "embedded"
-
     if line.startswith("PMOSBOOT MENU-PROBE"):
-        # Use carriage return so the host-side trace matches the hardware-tested
-        # v0.7.0 sequence (PASS-MENU-TRIGGER BYTE 0x0000000D). The trigger byte
-        # is deliberately discarded by stage 1; an explicit fresh 1/2 follows.
         link.write_all(b"\r")
         trigger = link.wait_for(
-            ("PMOSBOOT PASS-MENU-TRIGGER",),
-            4.0,
+            ("PMOSBOOT PASS-MENU-TRIGGER",), 4.0,
             error_prefixes=("PMOSBOOT WARN-MENU-TIMEOUT",),
         )
         require_hex_field(trigger, MENU_BYTE, 0x0D, "menu trigger")
-        link.wait_for(
-            ("PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY",),
-            4.0,
-            error_prefixes=("PMOSBOOT WARN-MENU-TIMEOUT",),
-        )
-        link.wait_for(
-            ("PMOSBOOT MENU-READY",),
-            4.0,
-            error_prefixes=("PMOSBOOT WARN-MENU-TIMEOUT",),
-        )
+        link.wait_for(("PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY",), 4.0)
+        link.wait_for(("PMOSBOOT MENU-READY",), 4.0)
         choice = b"1" if path == "ram-upload" else b"2"
         link.write_all(choice)
-        selected = link.wait_for(
-            ("PMOSBOOT PASS-MENU-CHOICE",),
-            4.0,
-            error_prefixes=("PMOSBOOT WARN-MENU-TIMEOUT",),
-        )
+        selected = link.wait_for(("PMOSBOOT PASS-MENU-CHOICE",), 4.0)
         require_hex_field(selected, MENU_SELECTION, int(choice), "menu selection")
         if choice == b"2":
             wait_for_embedded_recovery(link, expected_family)
             try:
-                line = link.wait_for(
-                    ("PMOSREC READY 2",),
-                    10.0,
-                    error_prefixes=("PMOSBOOT FAIL-RECOVERY",),
-                )
+                line = link.wait_for(("PMOSREC READY 3",), 10.0)
             except ProtocolError as exc:
                 if "timed out" not in str(exc):
                     raise
                 raise EmbeddedRecoveryEntryError(
-                    "loader reported PASS-RECOVERY-EXEC but the payload never emitted PMOSREC READY 2; "
-                    "this matches the v0.7.0 flat-binary entry-offset defect"
+                    "embedded recovery did not enter PMOSREC v3 after PASS-RECOVERY-EXEC"
                 ) from exc
         else:
             line = link.wait_for(("PMOSRAM READY 2",), 10.0)
-
-    if line.startswith("PMOSREC READY 2"):
+    if line.startswith("PMOSREC READY 3"):
         accept_recovery_ready(link, line, expected_family, "embedded recovery")
         return "embedded"
-
     if not line.startswith("PMOSRAM READY 2"):
         raise ProtocolError(f"unexpected bootloader recovery state: {line}")
     require_soc(line, expected_family, "UART RAM loader")
     if path == "embedded":
-        raise ProtocolError(
-            "target entered a direct UART RAM-loader; use --recovery-path ram-upload "
-            "with the matching external recovery payload"
-        )
+        raise ProtocolError("target entered RAM loader while embedded recovery was requested")
     if payload is None:
         raise ProtocolError("external RAM-loader recovery requires --payload")
     send_ram_payload(link, payload, load, entry, chunk_size, frame_retries, ack_timeout)
-    payload_ready = link.wait_for(("PMOSREC READY 2",), 10.0)
+    payload_ready = link.wait_for(("PMOSREC READY 3",), 10.0)
     accept_recovery_ready(link, payload_ready, expected_family, "uploaded recovery payload")
     return "ram-upload"
+
+
+def write_preflight_receipt(path: Path, args: argparse.Namespace, selected_path: str,
+                            descriptor, transport, result: str) -> None:
+    receipt = {
+        "format": "postmerkos.bootloader-preflight-receipt.v2",
+        "result": "pass",
+        "completed_utc": datetime.now(timezone.utc).isoformat(),
+        "target_model": args.target_model,
+        "soc_family": MODEL_FAMILY[args.target_model],
+        "recovery_path": selected_path,
+        "serial_device": args.port,
+        "scratch_address": int(args.preflight_scratch, 0),
+        "scratch_bytes": 64 * 1024,
+        "pattern_seed": int(args.preflight_seed, 0),
+        "restore_original": True,
+        "recovery_payload_sha256": descriptor.sha256 if descriptor else None,
+        "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
+        "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
+        "negotiated_baud": transport.baud,
+        "frame_size": transport.frame_size,
+        "window_size": transport.window_size,
+        "sparse_qualified": transport.sparse_ok,
+        "lz4_qualified": transport.lz4_ok,
+        "target_result_line": result,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+
+
+def tune_usb_serial_latency(port: str) -> tuple[Path, str] | None:
+    """Best-effort FTDI latency reduction; absence or permissions never block recovery."""
+    tty = Path(port).resolve().name
+    candidates = (
+        Path("/sys/bus/usb-serial/devices") / tty / "latency_timer",
+        Path("/sys/class/tty") / tty / "device" / "latency_timer",
+    )
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            original = candidate.read_text(encoding="ascii").strip()
+            if original != "1":
+                candidate.write_text("1\n", encoding="ascii")
+                print(f"[flasher] USB-serial latency timer: {original} ms -> 1 ms", flush=True)
+            else:
+                print("[flasher] USB-serial latency timer already set to 1 ms", flush=True)
+            return candidate, original
+        except OSError as exc:
+            print(f"[flasher] Could not tune {candidate}: {exc}; continuing safely.", file=sys.stderr, flush=True)
+            return None
+    return None
+
+
+def restore_usb_serial_latency(state: tuple[Path, str] | None) -> None:
+    if state is None:
+        return
+    path, original = state
+    try:
+        if path.exists() and path.read_text(encoding="ascii").strip() != original:
+            path.write_text(original + "\n", encoding="ascii")
+            print(f"[flasher] Restored USB-serial latency timer to {original} ms", flush=True)
+    except OSError as exc:
+        print(f"[flasher] Could not restore {path}: {exc}", file=sys.stderr, flush=True)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--operation", choices=("verify", "preflight", "dry-run", "flash"), default="verify")
-    parser.add_argument("--port", help="Linux serial character device")
-    parser.add_argument("--baud", type=int, default=115200)
-    parser.add_argument("--recovery-path", choices=("embedded", "ram-upload", "auto"), default="embedded")
-    parser.add_argument("--payload", type=Path, help="external recovery payload for RAM-loader fallback")
-    parser.add_argument("--payload-descriptor", type=Path, help="entry-contract descriptor for --payload")
+    parser.add_argument("--port")
+    parser.add_argument("--baud", type=int, default=115200, help="stable RAM-loader bootstrap baud; keep at 115200")
+    parser.add_argument("--recovery-path", choices=("embedded", "ram-upload", "auto"), default="ram-upload")
+    parser.add_argument("--payload", type=Path)
+    parser.add_argument("--payload-descriptor", type=Path)
     parser.add_argument("--firmware", type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--target-model", required=True)
-    parser.add_argument("--force", action="store_true", help="permit a manifest status of untested")
+    parser.add_argument("--force", action="store_true")
     parser.add_argument("--load-address", default="0x81000000")
     parser.add_argument("--entry")
-    parser.add_argument("--chunk-size", type=int, default=1024)
+    parser.add_argument("--chunk-size", type=int, default=1024, help="stable RAM-loader payload chunk size")
     parser.add_argument("--frame-retries", type=int, default=3)
     parser.add_argument("--ack-timeout", type=float, default=5.0)
-    parser.add_argument("--ready-timeout", type=float, default=30.0)
-    parser.add_argument("--fallback-ready-timeout", type=float, default=180.0)
+    parser.add_argument("--ready-timeout", type=float, default=90.0)
+    parser.add_argument("--fallback-ready-timeout", type=float, default=120.0)
     parser.add_argument("--operation-timeout", type=float, default=1800.0)
-    parser.add_argument("--auto-confirm-erase", action="store_true")
+    parser.add_argument("--manual-target-confirmation", action="store_true")
+    parser.add_argument("--auto-confirm-erase", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--host-full-flash-authorized", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--verbose-acks", action="store_true")
+    parser.add_argument("--skip-baud-negotiation", action="store_true")
     parser.add_argument("--preflight-scratch", default="0x00ff0000")
     parser.add_argument("--preflight-seed", default="0x504d4f53")
-    parser.add_argument("--preflight-receipt", type=Path,
-                        help="write an atomic JSON receipt after a successful destructive preflight")
+    parser.add_argument("--preflight-receipt", type=Path)
     args = parser.parse_args()
 
+    if args.baud != 115200:
+        raise ProtocolError("RAM-loader bootstrap must remain at the stable 115200 baud")
     if args.target_model not in MODEL_FAMILY:
         raise ProtocolError(f"unsupported exact target model: {args.target_model}")
+    auto_confirm_authorized = args.host_full_flash_authorized or args.auto_confirm_erase
+    if args.operation == "flash" and not args.manual_target_confirmation and not auto_confirm_authorized:
+        raise ProtocolError(
+            "automatic ERASEFLASH response requires prior host full-flash authorization; "
+            "use the firmware-flasher wrapper or --manual-target-confirmation"
+        )
     compatibility_override = args.force or args.operation in ("verify", "preflight", "dry-run")
     bundle = None
     manifest = None
     if args.operation != "preflight":
         if args.firmware is None:
-            raise ProtocolError("--firmware is required except for --operation preflight")
+            raise ProtocolError("--firmware is required except for preflight")
         manifest = args.manifest or Path(str(args.firmware) + ".manifest.json")
         bundle = validate_bundle(args.firmware, manifest, args.target_model, force=compatibility_override)
 
@@ -295,156 +333,79 @@ def main() -> int:
         print(f"target: {args.target_model} / boot-family={MODEL_FAMILY[args.target_model]}")
         print(f"preflight scratch: {int(args.preflight_scratch, 0):#010x} (64 KiB, restored after test)")
     print(f"recovery path: {args.recovery_path}")
-    if descriptor is not None:
+    if descriptor:
         print(f"external payload: {args.payload} ({descriptor.family}, {descriptor.size} bytes, sha256 {descriptor.sha256})")
-    else:
-        print("external payload: not required; meraki-redboot embeds the family recovery stage")
-    if bundle is not None:
-        print("local validation: loader menu, embedded recovery binding, SPIM alignment/CRC, image digest, and model policy OK")
-    else:
-        print("local validation: recovery payload entry, SoC family, SPI enable, and preflight contracts OK")
     if args.operation == "verify":
         print("verify completed without opening the serial port or sending data")
         return 0
     if not args.port:
-        raise ProtocolError("--port is required for preflight, dry-run and flash operations")
+        raise ProtocolError("--port is required for hardware operations")
 
+    latency_state = tune_usb_serial_latency(args.port)
     fd = os.open(args.port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     old = configure_serial(fd, args.baud)
     link = SerialLink(fd)
+    controller = BaudController(fd, args.baud)
     try:
         print("Reset or power-cycle the switch now; waiting for the meraki-redboot recovery menu...")
         try:
             selected_path = enter_recovery(
-                link, args.recovery_path, MODEL_FAMILY[args.target_model], args.ready_timeout, payload_data,
-                load, entry, args.chunk_size, args.frame_retries, args.ack_timeout,
+                link, args.recovery_path, MODEL_FAMILY[args.target_model], args.ready_timeout,
+                payload_data, load, entry, args.chunk_size, args.frame_retries, args.ack_timeout,
             )
         except EmbeddedRecoveryEntryError as exc:
             if args.recovery_path != "auto" or payload_data is None:
-                raise ProtocolError(
-                    f"{exc}. Power-cycle and retry with --recovery-path ram-upload using a "
-                    "flat-binary-byte-zero-v1 recovery payload."
-                ) from exc
-            print(f"embedded recovery failed to enter: {exc}", file=sys.stderr, flush=True)
-            print(
-                "AUTO FALLBACK: power-cycle or reset the switch now. The host will wait for the "
-                "meraki-redboot menu and select UART RAM-loader option 1.",
-                file=sys.stderr, flush=True,
-            )
+                raise
+            print(f"embedded recovery failed: {exc}", file=sys.stderr, flush=True)
+            print("Power-cycle now; automatic fallback will select RAM-loader option 1.", file=sys.stderr, flush=True)
             link.discard_buffer()
             selected_path = enter_recovery(
-                link, "ram-upload", MODEL_FAMILY[args.target_model], args.fallback_ready_timeout, payload_data,
-                load, entry, args.chunk_size, args.frame_retries, args.ack_timeout,
+                link, "ram-upload", MODEL_FAMILY[args.target_model], args.fallback_ready_timeout,
+                payload_data, load, entry, args.chunk_size, args.frame_retries, args.ack_timeout,
             )
-        print(
-            f"target recovery stage ready through {selected_path}; "
-            "descriptor complete, beginning package transfer",
-            flush=True,
-        )
+        print(f"target PMOSREC v3 ready through {selected_path}", flush=True)
+
+        baud = args.baud if args.skip_baud_negotiation else negotiate_fastest_baud(link, controller)
+        transport = qualify_transport(link, baud, verbose_acks=args.verbose_acks)
 
         if args.operation == "preflight":
-            preflight_header = make_preflight_header(
-                scratch_address=int(args.preflight_scratch, 0),
-                pattern_seed=int(args.preflight_seed, 0),
+            link.write_all(
+                f"PMOS3 PREFLIGHT {int(args.preflight_scratch, 0)} {int(args.preflight_seed, 0)}\n".encode("ascii")
             )
-            link.write_all(preflight_header)
             link.wait_for(("PMOSPFT HEADER-ACK",), 5.0)
             result = link.wait_for(("PMOSREC RESULT PREFLIGHT-OK",), args.operation_timeout)
             print(result)
-            if args.preflight_receipt is not None:
-                receipt = {
-                    "format": "postmerkos.bootloader-preflight-receipt.v1",
-                    "result": "pass",
-                    "completed_utc": datetime.now(timezone.utc).isoformat(),
-                    "target_model": args.target_model,
-                    "soc_family": MODEL_FAMILY[args.target_model],
-                    "recovery_path": selected_path,
-                    "serial_device": args.port,
-                    "scratch_address": int(args.preflight_scratch, 0),
-                    "scratch_bytes": 64 * 1024,
-                    "pattern_seed": int(args.preflight_seed, 0),
-                    "restore_original": True,
-                    "recovery_payload_sha256": descriptor.sha256 if descriptor is not None else None,
-                    "hardware_preflight_contract": (
-                        descriptor.hardware_preflight_contract if descriptor is not None
-                        else "spi-nor-scratch-rw-restore-loader-crc-v3"
-                    ),
-                    "spi_master_enable_contract": (
-                        descriptor.spi_master_enable_contract if descriptor is not None
-                        else "preserve-general-ctrl-enable-spi-v1"
-                    ),
-                    "target_result_line": result,
-                }
-                args.preflight_receipt.parent.mkdir(parents=True, exist_ok=True)
-                temporary = args.preflight_receipt.with_name(args.preflight_receipt.name + ".tmp")
-                temporary.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-                os.chmod(temporary, 0o600)
-                temporary.replace(args.preflight_receipt)
+            if args.preflight_receipt:
+                write_preflight_receipt(args.preflight_receipt, args, selected_path, descriptor, transport, result)
                 print(f"preflight receipt: {args.preflight_receipt}")
-            print("pre-kernel UART/NOR preflight completed successfully; original scratch sector restored")
+            print("PMOSREC v3 adaptive UART and destructive NOR preflight completed successfully")
             return 0
 
         assert bundle is not None
-        package_header = make_package_header(
-            bundle, dry_run=args.operation == "dry-run", force=compatibility_override,
-            chunk_size=args.chunk_size,
+        result = send_package_v3(
+            link, bundle, transport,
+            dry_run=args.operation == "dry-run",
+            force=compatibility_override,
+            auto_confirm=(not args.manual_target_confirmation and auto_confirm_authorized),
+            verbose_acks=args.verbose_acks,
+            operation_timeout=args.operation_timeout,
         )
-        link.write_all(package_header)
-        link.wait_for(("PMOSPKG HEADER-ACK",), 5.0)
-        send_object(
-            link, bundle.image, None, OBJECT_IMAGE, args.chunk_size,
-            args.frame_retries, args.ack_timeout,
-        )
-        send_object(
-            link, None, bundle.manifest_bytes, OBJECT_MANIFEST, args.chunk_size,
-            args.frame_retries, args.ack_timeout,
-        )
-        link.wait_for(("PMOSPKG VERIFIED",), 10.0)
-
-        if args.operation == "dry-run":
-            result = link.wait_for(("PMOSREC RESULT DRY-RUN-OK",), 10.0)
-            print(result)
-            return 0
-
-        challenge_line = link.wait_for(("PMOSREC ERASE-CHALLENGE",), 10.0)
-        match = CHALLENGE.match(challenge_line)
-        if not match:
-            raise ProtocolError(f"invalid erase challenge: {challenge_line}")
-        nonce = match.group(1)
-        if not args.auto_confirm_erase:
-            print("\nDANGER: the target validated the bundle and is ready to erase the complete SPI NOR.")
-            confirmation = input(f"Type ERASEFLASH {nonce} to continue: ").strip()
-            if confirmation != f"ERASEFLASH {nonce}":
-                raise ProtocolError("erase confirmation was not provided")
-        link.write_all(f"ERASEFLASH {nonce}\n".encode("ascii"))
-        link.wait_for(("PMOSREC CONFIRMATION-ACK",), 5.0)
-        try:
-            result = link.wait_for(
-                ("PMOSREC RESULT SUCCESS", "PMOSREC RESULT ABORT", "PMOSREC RESULT ERROR"),
-                args.operation_timeout,
-            )
-        except ProtocolError as exc:
-            raise ProtocolError(f"target recovery failed: {exc}") from exc
-        if result != "PMOSREC RESULT SUCCESS":
-            raise ProtocolError(result)
-        print("pre-kernel recovery completed successfully; power-cycle the target")
+        print(result)
+        print("pre-kernel recovery completed successfully")
         return 0
     finally:
+        try:
+            controller.set_rate(115200)
+        except Exception:
+            pass
         termios.tcsetattr(fd, termios.TCSANOW, old)
         os.close(fd)
+        restore_usb_serial_latency(latency_state)
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except ProtocolError as exc:
-        message = str(exc)
-        print(f"bootloader recovery error: {message}", file=sys.stderr)
-        if "FLASH-NO-RESPONSE" in message:
-            print(
-                "diagnosis: SPI NOR did not answer the JEDEC probe; verify that the "
-                "recovery descriptor reports PREFLIGHT=3. Older PREFLIGHT=2 payloads "
-                "used inverted MSCC chip-select values and always read ffffff.",
-                file=sys.stderr,
-            )
+        print(f"bootloader recovery error: {exc}", file=sys.stderr)
         raise SystemExit(1)

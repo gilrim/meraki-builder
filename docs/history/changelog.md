@@ -1,3 +1,13 @@
+# 2026-06-20 PMOSREC v3 adaptive UART transport
+
+- Keep the meraki-redboot menu and PMOSRAM executable upload fixed at 115200 baud, then negotiate optimized transport only after PMOSREC starts in RAM.
+- Add target-divisor-aware baud proposals, bidirectional deterministic qualification, autonomous rollback, and midpoint refinement with a 2% cutoff.
+- Add preferred 4 KiB frames, negotiated windows up to 16 frames, CRC-protected compact cumulative acknowledgements, and selective retransmission.
+- Validate the manifest before the large image transfer and qualify raw, sparse, LZ4, and sparse-LZ4 representations before selecting the smallest verified wire image.
+- Preserve per-frame CRC-32, object CRC-32/SHA-256, reconstructed full-image SHA-256, model/layout/JEDEC checks, and complete flash readback verification.
+- Add immediate host-side progress and measured ETA, infinite manual erase-confirmation retries, authorized automatic live-challenge response, and a target-side five-second reboot after success.
+- Add the `PMOSRECOVERY3`, `PREFLIGHT=4`, and `pmosrec-v3-adaptive-uart-sparse-lz4-v1` cache and release-manifest boundaries.
+
 # 2026-06-20 bounded embedded release metadata
 
 - Replace the fixed 4 KiB trailer copy of the complete release manifest with a compact `embedded-update-index-v1` record.

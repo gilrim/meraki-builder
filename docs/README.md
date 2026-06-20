@@ -55,3 +55,7 @@
 - [Legacy build systems](history/legacy-build-systems.md)
 - [Change history](history/changelog.md)
 - [UART recovery package-header handoff correction](history/uart-recovery-package-header-handoff.md)
+
+## Adaptive recovery
+
+- [PMOSREC v3 adaptive UART transport](architecture/pmosrec-v3-adaptive-uart.md)

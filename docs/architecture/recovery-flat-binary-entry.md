@@ -12,7 +12,7 @@ PMOSBOOT PASS-RECOVERY-COPY: LOAD: 0x81000000
 PMOSBOOT PASS-RECOVERY-EXEC: ENTRY: 0x81000000
 ```
 
-without ever reaching `PMOSREC READY 2`.
+without ever reaching `PMOSREC READY 3`.
 
 The corrected source has a dedicated `entry.S` in `.text.start`, links it first,
 discards non-runtime MIPS metadata, asserts `_start == 0x81000000`, initializes

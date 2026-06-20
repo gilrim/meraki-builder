@@ -26,6 +26,6 @@ The target prints the following before its JEDEC probe:
 PMOSREC SPI-CS-CONTRACT ACTIVE-MASK CS0=00000001 NONE=00000000
 ```
 
-Payloads lacking `PREFLIGHT=3` and
-`spi-nor-scratch-rw-restore-loader-crc-v3` are rejected by the builder and host
+Current payloads require `PREFLIGHT=4` and
+`spi-nor-scratch-rw-restore-loader-crc-v4`; older chip-select implementations are rejected by the builder and host
 flasher so the inverted-CS implementation cannot be reused from cache.

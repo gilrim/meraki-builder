@@ -25,20 +25,22 @@ independent full-flash acknowledgements.
   --bootloader-recovery \
   --firmware artifacts/<full-image>.bin \
   --target-model MS42P \
-  --serial-device /dev/ttyUSB0
+  --serial-device /dev/serial/by-id/<adapter>
 ```
 
-The default `--recovery-path ram-upload` drives meraki-redboot menu option 1
-and uploads the corrected model-specific recovery stage. This is required for
-an original v0.7.0 loader because its embedded raw recovery binary can jump into
-MIPS metadata instead of `_start`. After a corrected loader is installed,
-`--recovery-path embedded` uses menu option 2. `--recovery-payload FILE`
-retains option-1 compatibility for external payload testing or older loaders.
-`--recovery-path auto` prefers embedded recovery and permits the direct
-RAM-loader fallback only when a valid external payload is supplied.
+The default RAM-upload path keeps bootloader and executable transfer at the
+stable 115200 baud, then runs PMOSREC v3 from RAM. PMOSREC qualifies faster
+target-generated baud rates, 4096-byte frames, windowed compact ACKs, sparse
+reconstruction and LZ4 blocks. It validates the manifest before the image and
+selects the smallest qualified wire representation.
 
-Verify is host-only, dry-run performs target validation without writes, and
-flash uses the nonce-gated complete-NOR sequence documented in
+The wrapper automatically returns the target's live erase challenge only after
+the user has supplied `FLASH-ALL`. `--manual-target-confirmation` keeps the
+target waiting indefinitely and allows unlimited retries. Successful flashing
+ends with a target-side five-second reset countdown.
+
+Use `--bootloader-preflight` to qualify UART and destructive-but-restored SPI
+NOR behavior without transferring a firmware image. Detailed behavior is in
 [`BOOTLOADER-RECOVERY.md`](BOOTLOADER-RECOVERY.md).
 
 ## Examples
