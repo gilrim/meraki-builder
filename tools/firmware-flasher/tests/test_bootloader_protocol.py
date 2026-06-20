@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+import io
 import hashlib
 import importlib.util
 import json
@@ -213,6 +215,23 @@ class ProtocolTests(unittest.TestCase):
             link.write_all(b"abcde", timeout=1.0)
         self.assertEqual(captured, b"abcde")
         self.assertFalse(actions)
+
+    def test_read_line_does_not_echo_binary_bytes_buffered_after_line(self) -> None:
+        link = bp.SerialLink(19, echo=True)
+        line = b"PMOS3 BAUD-T2H PASS=0 SEED=12345678 BYTES=8 CRC=9abcdef0 NONCE=01234567\n"
+        binary = b"\x13\x1b[2J\x00\xffAB"
+        output = io.StringIO()
+
+        with mock.patch.object(bp.select, "select", return_value=([19], [], [])), \
+             mock.patch.object(bp.os, "read", return_value=line + binary), \
+             redirect_stdout(output):
+            observed = link.read_line(1.0)
+            recovered = link.read_exact(len(binary), 1.0, echo=False)
+
+        self.assertEqual(observed, line.rstrip(b"\n").decode("ascii"))
+        self.assertEqual(recovered, binary)
+        self.assertEqual(output.getvalue(), line.decode("ascii"))
+        self.assertNotIn("\x1b[2J", output.getvalue())
 
     def test_wait_for_surfaces_recovery_stage_failure(self) -> None:
         link = bp.SerialLink(19, echo=False)

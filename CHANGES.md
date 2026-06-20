@@ -20,9 +20,16 @@
   conservative inter-frame idle guard.
 - Preserve textual `FEATURE-FAIL` output consumed during compact-ACK scanning so
   command-level recovery can resynchronize cleanly.
+- Return the host UART to 115200 immediately after `PMOSREC REBOOT NOW`, clear
+  stale negotiated-rate bytes, and monitor several early loader/kernel markers.
+- Classify serial input before echoing it: only complete ASCII protocol lines are
+  written to the operator console, while deterministic baud-test and compact-ACK
+  binary bytes stay silent. This prevents random XOFF and terminal escape bytes
+  from freezing or corrupting live progress output while the transfer continues.
 - Add regression tests for CRLF-expanded ACKs, missing bytes, conservative baud
   ordering, diagnostic refinement, safe window selection, guarded multi-frame
-  output, terminal-status preservation, and branch-selection policy.
+  output, reboot baud handoff, binary-safe console output, terminal-status
+  preservation, and branch-selection policy.
 
 ## meraki-redboot
 

@@ -480,17 +480,30 @@ class SerialLink:
             view = view[count:]
 
     def _read_once(self, timeout: float) -> bytes:
+        """Read serial bytes without writing unclassified data to the terminal.
+
+        A single kernel read can contain both an ASCII status line and the start
+        of a binary payload.  Echoing that raw read can inject XOFF or terminal
+        escape sequences into the operator's terminal while the transfer keeps
+        running.  Text is echoed only after read_line() has isolated a complete
+        protocol line; binary reads remain silent unless explicitly requested.
+        """
         readable, _, _ = select.select([self.fd], [], [], max(0.0, timeout))
         if not readable:
             return b""
         try:
-            data = os.read(self.fd, 4096)
+            return os.read(self.fd, 4096)
         except (BlockingIOError, InterruptedError):
             return b""
-        if data and self.echo:
-            sys.stdout.buffer.write(data)
-            sys.stdout.buffer.flush()
-        return data
+
+    @staticmethod
+    def _safe_line_for_console(raw: bytes) -> str:
+        payload = raw.rstrip(b"\r\n")
+        return "".join(
+            chr(value) if value == 0x09 or 0x20 <= value <= 0x7E
+            else f"\\x{value:02x}"
+            for value in payload
+        )
 
     def discard_buffer(self) -> None:
         self.buffer.clear()
@@ -545,6 +558,8 @@ class SerialLink:
             if newline >= 0:
                 raw = bytes(self.buffer[: newline + 1])
                 del self.buffer[: newline + 1]
+                if self.echo:
+                    print(self._safe_line_for_console(raw), flush=True)
                 return raw.rstrip(b"\r\n").decode("utf-8", "replace")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
