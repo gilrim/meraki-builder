@@ -54,9 +54,13 @@ The release manifest also records:
 - recovery descriptors, flash geometry, accepted JEDEC IDs, and delivery paths;
 - per-region offsets and sizes.
 
-A rootfs that fills the 8 MiB SquashFS region is copied byte-for-byte. Embedded
-rootfs metadata is added only when natural padding leaves at least 4 KiB; the
-sidecar release manifest remains authoritative.
+A rootfs that fills the 8 MiB SquashFS region is copied byte-for-byte. When
+natural padding leaves at least 4 KiB, the image receives a compact
+`embedded-update-index-v1` trailer containing only version, exact-model states,
+target family, and API/schema identifiers. The complete recovery, preflight,
+loader, region, and digest contract remains in `/etc/postmerkos-release.json`
+and the checksummed sidecar release manifest, which is authoritative. Growth of
+the complete manifest can therefore never make the firmware image build fail.
 
 ## Validation targets
 
