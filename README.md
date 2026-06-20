@@ -56,17 +56,17 @@ This project is provided without warranty. Keep a direct hardware recovery metho
 ## PMOSREC v3 adaptive pre-kernel recovery
 
 The full-image UART recovery path keeps meraki-redboot and `PMOSRAM2` at
-115200 baud, then negotiates faster target-generated rates inside the RAM-resident
-PMOSREC stage. It qualifies bidirectional deterministic CRC traffic, 4 KiB
-frames, windowed compact acknowledgements, sparse reconstruction and LZ4
-blocks before transferring the manifest and image. The complete reconstructed
+115200 baud, then tries 921600, 460800, and 230400 baud once each inside the
+RAM-resident PMOSREC stage, fastest first. It qualifies bidirectional deterministic
+CRC traffic, 4 KiB frames, windowed compact acknowledgements, sparse reconstruction
+and LZ4 blocks before transferring the manifest and image. The complete reconstructed
 16 MiB image is still SHA-256 verified before erase authorization. See
 [`docs/architecture/pmosrec-v3-adaptive-uart.md`](docs/architecture/pmosrec-v3-adaptive-uart.md).
 
 ### Authoritative upstream source policy
 
 The build always refreshes `Gadorach/meraki-redboot` and
-`Gadorach/postmerkos-ui` from `origin/main` by default. `meraki-builder` does
+`Gadorach/postmerkos-ui` from `origin/ms42p-dev` by default. `meraki-builder` does
 not apply patches, create repair commits, or rewrite either checkout. Loader,
 recovery, and UI changes must be committed to their own repositories. The
 builder records the exact selected commits and fails clearly when an upstream

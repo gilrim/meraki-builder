@@ -9,7 +9,7 @@ tests adaptive UART transport and SPI NOR read/write behavior.
 1. Enter meraki-redboot menu option 1 or a contract-compatible option 2.
 2. Validate the PMOSREC v3 descriptor and target family.
 3. Complete early SPI-controller, JEDEC, SFDP, status and protection checks.
-4. Negotiate target-generated UART rates and run deterministic bidirectional
+4. Try the conventional 921600, 460800, and 230400 UART rates once each and run deterministic bidirectional
    CRC tests with independent rollback.
 5. Qualify 4096-byte frames, window sizes, compact ACKs, sparse reconstruction
    and independent LZ4 blocks.

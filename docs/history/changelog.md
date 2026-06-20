@@ -1,3 +1,14 @@
+# 2026-06-20 UART recovery ACK and negotiation corrections
+
+- Split meraki-redboot text output from byte-transparent binary UART output so
+  compact ACKs and target-to-host qualification data preserve every byte.
+- Replace the normal flasher baud sweep with one fastest-first pass over 921600,
+  460800, and 230400 baud; retain the broad scan only as an explicit diagnostic.
+- Add ACK-magic resynchronization and terminal-state recovery before issuing the
+  next PMOSREC command after a failed feature test.
+- Correct overflowed target `ERROR_PPM` diagnostics.
+- Restore `postmerkos-ui:ms42p-dev` as the documented and tested default branch.
+
 # 2026-06-20 management startup, console, and verified PoE corrections
 
 - Replace cross-process loader source variables with durable JSON provenance records consumed by the loader build.
@@ -11,7 +22,7 @@
 
 # 2026-06-20 authoritative upstream main policy
 
-- Make `Gadorach/meraki-redboot:main` and `Gadorach/postmerkos-ui:main` the default authoritative sources.
+- Make `Gadorach/meraki-redboot:main` and `Gadorach/postmerkos-ui:ms42p-dev` the default authoritative sources.
 - Treat the legacy `LOADER_REF=latest` value as an alias for `main`, never as the newest version tag.
 - Remove all meraki-redboot patch files and automatic source-repair commits from meraki-builder.
 - Reject dirty, stale, or contract-incompatible upstream checkouts instead of modifying them.
@@ -22,7 +33,7 @@
 # 2026-06-20 PMOSREC v3 adaptive UART transport
 
 - Keep the meraki-redboot menu and PMOSRAM executable upload fixed at 115200 baud, then negotiate optimized transport only after PMOSREC starts in RAM.
-- Add target-divisor-aware baud proposals, bidirectional deterministic qualification, autonomous rollback, and midpoint refinement with a 2% cutoff.
+- Add target-divisor-aware baud proposals, bidirectional deterministic qualification, autonomous rollback, and optional diagnostic midpoint refinement with a 2% cutoff.
 - Add preferred 4 KiB frames, negotiated windows up to 16 frames, CRC-protected compact cumulative acknowledgements, and selective retransmission.
 - Validate the manifest before the large image transfer and qualify raw, sparse, LZ4, and sparse-LZ4 representations before selecting the smallest verified wire image.
 - Preserve per-frame CRC-32, object CRC-32/SHA-256, reconstructed full-image SHA-256, model/layout/JEDEC checks, and complete flash readback verification.

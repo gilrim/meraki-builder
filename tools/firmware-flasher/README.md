@@ -29,9 +29,10 @@ independent full-flash acknowledgements.
 ```
 
 The default RAM-upload path keeps bootloader and executable transfer at the
-stable 115200 baud, then runs PMOSREC v3 from RAM. PMOSREC qualifies faster
-target-generated baud rates, 4096-byte frames, windowed compact ACKs, sparse
-reconstruction and LZ4 blocks. It validates the manifest before the image and
+stable 115200 baud, then runs PMOSREC v3 from RAM. By default the host tries
+921600, 460800, and 230400 baud once each, fastest first, and stops at the first
+bidirectional pass. It then qualifies 4096-byte frames, windowed compact ACKs,
+sparse reconstruction and LZ4 blocks. It validates the manifest before the image and
 selects the smallest qualified wire representation.
 
 The wrapper automatically returns the target's live erase challenge only after

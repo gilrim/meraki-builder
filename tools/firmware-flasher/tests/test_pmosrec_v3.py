@@ -16,16 +16,15 @@ from bootloader_protocol import ProtocolError
 
 class FakeBinaryLink:
     def __init__(self, reads: list[bytes]) -> None:
-        self.reads = list(reads)
+        self.data = bytearray().join(reads)
         self.writes: list[bytes] = []
 
     def read_exact(self, length: int, timeout: float, *, echo: bool = False) -> bytes:
-        if not self.reads:
+        if len(self.data) < length:
             raise ProtocolError("timed out reading binary bytes")
-        data = self.reads.pop(0)
-        if len(data) != length:
-            raise AssertionError((len(data), length))
-        return data
+        output = bytes(self.data[:length])
+        del self.data[:length]
+        return output
 
     def write_all(self, data: bytes, timeout: float = 10.0) -> None:
         self.writes.append(bytes(data))
@@ -111,13 +110,23 @@ class PMOSRECv3Tests(unittest.TestCase):
         self.assertEqual(fields[8], zlib.crc32(decoded) & 0xFFFFFFFF)
         self.assertEqual(fields[9], zlib.crc32(wire[: p3.FRAME_HEADER.size - 4]) & 0xFFFFFFFF)
 
-    def test_compact_ack_is_crc_checked_and_confirmed(self) -> None:
+    def test_compact_ack_is_crc_checked_resynchronized_and_confirmed(self) -> None:
+        body = struct.pack("<6I", p3.ACK_MAGIC, p3.OBJECT_IMAGE, 10, 4, 0, 0)
+        good = body + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
+        # Reproduce the former target bug: every binary 0x0a was expanded to
+        # CRLF, lengthening and misaligning the first ACK. The retransmitted
+        # unmodified record must still be found by its magic and accepted.
+        newline_expanded = good.replace(b"\x0a", b"\r\n")
+        link = FakeBinaryLink([b"junk", newline_expanded, good])
+        self.assertEqual(p3._read_ack(link, p3.OBJECT_IMAGE, 10.0), (10, 4, 0, 0))
+        self.assertEqual(link.writes, [p3.ACK_CONFIRM_BYTE])
+
+    def test_compact_ack_recovers_after_a_missing_byte(self) -> None:
         body = struct.pack("<6I", p3.ACK_MAGIC, p3.OBJECT_IMAGE, 8, 4, 0, 0)
         good = body + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
-        bad = good[:-1] + bytes([good[-1] ^ 0x80])
-        link = FakeBinaryLink([bad, good])
-        self.assertEqual(p3._read_ack(link, p3.OBJECT_IMAGE, 8.0), (8, 4, 0, 0))
-        self.assertEqual(link.writes, [p3.ACK_CONFIRM_BYTE])
+        damaged = good[:11] + good[12:]
+        link = FakeBinaryLink([damaged, good, good])
+        self.assertEqual(p3._read_ack(link, p3.OBJECT_IMAGE, 10.0), (8, 4, 0, 0))
 
     def test_package_header_is_v3_manifest_first_and_crc_bound(self) -> None:
         class Bundle:
@@ -170,31 +179,35 @@ class PMOSRECv3Tests(unittest.TestCase):
         with self.assertRaisesRegex(ProtocolError, "PROGRAM-TIMEOUT"):
             p3.wait_for_flash_success(link, 1.0)
 
-    def test_baud_refinement_stops_at_two_percent(self) -> None:
+    def test_default_baud_scan_is_descending_single_pass_and_stops_on_success(self) -> None:
         class Controller:
             current_rate = 115200
 
-        link = object()
-        results = {
-            153600: (True, 153600),
-            230400: (True, 230400),
-            250000: (True, 250000),
-            256000: (True, 256000),
-            307200: (True, 307200),
-            460800: (True, 460800),
-            500000: (False, 500000),
-        }
+        results = {921600: (False, 929828), 460800: (True, 464914), 230400: (True, 228378)}
 
         def candidate(_link, _controller, requested, current, tested):
-            if requested in results:
-                return results[requested]
-            return False, requested
+            return results[requested]
 
-        with mock.patch.object(p3, "STANDARD_BAUDS", tuple(results)), \
+        with mock.patch.object(p3, "test_baud_candidate", side_effect=candidate) as called:
+            selected = p3.negotiate_fastest_baud(object(), Controller())
+        self.assertEqual(selected, 464914)
+        self.assertEqual([call.args[2] for call in called.call_args_list], [921600, 460800])
+
+    def test_diagnostic_baud_scan_retains_midpoint_refinement(self) -> None:
+        class Controller:
+            current_rate = 115200
+
+        results = {153600: (True, 153600), 230400: (True, 230400), 460800: (True, 460800), 500000: (False, 500000)}
+
+        def candidate(_link, _controller, requested, current, tested):
+            return results.get(requested, (False, requested))
+
+        with mock.patch.object(p3, "DIAGNOSTIC_BAUD_CANDIDATES", tuple(results)), \
              mock.patch.object(p3, "test_baud_candidate", side_effect=candidate) as called:
-            selected = p3.negotiate_fastest_baud(link, Controller(), refine_percent=2.0)
+            selected = p3.negotiate_fastest_baud(
+                object(), Controller(), diagnostic_scan=True, refine_percent=2.0
+            )
         self.assertEqual(selected, 460800)
-        # Gap to 500000 is >2%, so at least one midpoint is considered.
         self.assertTrue(any(call.args[2] == 480400 for call in called.call_args_list))
 
     def _package_fixture(self):
@@ -281,7 +294,8 @@ class PMOSRECv3Tests(unittest.TestCase):
         source = (Path(__file__).resolve().parents[1] / "pmosrec_v3.py").read_text()
         for token in (
             "BAUD-SYNC-ACK", "BAUD-COMMIT", "BAUD-COMMITTED",
-            "BAUD-FALLBACK-READY", "refine_percent", "STANDARD_BAUDS",
+            "BAUD-FALLBACK-READY", "refine_percent", "DEFAULT_BAUD_CANDIDATES",
+            "DIAGNOSTIC_BAUD_CANDIDATES", "diagnostic_scan",
             "termios2", "sparse-lz4", "ACK_CONFIRM_BYTE",
         ):
             self.assertIn(token, source)

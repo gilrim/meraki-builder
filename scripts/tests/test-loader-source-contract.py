@@ -8,7 +8,7 @@ build_ui = (ROOT / "scripts/build-ui.sh").read_text(encoding="utf-8")
 build_loader = (ROOT / "scripts/build-loader.sh").read_text(encoding="utf-8")
 
 assert 'LOADER_REF="${LOADER_REF:-main}"' in common
-assert 'UI_REF="${UI_REF:-main}"' in common
+assert 'UI_REF="${UI_REF:-ms42p-dev}"' in common
 assert 'if [[ "$ref" == latest ]]' in common and 'ref=main' in common
 assert 'origin/$ref' in common
 assert 'latest tagged' not in common

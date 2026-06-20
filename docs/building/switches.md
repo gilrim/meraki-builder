@@ -32,7 +32,7 @@ The builder never applies patches, creates commits, or rewrites files in the
 meraki-redboot checkout. Required loader or recovery changes must be committed to
 `Gadorach/meraki-redboot` itself. If the selected source lacks a required contract,
 the build stops with a contract error. The same immutable-upstream policy applies
-to `Gadorach/postmerkos-ui`, whose default source is `origin/main`.
+to `Gadorach/postmerkos-ui`, whose default source is `origin/ms42p-dev`.
 
 `LOADER_VARIANT=development` is the default for this project integration. It
 retains the loader's warn-and-continue compatibility policy where continuation
