@@ -115,6 +115,19 @@ and waits forever. Power cycle the switch to cancel without writing flash.
 Initial ETA is derived from the selected baud and wire representation. It is
 replaced by rolling measured throughput once enough data has transferred.
 
+## Console-output safety
+
+The recovery client prints only complete target protocol lines. Binary compact
+ACKs and deterministic target-to-host baud-test payloads are never copied to the
+operator terminal or text log. A serial read can contain an ASCII header and the
+start of its binary payload in the same kernel buffer, so raw-read echoing is not
+safe: random payload bytes can include XOFF or terminal escape sequences that
+make a healthy transfer appear stalled.
+
+When using an older client that has already stopped rendering while its log keeps
+growing, press `Ctrl+Q` once to release terminal flow control without aborting the
+flash. The corrected client does not require this workaround.
+
 ## Hardware preflight
 
 Run the short destructive-but-restored test before a full flash:
