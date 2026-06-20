@@ -220,6 +220,7 @@ enum command_mode {
 };
 
 int main(int argc, char **argv) {
+  signal(SIGPIPE, SIG_IGN);
   int websocket_port = 4001;
   int status_interval = 3;
   int network_wait = 60;

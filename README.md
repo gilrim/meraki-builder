@@ -38,6 +38,12 @@ Build help is available with:
 make help
 ```
 
+Buildroot output is safe to reuse across normal source edits. The build tracks
+base-versus-web mode and fingerprints the local configd package, automatically
+cleaning or invalidating stale output when required. Use `CLEAN_BUILDROOT=1 make
+web` only when an explicit full Buildroot rebuild is desired; this setting is
+forwarded through the supported Distrobox path.
+
 ## Safety
 
 - Disconnect switch power before attaching or using an SPI programmer.

@@ -14,6 +14,7 @@
 #include "service_ops.h"
 #include "time_ops.h"
 #include "json_util.h"
+#include "socket_io.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -36,15 +37,7 @@ static int send_json(int fd, const char *type, struct json_object *data) {
   json_object_object_add(reply, "type", json_object_new_string(type));
   json_object_object_add(reply, "data", data ? json_object_get(data) : json_object_new_null());
   const char *text = json_object_to_json_string_ext(reply, JSON_C_TO_STRING_PLAIN);
-  size_t left = strlen(text);
-  const char *cursor = text;
-  int rc = 0;
-  while (left) {
-    ssize_t wrote = write(fd, cursor, left);
-    if (wrote < 0) { if (errno == EINTR) continue; rc = -errno; break; }
-    cursor += wrote; left -= (size_t)wrote;
-  }
-  if (rc == 0 && write(fd, "\n", 1) != 1) rc = -EIO;
+  int rc = socket_write_line(fd, text, strlen(text));
   json_object_put(reply);
   return rc;
 }
@@ -130,10 +123,15 @@ static void handle_client(int fd) {
     return;
   }
 
-  char buffer[LOCAL_REQUEST_MAX + 1];
-  ssize_t got = read(fd, buffer, LOCAL_REQUEST_MAX);
-  if (got <= 0) return;
-  buffer[got] = '\0';
+  char buffer[LOCAL_REQUEST_MAX + 2];
+  ssize_t got = socket_read_line(fd, buffer, sizeof(buffer), 5000);
+  if (got == 0) return;
+  if (got < 0) {
+    if (got == -EMSGSIZE) send_error(fd, 413, "request exceeds local protocol limit");
+    else if (got != -ECONNRESET && got != -EPIPE)
+      send_error(fd, 400, got == -ETIMEDOUT ? "request timed out" : "request read failed");
+    return;
+  }
   struct json_object *request = json_tokener_parse(buffer);
   const char *type = request_type(request);
   if (!request || !type) { send_error(fd, 400, "malformed request"); goto done; }

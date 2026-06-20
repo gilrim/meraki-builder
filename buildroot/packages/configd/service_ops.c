@@ -123,6 +123,8 @@ struct json_object *service_policy_load(void) {
   return policy;
 }
 
+static bool process_running(const char *name);
+
 static const char *service_pattern(const char *service) {
   if (!strcmp(service, "ssh")) return "dropbear";
   if (!strcmp(service, "web")) return "uhttpd";
@@ -130,20 +132,38 @@ static const char *service_pattern(const char *service) {
   return NULL;
 }
 
+static const char *init_directory(void) {
+  const char *path = getenv("POSTMERKOS_INIT_DIR");
+  return path && *path ? path : "/etc/init.d";
+}
+
+static const char *proc_directory(void) {
+  const char *path = getenv("POSTMERKOS_PROC_DIR");
+  return path && *path ? path : "/proc";
+}
+
 static int find_init_script(const char *pattern, char *path, size_t path_size) {
-  DIR *dir = opendir("/etc/init.d");
+  const char *base = init_directory();
+  DIR *dir = opendir(base);
   if (!dir) return -errno;
   struct dirent *entry;
   int rc = -ENOENT;
   while ((entry = readdir(dir)) != NULL) {
     if (entry->d_name[0] != 'S' || !strstr(entry->d_name, pattern)) continue;
-    if (snprintf(path, path_size, "/etc/init.d/%s", entry->d_name) >= (int)path_size)
+    if (snprintf(path, path_size, "%s/%s", base, entry->d_name) >= (int)path_size)
       rc = -ENAMETOOLONG;
     else rc = 0;
     break;
   }
   closedir(dir);
   return rc;
+}
+
+static const char *service_process_name(const char *service) {
+  if (!strcmp(service, "ssh")) return "dropbear";
+  if (!strcmp(service, "web")) return "uhttpd";
+  if (!strcmp(service, "chrony")) return "chronyd";
+  return NULL;
 }
 
 static int run_script(const char *path, const char *action) {
@@ -161,6 +181,11 @@ int service_action(const char *service, const char *action, char *error, size_t 
       strcmp(action, "restart"))) {
     set_error(error, error_size, "unknown service or action"); return -EINVAL;
   }
+  const char *process = service_process_name(service);
+  bool running = process && process_running(process);
+  if ((!strcmp(action, "start") && running) ||
+      (!strcmp(action, "stop") && !running)) return 0;
+
   char path[256];
   int rc = find_init_script(pattern, path, sizeof(path));
   if (rc != 0) { set_error(error, error_size, "service init script is not installed"); return rc; }
@@ -170,14 +195,15 @@ int service_action(const char *service, const char *action, char *error, size_t 
 }
 
 static bool process_running(const char *name) {
-  DIR *proc = opendir("/proc");
+  const char *base = proc_directory();
+  DIR *proc = opendir(base);
   if (!proc) return false;
   struct dirent *entry;
   bool running = false;
   while ((entry = readdir(proc)) != NULL && !running) {
     if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
     char path[320], command[64] = {0};
-    snprintf(path, sizeof(path), "/proc/%s/comm", entry->d_name);
+    snprintf(path, sizeof(path), "%s/%s/comm", base, entry->d_name);
     FILE *file = fopen(path, "r");
     if (!file) continue;
     if (fgets(command, sizeof(command), file)) {

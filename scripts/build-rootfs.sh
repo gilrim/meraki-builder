@@ -67,11 +67,53 @@ if [[ -d output/build ]]; then
   fi
 fi
 
-if bool_enabled "${CLEAN_BUILDROOT:-0}" || (( need_environment_clean )); then
+current_ui_mode=0
+bool_enabled "${INCLUDE_UI:-0}" && current_ui_mode=1
+ui_mode_stamp="$BUILDROOT_DIR/.ms42p-built-ui-mode"
+need_ui_mode_clean=0
+if [[ -d output/build ]]; then
+  if [[ ! -f "$ui_mode_stamp" ]]; then
+    warn "Existing Buildroot output predates UI-mode tracking; cleaning it once before reuse."
+    need_ui_mode_clean=1
+  elif [[ "$(cat "$ui_mode_stamp")" != "$current_ui_mode" ]]; then
+    warn "Buildroot UI mode changed from '$(cat "$ui_mode_stamp")' to '$current_ui_mode'; cleaning output to remove stale package files."
+    need_ui_mode_clean=1
+  fi
+fi
+
+if bool_enabled "${CLEAN_BUILDROOT:-0}" || (( need_environment_clean || need_ui_mode_clean )); then
   log "Cleaning Buildroot output while preserving the download cache"
   make clean
 fi
 printf '%s\n' "$current_env" > "$env_stamp"
+
+# Buildroot local packages use fixed versions and local source directories, so
+# source edits do not invalidate completed package stamps automatically.
+configd_fingerprint_stamp="$BUILDROOT_DIR/.ms42p-configd-build-fingerprint"
+current_configd_fingerprint="$(python3 - "$BUILDROOT_DIR/package/configd" "$BUILDROOT_DIR/.config" <<'PY_CONFIGD_FINGERPRINT'
+import hashlib
+import sys
+from pathlib import Path
+package = Path(sys.argv[1])
+config = Path(sys.argv[2])
+h = hashlib.sha256()
+for path in sorted(p for p in package.rglob('*') if p.is_file()):
+    h.update(path.relative_to(package).as_posix().encode() + b'\0')
+    h.update(path.read_bytes())
+for line in config.read_text(errors='replace').splitlines():
+    if line.startswith('BR2_PACKAGE_CONFIGD') or line.startswith('# BR2_PACKAGE_CONFIGD'):
+        h.update(line.encode() + b'\n')
+print(h.hexdigest())
+PY_CONFIGD_FINGERPRINT
+)"
+if compgen -G 'output/build/configd-*' >/dev/null; then
+  previous_configd_fingerprint=''
+  [[ -f "$configd_fingerprint_stamp" ]] && previous_configd_fingerprint="$(cat "$configd_fingerprint_stamp")"
+  if [[ "$previous_configd_fingerprint" != "$current_configd_fingerprint" ]]; then
+    warn "configd source or feature selection changed; invalidating the cached Buildroot package."
+    make configd-dirclean
+  fi
+fi
 
 log "Prefetching Buildroot sources"
 run_logged buildroot-download \
@@ -89,12 +131,13 @@ export MS42P_RELEASE="${MS42P_RELEASE:-$(date -u +%Y%m%d)}"
 run_logged buildroot-build \
   make -j"$JOBS" BR2_DL_DIR="$BUILDROOT_DL_DIR" \
   BR2_PRIMARY_SITE="https://sources.buildroot.net"
-
 ROOTFS="$BUILDROOT_DIR/output/images/rootfs.squashfs"
 IMAGE="$BUILDROOT_DIR/output/images/ms42p-firmware.bin"
 [[ -f "$ROOTFS" ]] || die "Buildroot did not produce rootfs.squashfs"
 [[ -f "$IMAGE" ]] || die "The MS42P post-image script did not produce ms42p-firmware.bin"
 [[ "$(file_size "$IMAGE")" -eq $((0x1000000)) ]] || die "Firmware image is not 16 MiB"
+printf '%s\n' "$current_ui_mode" > "$ui_mode_stamp"
+printf '%s\n' "$current_configd_fingerprint" > "$configd_fingerprint_stamp"
 
 python3 "$VENDOR_MODULE_TOOL" verify \
   "$BUILDROOT_DIR/output/target/lib/modules" \

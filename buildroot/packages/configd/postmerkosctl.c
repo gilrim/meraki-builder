@@ -16,6 +16,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "socket_io.h"
+
 #define RESPONSE_MAX 262144
 
 static const char *socket_path(void) {
@@ -53,17 +55,6 @@ static int connect_socket(void) {
   return fd;
 }
 
-
-static int write_all(int fd, const void *data, size_t length) {
-  const unsigned char *cursor = data;
-  while (length) {
-    ssize_t wrote = write(fd, cursor, length);
-    if (wrote < 0) { if (errno == EINTR) continue; return -errno; }
-    if (!wrote) return -EIO;
-    cursor += (size_t)wrote; length -= (size_t)wrote;
-  }
-  return 0;
-}
 
 static int read_exact(int fd, void *data, size_t length) {
   unsigned char *cursor = data;
@@ -130,7 +121,7 @@ static int websocket_hello_probe(int port, char *error, size_t error_size) {
   if (request_length < 0 || (size_t)request_length >= sizeof(request_text)) {
     snprintf(error, error_size, "handshake request overflow"); close(fd); return -EOVERFLOW;
   }
-  int rc = write_all(fd, request_text, (size_t)request_length);
+  int rc = socket_write_all(fd, request_text, (size_t)request_length);
   if (rc != 0) { snprintf(error, error_size, "handshake write failed"); close(fd); return rc; }
   char headers[4096]; size_t used = 0;
   while (used + 1 < sizeof(headers)) {
@@ -151,7 +142,7 @@ static int websocket_hello_probe(int port, char *error, size_t error_size) {
   frame[0] = 0x81; frame[1] = (unsigned char)(0x80U | length);
   memcpy(frame + 2, mask, 4);
   for (size_t i = 0; i < length; i++) frame[6 + i] = (unsigned char)payload[i] ^ mask[i & 3U];
-  if ((rc = write_all(fd, frame, 6 + length)) != 0) {
+  if ((rc = socket_write_all(fd, frame, 6 + length)) != 0) {
     snprintf(error, error_size, "hello write failed"); close(fd); return rc;
   }
   char text[4096]; bool hello = false;
@@ -219,27 +210,25 @@ static struct json_object *request(const char *type, struct json_object *data) {
   json_object_object_add(message, "type", json_object_new_string(type));
   if (data) json_object_object_add(message, "data", json_object_get(data));
   const char *text = json_object_to_json_string_ext(message, JSON_C_TO_STRING_PLAIN);
-  size_t left = strlen(text);
-  const char *cursor = text;
-  while (left) {
-    ssize_t wrote = write(fd, cursor, left);
-    if (wrote < 0) { if (errno == EINTR) continue; break; }
-    cursor += wrote; left -= (size_t)wrote;
+  int write_rc = socket_write_line(fd, text, strlen(text));
+  if (write_rc != 0) {
+    fprintf(stderr, "postmerkosctl: request write failed: %s\n", strerror(-write_rc));
+    close(fd);
+    json_object_put(message);
+    return NULL;
   }
-  write(fd, "\n", 1);
   shutdown(fd, SHUT_WR);
-  char *buffer = malloc(RESPONSE_MAX + 1);
+  char *buffer = malloc(RESPONSE_MAX + 2);
   if (!buffer) { close(fd); json_object_put(message); return NULL; }
-  size_t used = 0;
-  while (used < RESPONSE_MAX) {
-    ssize_t got = read(fd, buffer + used, RESPONSE_MAX - used);
-    if (got == 0) break;
-    if (got < 0) { if (errno == EINTR) continue; break; }
-    used += (size_t)got;
-  }
-  buffer[used] = '\0';
+  ssize_t got = socket_read_line(fd, buffer, RESPONSE_MAX + 2, 5000);
   close(fd);
   json_object_put(message);
+  if (got <= 0) {
+    if (got < 0) fprintf(stderr, "postmerkosctl: response read failed: %s\n", strerror((int)-got));
+    else fprintf(stderr, "postmerkosctl: configd closed without a response\n");
+    free(buffer);
+    return NULL;
+  }
   struct json_object *reply = json_tokener_parse(buffer);
   free(buffer);
   if (!reply) fprintf(stderr, "postmerkosctl: invalid response from configd\n");
@@ -434,6 +423,7 @@ static int write_config_file(const char *path, struct json_object *config) {
 }
 
 int main(int argc, char **argv) {
+  signal(SIGPIPE, SIG_IGN);
   if (argc < 2) { usage(stderr); return 2; }
   const char *command = argv[1];
   if (!strcmp(command, "management-health"))

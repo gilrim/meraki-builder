@@ -55,6 +55,29 @@ purpose is currently limited to extracting the complete Vitesse/Click module
 matrix and required runtime files. The build does not copy the donor loader or
 use it to construct the boot region.
 
+
+## Buildroot reuse and WebSocket feature safety
+
+The builder records whether the last successful rootfs was a base or web image.
+Changing that mode triggers a full Buildroot clean so files from disabled
+packages cannot remain in `output/target`. The synchronized local configd source
+and its WebSocket feature selection are fingerprinted separately; a changed
+fingerprint runs `configd-dirclean` before the next rootfs build.
+
+A web image contains `/etc/postmerkos/features/web-ui`. At boot, `S15configd`
+requires a WebSocket-enabled daemon whenever that marker exists. Final image
+validation also requires the enabled feature marker and a `libwebsockets`
+dependency, preventing a UI artifact from being published with a console-only
+configd binary.
+
+For a deliberate full rebuild:
+
+```sh
+CLEAN_BUILDROOT=1 make web
+```
+
+`CLEAN_BUILDROOT` is preserved when the build enters Ubuntu 22.04 Distrobox.
+
 ## Useful commands
 
 ```sh
