@@ -39,7 +39,9 @@ selects the smallest qualified wire representation.
 The wrapper automatically returns the target's live erase challenge only after
 the user has supplied `FLASH-ALL`. `--manual-target-confirmation` keeps the
 target waiting indefinitely and allows unlimited retries. Successful flashing
-ends with a target-side five-second reset countdown.
+ends with a target-side five-second reset countdown. On `PMOSREC REBOOT NOW`,
+the host automatically returns the serial adapter to 115200 baud and monitors
+the normal loader boot.
 
 Use `--diagnostic-window-scan` only for engineering tests of paced multi-frame
 windows; normal flashing deliberately remains at window 1.

@@ -54,6 +54,7 @@ class FakeProtocolLink:
     def __init__(self, lines: list[str]) -> None:
         self.lines = list(lines)
         self.writes: list[bytes] = []
+        self.buffer = bytearray()
 
     def write_all(self, data: bytes, timeout: float = 10.0) -> None:
         self.writes.append(bytes(data))
@@ -313,6 +314,54 @@ class PMOSRECv3Tests(unittest.TestCase):
         self.assertEqual(result, "PMOSREC RESULT SUCCESS")
         self.assertIn(b"ERASEFLASH 12620a82\n", link.writes)
 
+
+    def test_reboot_handoff_returns_host_uart_to_loader_baud(self) -> None:
+        Bundle, plan, selection = self._package_fixture()
+        selection = p3.TransportSelection(929828, 4096, 1, True, True, True, plan)
+        lines = [
+            "PMOS3 PACKAGE-READY",
+            "PMOS3 PACKAGE-HEADER-ACK MODEL=MS42P",
+            "PMOS3 MANIFEST-OBJECT-VERIFIED",
+            "PMOS3 MANIFEST-ACCEPTED",
+            "PMOS3 IMAGE-OBJECT-VERIFIED",
+            "PMOSPKG VERIFIED MODEL=MS42P",
+            "PMOSREC ERASE-CHALLENGE 12620a82",
+            "PMOSREC CONFIRMATION-WAIT ENTER=ERASEFLASH+12620a82",
+            "PMOSREC CONFIRMATION-ACK",
+            *(f"PMOSREC REBOOT {value}" for value in range(5, 0, -1)),
+            "PMOSREC REBOOT NOW",
+            "init_pll ok",
+        ]
+        link = FakeProtocolLink(lines)
+        link.buffer.extend(b"stale-high-speed-data")
+
+        class Controller:
+            current_rate = 929828
+
+            def __init__(self) -> None:
+                self.calls: list[tuple[int, bool]] = []
+
+            def set_rate(self, rate: int, *, flush: bool = True) -> None:
+                self.calls.append((rate, flush))
+                self.current_rate = rate
+
+        controller = Controller()
+        output = io.StringIO()
+        with redirect_stdout(output), \
+             mock.patch.object(p3, "choose_representation", return_value=plan), \
+             mock.patch.object(p3, "make_manifest_plan", return_value=plan), \
+             mock.patch.object(p3, "send_frames", return_value=0), \
+             mock.patch.object(p3, "wait_for_flash_success", return_value="PMOSREC RESULT SUCCESS"):
+            result = p3.send_package_v3(
+                link, Bundle, selection, dry_run=False, force=True, auto_confirm=True,
+                baud_controller=controller,
+            )
+        self.assertEqual(result, "PMOSREC RESULT SUCCESS")
+        self.assertEqual(controller.calls, [(p3.BOOT_BAUD, True)])
+        self.assertEqual(link.buffer, bytearray())
+        self.assertIn("Reboot handoff detected", output.getvalue())
+        self.assertIn("Reboot detected at 115200 baud: init_pll ok", output.getvalue())
+
     def test_manual_confirmation_retries_without_cancelling(self) -> None:
         Bundle, plan, selection = self._package_fixture()
         lines = [
@@ -355,7 +404,7 @@ class PMOSRECv3Tests(unittest.TestCase):
             "BAUD-SYNC-ACK", "BAUD-COMMIT", "BAUD-COMMITTED",
             "BAUD-FALLBACK-READY", "refine_percent", "DEFAULT_BAUD_CANDIDATES",
             "DIAGNOSTIC_BAUD_CANDIDATES", "diagnostic_scan",
-            "termios2", "sparse-lz4", "ACK_CONFIRM_BYTE",
+            "termios2", "sparse-lz4", "ACK_CONFIRM_BYTE", "BOOT_BAUD",
         ):
             self.assertIn(token, source)
 

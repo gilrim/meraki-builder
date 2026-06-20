@@ -44,6 +44,14 @@ ACK_CONFIRM_ATTEMPTS = 4
 MAX_WINDOW = 16
 BAUD_TEST_BYTES = 32 * 1024
 BAUD_TEST_PASSES = 2
+BOOT_BAUD = 115200
+BOOT_BANNER_PREFIXES = (
+    "LinuxLoader built",
+    "init_pll ok",
+    "Low level initialization complete",
+    "PMOSRAM STAGE1 COPY",
+    "Linux version",
+)
 
 # Linux asm-generic termios2 values. These are stable for the supported Linux hosts.
 TCGETS2 = 0x802C542A
@@ -424,7 +432,7 @@ def _read_ack(link: SerialLink, object_id: int, timeout: float) -> tuple[int, in
                 buffered.extend(byte)
                 captured.extend(byte)
                 scanned += 1
-            except ProtocolError as exc:
+            except (ProtocolError, OSError) as exc:
                 last_error = str(exc)
             continue
 
@@ -903,7 +911,8 @@ def send_package_v3(link: SerialLink, bundle: BundleInfo, selection: TransportSe
                     *, dry_run: bool, force: bool, auto_confirm: bool,
                     verbose_acks: bool = False,
                     manual_input: Callable[[str], str] = input,
-                    operation_timeout: float = 1800.0) -> str:
+                    operation_timeout: float = 1800.0,
+                    baud_controller: BaudController | None = None) -> str:
     image_plan = choose_representation(bundle.image, selection)
     manifest_plan = make_manifest_plan(bundle.manifest_bytes, selection.frame_size)
     header = make_package_header(
@@ -964,10 +973,45 @@ def send_package_v3(link: SerialLink, bundle: BundleInfo, selection: TransportSe
     for remaining in range(5, 0, -1):
         link.wait_for((f"PMOSREC REBOOT {remaining}",), 3.0)
     link.wait_for(("PMOSREC REBOOT NOW",), 3.0)
+
+    # PMOSREC emits REBOOT NOW at the negotiated transport rate, then resets.
+    # The permanent loader starts at 115200, so change the host TTY immediately
+    # after consuming the final high-speed line. Clear only bytes buffered in
+    # user space; BaudController.set_rate() flushes the kernel TTY queues.
+    previous_rate = selection.baud
+    monitor_baud = previous_rate
+    boot_baud_ready = previous_rate == BOOT_BAUD
+    if baud_controller is not None:
+        previous_rate = baud_controller.current_rate
+        monitor_baud = previous_rate
+        try:
+            baud_controller.set_rate(BOOT_BAUD, flush=True)
+            buffer = getattr(link, "buffer", None)
+            if isinstance(buffer, bytearray):
+                buffer.clear()
+            monitor_baud = BOOT_BAUD
+            boot_baud_ready = True
+            print(
+                f"[flasher] Reboot handoff detected; UART switched from "
+                f"{previous_rate} to {BOOT_BAUD} baud for boot monitoring.",
+                flush=True,
+            )
+        except ProtocolError as exc:
+            print(
+                f"[flasher] WARNING: reboot was requested, but the host UART could not "
+                f"return to {BOOT_BAUD} baud: {exc}",
+                flush=True,
+            )
+
     print("[flasher] Flash verified; target reset requested. Waiting for the next boot banner...", flush=True)
     try:
-        boot = link.wait_for(("LinuxLoader built", "PMOSRAM STAGE1 COPY"), 60.0)
-        print(f"[flasher] Reboot detected: {boot}", flush=True)
+        boot = link.wait_for(BOOT_BANNER_PREFIXES, 60.0)
+        print(f"[flasher] Reboot detected at {monitor_baud} baud: {boot}", flush=True)
     except ProtocolError:
-        print("[flasher] Reset countdown completed; no new boot banner was observed within 60 seconds.", flush=True)
+        suffix = "" if boot_baud_ready else " (boot-baud handoff was unavailable)"
+        print(
+            f"[flasher] Reset countdown completed; no new boot banner was observed "
+            f"within 60 seconds{suffix}.",
+            flush=True,
+        )
     return result
