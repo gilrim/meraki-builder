@@ -51,7 +51,9 @@ fi
 clone_or_update_git_ref "$LOADER_REPO_URL" "$LOADER_SOURCE_DIR" "$LOADER_REF" "meraki-redboot"
 
 entry_fix_patch="$REPO_ROOT/patches/meraki-redboot/0001-recovery-flat-binary-byte-zero-entry.patch"
+header_grace_patch="$REPO_ROOT/patches/meraki-redboot/0002-recovery-package-header-grace.patch"
 entry_descriptor="$LOADER_SOURCE_DIR/payloads/uart-firmware-recovery/write_descriptor.py"
+recovery_source="$LOADER_SOURCE_DIR/payloads/uart-firmware-recovery/recovery.c"
 if ! grep -q 'flat-binary-byte-zero-v1' "$entry_descriptor" 2>/dev/null; then
   [[ -f "$entry_fix_patch" ]] || die "meraki-redboot recovery entry patch is missing: $entry_fix_patch"
   log "Applying meraki-redboot flat-binary recovery entry correction"
@@ -68,6 +70,22 @@ if ! grep -q 'flat-binary-byte-zero-v1' "$entry_descriptor" 2>/dev/null; then
   RESOLVED_GIT_DESCRIBE="$(git -C "$LOADER_SOURCE_DIR" describe --tags --always --dirty)"
 fi
 
+
+if ! grep -q 'PACKAGE_HEADER_TIMEOUT_MS' "$recovery_source" 2>/dev/null; then
+  [[ -f "$header_grace_patch" ]] || die "meraki-redboot package-header grace patch is missing: $header_grace_patch"
+  log "Applying meraki-redboot recovery package-header grace correction"
+  if ! git -C "$LOADER_SOURCE_DIR" apply --check "$header_grace_patch"; then
+    die "meraki-redboot source does not contain the expected recovery package-header timeout layout"
+  fi
+  git -C "$LOADER_SOURCE_DIR" apply "$header_grace_patch"
+  git -C "$LOADER_SOURCE_DIR" config user.name postmerkOS-builder
+  git -C "$LOADER_SOURCE_DIR" config user.email builder@localhost
+  git -C "$LOADER_SOURCE_DIR" add -A
+  GIT_AUTHOR_DATE='2026-06-20T00:01:00Z' GIT_COMMITTER_DATE='2026-06-20T00:01:00Z'     git -C "$LOADER_SOURCE_DIR" commit -q -m 'Increase recovery package-header grace period'
+  RESOLVED_GIT_REF="$(git -C "$LOADER_SOURCE_DIR" rev-parse HEAD)"
+  RESOLVED_GIT_DESCRIBE="$(git -C "$LOADER_SOURCE_DIR" describe --tags --always --dirty)"
+fi
+
 [[ -f "$LOADER_SOURCE_DIR/Makefile" ]] || die "meraki-redboot Makefile is missing"
 [[ -f "$LOADER_SOURCE_DIR/VERSION" ]] || die "meraki-redboot VERSION is missing"
 [[ -f "$LOADER_PAYLOAD_PACKER" ]] || die "meraki-redboot payload packer is missing"
@@ -78,5 +96,10 @@ if grep -q 'flat-binary-byte-zero-v1' "$entry_descriptor"; then
   log "meraki-redboot recovery entry contract: flat-binary-byte-zero-v1"
 else
   die "selected meraki-redboot source lacks the corrected recovery entry contract"
+fi
+if grep -q 'PACKAGE_HEADER_TIMEOUT_MS 30000u' "$recovery_source"; then
+  log "meraki-redboot recovery package-header grace: 30000 ms"
+else
+  die "selected meraki-redboot source lacks the recovery package-header grace correction"
 fi
 log "meraki-redboot $(cat "$LOADER_SOURCE_VERSION_FILE") selected at $RESOLVED_GIT_REF"

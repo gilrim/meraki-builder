@@ -381,6 +381,10 @@ class ProtocolTests(unittest.TestCase):
             "PMOSBOOT PASS-RECOVERY-COPY: LOAD: 0x81000000 | SIZE: 0x000037D8",
             "PMOSBOOT PASS-RECOVERY-EXEC: ENTRY: 0x81000000",
             f"PMOSREC READY 2 SOC={family} FAMILY={family_id:08x}",
+            (
+                f"PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC={family};FAMILY={family_id};"
+                f"SPI={'70000064' if family == 'luton26' else '70000068'};PROTO=2;END"
+            ),
         ]
         selected = br.enter_recovery(
             link, "embedded", family, 30.0, None, 0x81000000, 0x81000000,
@@ -395,6 +399,87 @@ class ProtocolTests(unittest.TestCase):
 
     def test_embedded_recovery_accepts_luton26_bootlog(self) -> None:
         self._exercise_embedded_bootlog("luton26", 1)
+
+
+    def test_uploaded_recovery_waits_for_descriptor_before_package_transfer(self) -> None:
+        link = mock.Mock()
+        link.wait_for.side_effect = [
+            "PMOSBOOT MENU-PROBE TIMEOUT_MS=00000bb8",
+            "PMOSBOOT PASS-MENU-TRIGGER: BYTE: 0x0000000D",
+            "PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY",
+            "PMOSBOOT MENU-READY TIMEOUT_MS=00001388",
+            "PMOSBOOT PASS-MENU-CHOICE: SELECTED: 0x00000001",
+            "PMOSRAM READY 2 SOC=jaguar1",
+            "PMOSREC READY 2 SOC=jaguar1 FAMILY=00000002",
+            "PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;END",
+        ]
+        with mock.patch.object(br, "send_ram_payload") as send_payload:
+            selected = br.enter_recovery(
+                link, "ram-upload", "jaguar1", 30.0, b"payload",
+                0x81000000, 0x81000000, 1024, 3, 5.0,
+            )
+        self.assertEqual(selected, "ram-upload")
+        send_payload.assert_called_once()
+        self.assertEqual(
+            link.wait_for.call_args_list[-1],
+            mock.call(("PMOSREC DESCRIPTOR ",), 5.0),
+        )
+
+
+    def test_package_header_is_not_sent_until_descriptor_line_completes(self) -> None:
+        host, target = socket.socketpair()
+        errors: list[BaseException] = []
+        observed: dict[str, bytes | bool] = {"early": False, "header": b""}
+
+        def simulate() -> None:
+            try:
+                target.sendall(b"PMOSREC READY 2 SOC=jaguar1 FAMILY=00000002\n")
+                target.settimeout(0.15)
+                try:
+                    early = target.recv(1)
+                    if early:
+                        observed["early"] = True
+                        observed["header"] = early + read_exact(target, 123)
+                except socket.timeout:
+                    pass
+                target.sendall(
+                    b"PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;"
+                    b"SPI=70000068;PROTO=2;END\n"
+                )
+                if not observed["early"]:
+                    target.settimeout(1.0)
+                    observed["header"] = read_exact(target, 124)
+            except BaseException as exc:  # pragma: no cover - rethrown below
+                errors.append(exc)
+            finally:
+                target.close()
+
+        thread = threading.Thread(target=simulate)
+        thread.start()
+        try:
+            link = bp.SerialLink(host.fileno(), echo=False)
+            selected = br.enter_recovery(
+                link, "embedded", "jaguar1", 2.0, None,
+                0x81000000, 0x81000000, 1024, 3, 1.0,
+            )
+            self.assertEqual(selected, "embedded")
+            link.write_all(b"H" * 124)
+        finally:
+            host.close()
+            thread.join(3)
+        if errors:
+            raise errors[0]
+        self.assertFalse(observed["early"], "binary header was sent while descriptor text was still transmitting")
+        self.assertEqual(observed["header"], b"H" * 124)
+
+    def test_recovery_descriptor_mismatch_is_rejected(self) -> None:
+        link = mock.Mock()
+        link.wait_for.return_value = (
+            "PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=luton26;FAMILY=1;"
+            "SPI=70000064;PROTO=2;END"
+        )
+        with self.assertRaisesRegex(bp.ProtocolError, "recovery descriptor mismatch"):
+            br.wait_for_recovery_descriptor(link, "jaguar1")
 
     def test_embedded_recovery_rejects_reported_soc_mismatch(self) -> None:
         link = mock.Mock()

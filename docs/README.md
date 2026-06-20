@@ -53,3 +53,4 @@
 - [Resolved issues](history/resolved-issues.md)
 - [Legacy build systems](history/legacy-build-systems.md)
 - [Change history](history/changelog.md)
+- [UART recovery package-header handoff correction](history/uart-recovery-package-header-handoff.md)
