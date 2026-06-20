@@ -1,0 +1,77 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index c493370..55ec38b 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -178,8 +178,8 @@
+ - Corrected malformed `always_inline` declarations and declaration-order
+   warnings inherited from the loader source without changing behavior.
+ 
+-The current source tree implements build-manifest format version 7 and UART
+-recovery protocol version 2. Active capabilities are documented in the README
++The current source tree implements build-manifest format version 7, PMOSRAM
++protocol version 2, and PMOSREC firmware-recovery protocol version 3. Active capabilities are documented in the README
+ and `docs/`.
+ 
+ Development records and prior release notes are maintained under:
+@@ -239,3 +239,13 @@ Development records and prior release notes are maintained under:
+ - Added a family-specific ICPU watchdog fallback if the soft-chip reset request does not take effect.
+ - Published `PREFLIGHT=4`, protocol 3 and
+   `pmosrec-v3-adaptive-uart-sparse-lz4-v1` capability boundaries.
++
++## Unreleased — PMOSREC v3 stage-validator synchronization
++
++- Updated the fixed-RAM stage validator to require embedded `PMOSRECOVERY3`
++  payloads for both Luton26 and Jaguar1.
++- Updated the Clang structural stage fixtures to embed v3 recovery markers.
++- Added regression assertions preventing a future recovery-protocol upgrade from
++  leaving the stage validator on an older descriptor generation.
++- Release archives normalize source timestamps to avoid ZIP timezone clock-skew
++  warnings on non-UTC build hosts.
+diff --git a/scripts/structural-test-clang.sh b/scripts/structural-test-clang.sh
+index 0c746af..1ed7fe8 100755
+--- a/scripts/structural-test-clang.sh
++++ b/scripts/structural-test-clang.sh
+@@ -19,8 +19,8 @@ common=(--target=mipsel-linux-gnu -march=mips32r2 -mabi=32 -msoft-float -mno-abi
+   -Os -nostdinc -I"$root/include" -I"$root/src")
+ stage1_addr=0xa7f00000
+ stage1_max=0x00100000
+-printf 'PMOSRECOVERY2;SOC=luton26;STRUCTURAL\n' > "$tmp/recovery-luton26.bin"
+-printf 'PMOSRECOVERY2;SOC=jaguar1;STRUCTURAL\n' > "$tmp/recovery-jaguar1.bin"
++printf 'PMOSRECOVERY3;SOC=luton26;STRUCTURAL\n' > "$tmp/recovery-luton26.bin"
++printf 'PMOSRECOVERY3;SOC=jaguar1;STRUCTURAL\n' > "$tmp/recovery-jaguar1.bin"
+ 
+ if [[ -n ${PROFILE_FILTER:-} ]]; then read -r -a profiles <<<"$PROFILE_FILTER"; else profiles=(strict development permissive strict-uart); fi
+ for variant in "${profiles[@]}"; do
+diff --git a/scripts/validate_uart_stage1.py b/scripts/validate_uart_stage1.py
+index 42c07ea..9cde9fd 100755
+--- a/scripts/validate_uart_stage1.py
++++ b/scripts/validate_uart_stage1.py
+@@ -139,8 +139,8 @@ def main() -> int:
+             b"MENU-READY",
+             b"FW-RECOVERY",
+             b"RECOVERY-COPY",
+-            b"PMOSRECOVERY2;SOC=luton26",
+-            b"PMOSRECOVERY2;SOC=jaguar1",
++            b"PMOSRECOVERY3;SOC=luton26",
++            b"PMOSRECOVERY3;SOC=jaguar1",
+         ):
+             if marker not in binary:
+                 raise ValueError(f"stage lacks required marker {marker!r}")
+diff --git a/tests/test_source_contract.py b/tests/test_source_contract.py
+index f339334..627a6c4 100644
+--- a/tests/test_source_contract.py
++++ b/tests/test_source_contract.py
+@@ -220,6 +220,13 @@ class SourceContractTests(unittest.TestCase):
+         self.assertIn(".uart_stage1", linker)
+         self.assertIn("fixed uncached RAM entry", validator)
+         self.assertIn("direct jump/call targets outside", validator)
++        self.assertIn("PMOSRECOVERY3;SOC=luton26", validator)
++        self.assertIn("PMOSRECOVERY3;SOC=jaguar1", validator)
++        self.assertNotIn("PMOSRECOVERY2;SOC=", validator)
++        structural = (ROOT / "scripts/structural-test-clang.sh").read_text()
++        self.assertIn("PMOSRECOVERY3;SOC=luton26;STRUCTURAL", structural)
++        self.assertIn("PMOSRECOVERY3;SOC=jaguar1;STRUCTURAL", structural)
++        self.assertNotIn("PMOSRECOVERY2;SOC=", structural)
+         image_validator = (ROOT / "scripts/validate_image.py").read_text()
+         self.assertIn('uart_stage_present = "uart_stage1_blob_start" in syms', image_validator)
+         self.assertIn("writer_expected = warnings_expected or uart_stage_present", image_validator)
