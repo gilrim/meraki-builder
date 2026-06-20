@@ -22,6 +22,12 @@ PACKAGE_MAGIC = b"PMOSPKG2"
 PACKAGE_FRAME_MAGIC = b"PKF2"
 PACKAGE_HEADER = struct.Struct("<8s8I32s32s16sI")
 PACKAGE_FRAME = struct.Struct("<4sIIII")
+PREFLIGHT_MAGIC = b"PMOSPFT1"
+PREFLIGHT_HEADER = struct.Struct("<8s6I")
+PREFLIGHT_VERSION = 1
+PREFLIGHT_FLAG_RESTORE = 1
+DEFAULT_PREFLIGHT_SCRATCH = 0x00FF0000
+PREFLIGHT_SCRATCH_BYTES = 64 * 1024
 PROTOCOL_VERSION = 2
 FULL_IMAGE_SIZE = 16 * 1024 * 1024
 LOADER_REGION_SIZE = 0x40000
@@ -51,7 +57,7 @@ FAMILY_ID = {"luton26": 1, "jaguar1": 2}
 FAMILY_SPI_ADDRESS = {"luton26": 0x70000064, "jaguar1": 0x70000068}
 ALLOWED_MODEL_STATUS = {"validated", "confirmed", "untested"}
 DESCRIPTOR_RE = re.compile(
-    rb"PMOSRECOVERY2;SOC=(luton26|jaguar1);FAMILY=([12]);SPI=([0-9a-f]{8});PROTO=2;END"
+    rb"PMOSRECOVERY2;SOC=(luton26|jaguar1);FAMILY=([12]);SPI=([0-9a-f]{8});PROTO=2;PREFLIGHT=2;END"
 )
 
 
@@ -74,6 +80,8 @@ class PayloadDescriptor:
     entry_address: int
     entry_contract: str
     manifest_lookup_contract: str
+    hardware_preflight_contract: str
+    spi_master_enable_contract: str
 
 
 @dataclass(frozen=True)
@@ -144,6 +152,8 @@ def inspect_payload(path: Path, descriptor_path: Path | None = None) -> PayloadD
     entry_address = metadata.get("entry_address")
     entry_contract = metadata.get("entry_contract")
     manifest_lookup_contract = metadata.get("manifest_lookup_contract")
+    hardware_preflight_contract = metadata.get("hardware_preflight_contract")
+    spi_master_enable_contract = metadata.get("spi_master_enable_contract")
     if load_address != 0x81000000 or entry_address != 0x81000000:
         raise ProtocolError("recovery payload is not linked for load/entry address 0x81000000")
     if entry_contract != "flat-binary-byte-zero-v1":
@@ -156,6 +166,10 @@ def inspect_payload(path: Path, descriptor_path: Path | None = None) -> PayloadD
             "recovery payload lacks direct-object-members-v1 manifest parsing; "
             "nested kernel/region digests can shadow artifact.sha256"
         )
+    if hardware_preflight_contract != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        raise ProtocolError("recovery payload lacks destructive scratch read/write/restore preflight support")
+    if spi_master_enable_contract != "preserve-general-ctrl-enable-spi-v1":
+        raise ProtocolError("recovery payload lacks the SPI master-enable handoff correction")
     return PayloadDescriptor(
         family=family,
         family_id=family_id,
@@ -166,6 +180,8 @@ def inspect_payload(path: Path, descriptor_path: Path | None = None) -> PayloadD
         entry_address=entry_address,
         entry_contract=entry_contract,
         manifest_lookup_contract=manifest_lookup_contract,
+        hardware_preflight_contract=hardware_preflight_contract,
+        spi_master_enable_contract=spi_master_enable_contract,
     )
 
 
@@ -206,6 +222,14 @@ def _validate_loader_capability(manifest: dict, loader_sha256: str, family: str)
         raise ProtocolError(
             "firmware image contains a recovery parser that permits nested digest shadowing; "
             "rebuild meraki-redboot with direct-object-members-v1 manifest lookup"
+        )
+    if record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        raise ProtocolError(
+            "firmware image contains a recovery payload without destructive SPI NOR preflight support"
+        )
+    if record.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
+        raise ProtocolError(
+            "firmware image contains a recovery payload without the SPI master-enable handoff correction"
         )
 
 
@@ -273,6 +297,20 @@ def _recovery_payload_record(manifest: dict, family: str, model: str) -> dict:
         raise ProtocolError("manifest UART firmware recovery protocol is incompatible")
     if firmware.get("full_image_bytes") != FULL_IMAGE_SIZE:
         raise ProtocolError("manifest UART firmware recovery image size is incompatible")
+    if firmware.get("operations") != ["verify", "preflight", "dry-run", "flash"]:
+        raise ProtocolError("manifest UART firmware recovery operation contract is incompatible")
+    if firmware.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        raise ProtocolError("manifest lacks destructive SPI NOR preflight support")
+    if firmware.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
+        raise ProtocolError("manifest lacks the SPI master-enable handoff correction")
+    expected_scratch = {
+        "default_address": DEFAULT_PREFLIGHT_SCRATCH,
+        "bytes": PREFLIGHT_SCRATCH_BYTES,
+        "minimum_address": LOADER_REGION_SIZE,
+        "restore_original": True,
+    }
+    if firmware.get("preflight_scratch") != expected_scratch:
+        raise ProtocolError("manifest preflight scratch contract is incompatible")
     geometry = firmware.get("flash_geometry")
     expected_geometry = {
         "bytes": FULL_IMAGE_SIZE, "erase_bytes": 64 * 1024,
@@ -306,6 +344,10 @@ def _recovery_payload_record(manifest: dict, family: str, model: str) -> dict:
         raise ProtocolError("manifest recovery payload lacks the corrected byte-zero entry contract")
     if record.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise ProtocolError("manifest recovery payload lacks scoped direct-member manifest parsing")
+    if record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        raise ProtocolError("manifest recovery payload lacks scratch read/write/restore preflight support")
+    if record.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
+        raise ProtocolError("manifest recovery payload lacks the SPI master-enable correction")
     return record
 
 
@@ -329,6 +371,10 @@ def validate_recovery_payload(path: Path, descriptor: PayloadDescriptor, bundle:
         raise ProtocolError("recovery payload entry contract does not match the release manifest")
     if descriptor.manifest_lookup_contract != record["manifest_lookup_contract"]:
         raise ProtocolError("recovery payload manifest lookup contract does not match the release manifest")
+    if descriptor.hardware_preflight_contract != record["hardware_preflight_contract"]:
+        raise ProtocolError("recovery payload preflight contract does not match the release manifest")
+    if descriptor.spi_master_enable_contract != record["spi_master_enable_contract"]:
+        raise ProtocolError("recovery payload SPI master-enable contract does not match the release manifest")
 
 
 def validate_bundle(image: Path, manifest_path: Path, model: str, *, force: bool) -> BundleInfo:
@@ -541,6 +587,22 @@ def send_ram_payload(link: SerialLink, payload: bytes, load: int, entry: int,
         verified = link.wait_for(("PMOSRAM VERIFIED",), 10.0)
     link.wait_for(("PMOSRAM EXEC",), 5.0)
     return verified
+
+
+def make_preflight_header(*, scratch_address: int = DEFAULT_PREFLIGHT_SCRATCH,
+                          scratch_size: int = PREFLIGHT_SCRATCH_BYTES,
+                          pattern_seed: int = 0x504D4F53) -> bytes:
+    if scratch_address < LOADER_REGION_SIZE:
+        raise ProtocolError("preflight scratch address overlaps the protected bootloader region")
+    if scratch_size != PREFLIGHT_SCRATCH_BYTES or scratch_address % scratch_size:
+        raise ProtocolError("preflight scratch range must be one aligned 64 KiB erase block")
+    if scratch_address + scratch_size > FULL_IMAGE_SIZE:
+        raise ProtocolError("preflight scratch range exceeds the 16 MiB flash")
+    base = PREFLIGHT_HEADER.pack(
+        PREFLIGHT_MAGIC, PREFLIGHT_VERSION, PREFLIGHT_FLAG_RESTORE,
+        scratch_address, scratch_size, pattern_seed & 0xFFFFFFFF, 0,
+    )
+    return base[:-4] + struct.pack("<I", zlib.crc32(base[:-4]) & 0xFFFFFFFF)
 
 
 def make_package_header(bundle: BundleInfo, *, dry_run: bool, force: bool,

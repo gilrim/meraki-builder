@@ -119,3 +119,50 @@ Corrected payloads declare `direct-object-members-v1` and limit every JSON looku
 to direct members of the object currently being validated. The flasher rejects
 external payloads and firmware loader records that lack this contract.
 
+
+## Destructive-but-restored hardware preflight
+
+Run the preflight before a full recovery flash:
+
+```sh
+./tools/firmware-flasher/firmware-flasher.sh \
+  --bootloader-preflight \
+  --recovery-path ram-upload \
+  --target-model MS42P \
+  --serial-device /dev/serial/by-id/<adapter>
+```
+
+No firmware image or manifest is required and no 16 MiB package is transferred.
+The flasher uploads only the family-specific recovery utility, validates the full
+startup descriptor, enables and verifies the SoC SPI master, reads JEDEC/status/
+SFDP, and then tests a complete scratch sector.
+
+Default scratch range:
+
+```text
+0x00ff0000..0x00ffffff  (64 KiB)
+```
+
+The target backs up that sector in RAM, erases it, verifies erase, programs and
+verifies all 256 pages, then erases and restores the original 64 KiB contents.
+The loader region `0x00000000..0x0003ffff` is hard-protected in both host and
+target code. Override the scratch sector only with an aligned address:
+
+```sh
+--preflight-scratch 0x00fe0000
+```
+
+A successful run writes an atomic JSON receipt under `logs/`, including the exact
+model, SoC family, payload SHA-256, scratch address, recovery path and completion
+result. A pass proves UART menu control, external RAM upload, target execution,
+SPI controller enable, JEDEC/status reads, write-enable, sector erase, page
+program, full readback and restoration. It also CRC-checks the complete 256 KiB
+bootloader region before and after the destructive test and refuses success unless
+that region is unchanged.
+
+The recovery descriptor must declare:
+
+- `hardware_preflight_contract: spi-nor-scratch-rw-restore-loader-crc-v2`;
+- `spi_master_enable_contract: preserve-general-ctrl-enable-spi-v1`;
+- `operations: [verify, preflight, dry-run, flash]`;
+- `PREFLIGHT=1` in its embedded descriptor marker.

@@ -33,6 +33,7 @@
 - [Configuration schema](architecture/configuration-schema.md)
 - [Firmware updater](architecture/firmware-updater.md)
 - [Pre-kernel UART recovery](architecture/pre-kernel-uart-recovery.md)
+- [Pre-boot UART hardware preflight](architecture/pre-boot-uart-hardware-preflight.md)
 - [Recovery flat-binary entry contract](architecture/recovery-flat-binary-entry.md)
 - [Click graph](architecture/click-system.md)
 - [Adding a model](development/adding-model.md)

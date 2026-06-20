@@ -130,13 +130,20 @@ embedded = {}
 for family, target in targets.items():
     marker = (
         f"PMOSRECOVERY2;SOC={family};FAMILY={target['id']};"
-        f"SPI={target['spi']:08x};PROTO=2;END"
+        f"SPI={target['spi']:08x};PROTO=2;PREFLIGHT=2;END"
     ).encode()
     payload = recovery / f'recovery-{family}.bin'
     payload.write_bytes(b'smoke-payload\0' + marker + b'\0')
     raw = payload.read_bytes()
     payload_digest = hashlib.sha256(raw).hexdigest()
-    embedded[family] = {'path': str(payload), 'size': len(raw), 'sha256': payload_digest}
+    embedded[family] = {
+        'path': str(payload), 'size': len(raw), 'sha256': payload_digest,
+        'load_address': 0x81000000, 'entry_address': 0x81000000,
+        'entry_contract': 'flat-binary-byte-zero-v1',
+        'manifest_lookup_contract': 'direct-object-members-v1',
+        'hardware_preflight_contract': 'spi-nor-scratch-rw-restore-loader-crc-v2',
+        'spi_master_enable_contract': 'preserve-general-ctrl-enable-spi-v1',
+    }
     descriptor = {
         'format': 'postmerkos.uart-recovery-payload.v2',
         'protocol_version': 2,
@@ -147,7 +154,14 @@ for family, target in targets.items():
         'accepted_flash_bytes': 0x1000000,
         'accepted_jedec_ids': jedec,
         'flash_geometry': geometry,
-        'operations': ['verify', 'dry-run', 'flash'],
+        'operations': ['verify', 'preflight', 'dry-run', 'flash'],
+        'load_address': 0x81000000,
+        'entry_address': 0x81000000,
+        'entry_contract': 'flat-binary-byte-zero-v1',
+        'manifest_lookup_contract': 'direct-object-members-v1',
+        'hardware_preflight_contract': 'spi-nor-scratch-rw-restore-loader-crc-v2',
+        'spi_master_enable_contract': 'preserve-general-ctrl-enable-spi-v1',
+        'preflight_scratch': {'default_address': 0x00FF0000, 'bytes': 0x10000, 'minimum_address': 0x40000, 'restore_original': True},
         'transport_integrity': ['frame-crc32', 'object-crc32', 'object-sha256'],
         'binary': {
             'filename': payload.name,

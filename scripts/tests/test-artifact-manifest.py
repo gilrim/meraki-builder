@@ -80,7 +80,7 @@ class ArtifactManifestTests(unittest.TestCase):
         for family, target in TARGETS.items():
             marker = (
                 f"PMOSRECOVERY2;SOC={family};FAMILY={target['id']};"
-                f"SPI={target['spi']:08x};PROTO=2;END"
+                f"SPI={target['spi']:08x};PROTO=2;PREFLIGHT=2;END"
             ).encode("ascii")
             payload = self.recovery / f"recovery-{family}.bin"
             payload.write_bytes(b"payload-prefix\0" + marker + b"\0payload-suffix")
@@ -90,6 +90,8 @@ class ArtifactManifestTests(unittest.TestCase):
                 "load_address": 0x81000000, "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
             }
             descriptor = {
                 "format": "postmerkos.uart-recovery-payload.v2",
@@ -101,12 +103,20 @@ class ArtifactManifestTests(unittest.TestCase):
                 "accepted_flash_bytes": TOTAL_BYTES,
                 "accepted_jedec_ids": JEDEC,
                 "flash_geometry": GEOMETRY,
-                "operations": ["verify", "dry-run", "flash"],
+                "operations": ["verify", "preflight", "dry-run", "flash"],
                 "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
                 "load_address": 0x81000000,
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+                "preflight_scratch": {
+                    "default_address": 0x00FF0000,
+                    "bytes": 0x10000,
+                    "minimum_address": 0x40000,
+                    "restore_original": True,
+                },
                 "binary": {
                     "filename": payload.name,
                     "bytes": payload.stat().st_size,
@@ -187,6 +197,10 @@ class ArtifactManifestTests(unittest.TestCase):
         firmware = manifest["recovery"]["uart_firmware"]
         self.assertEqual(firmware["flash_geometry"], GEOMETRY)
         self.assertEqual(firmware["accepted_jedec_ids"], JEDEC)
+        self.assertEqual(firmware["operations"], ["verify", "preflight", "dry-run", "flash"])
+        self.assertEqual(firmware["hardware_preflight_contract"], "spi-nor-scratch-rw-restore-loader-crc-v2")
+        self.assertEqual(firmware["spi_master_enable_contract"], "preserve-general-ctrl-enable-spi-v1")
+        self.assertEqual(firmware["preflight_scratch"]["default_address"], 0x00FF0000)
         for family, target in TARGETS.items():
             record = firmware["payloads"][family]
             self.assertEqual(record["accepted_models"], target["models"])
@@ -196,6 +210,9 @@ class ArtifactManifestTests(unittest.TestCase):
             self.assertEqual(record["entry_address"], 0x81000000)
             self.assertEqual(record["entry_contract"], "flat-binary-byte-zero-v1")
             self.assertEqual(record["manifest_lookup_contract"], "direct-object-members-v1")
+            self.assertEqual(record["hardware_preflight_contract"], "spi-nor-scratch-rw-restore-loader-crc-v2")
+            self.assertEqual(record["spi_master_enable_contract"], "preserve-general-ctrl-enable-spi-v1")
+            self.assertTrue(record["preflight_scratch"]["restore_original"])
 
     def test_tampered_payload_is_rejected(self) -> None:
         payload = self.recovery / "recovery-jaguar1.bin"
@@ -212,6 +229,23 @@ class ArtifactManifestTests(unittest.TestCase):
         descriptor_path.write_text(json.dumps(descriptor, indent=2) + "\n")
         result = self.run_finalizer(expect_success=False)
         self.assertIn("model allow-list is invalid", result.stderr)
+
+
+    def test_missing_hardware_preflight_contract_is_rejected(self) -> None:
+        descriptor_path = self.recovery / "recovery-jaguar1.descriptor.json"
+        descriptor = json.loads(descriptor_path.read_text())
+        descriptor.pop("hardware_preflight_contract")
+        descriptor_path.write_text(json.dumps(descriptor, indent=2) + "\n")
+        result = self.run_finalizer(expect_success=False)
+        self.assertIn("hardware preflight contract", result.stderr)
+
+    def test_bootloader_overlapping_scratch_contract_is_rejected(self) -> None:
+        descriptor_path = self.recovery / "recovery-luton26.descriptor.json"
+        descriptor = json.loads(descriptor_path.read_text())
+        descriptor["preflight_scratch"]["minimum_address"] = 0
+        descriptor_path.write_text(json.dumps(descriptor, indent=2) + "\n")
+        result = self.run_finalizer(expect_success=False)
+        self.assertIn("scratch", result.stderr)
 
     def test_missing_embedded_descriptor_is_rejected(self) -> None:
         payload = self.recovery / "recovery-luton26.bin"

@@ -78,7 +78,7 @@ expected_targets = {
 for family, (fid, spi, expected_models) in expected_targets.items():
     payload = recovery_dir / f"recovery-{family}.bin"
     raw = payload.read_bytes()
-    marker = f"PMOSRECOVERY2;SOC={family};FAMILY={fid};SPI={spi};PROTO=2;END".encode()
+    marker = f"PMOSRECOVERY2;SOC={family};FAMILY={fid};SPI={spi};PROTO=2;PREFLIGHT=2;END".encode()
     if raw.count(marker) != 1:
         raise SystemExit(f"{payload.name} target descriptor mismatch")
     descriptor = json.loads((recovery_dir / f"recovery-{family}.descriptor.json").read_text(encoding="utf-8"))
@@ -92,7 +92,7 @@ for family, (fid, spi, expected_models) in expected_targets.items():
         raise SystemExit(f"{payload.name} descriptor target registers mismatch")
     if descriptor.get("accepted_flash_bytes") != 0x1000000 or descriptor.get("flash_geometry") != expected_geometry:
         raise SystemExit(f"{payload.name} descriptor flash geometry mismatch")
-    if descriptor.get("operations") != ["verify", "dry-run", "flash"]:
+    if descriptor.get("operations") != ["verify", "preflight", "dry-run", "flash"]:
         raise SystemExit(f"{payload.name} descriptor operation contract mismatch")
     if descriptor.get("load_address") != 0x81000000 or descriptor.get("entry_address") != 0x81000000:
         raise SystemExit(f"{payload.name} descriptor load/entry address mismatch")
@@ -100,6 +100,13 @@ for family, (fid, spi, expected_models) in expected_targets.items():
         raise SystemExit(f"{payload.name} descriptor lacks corrected byte-zero entry contract")
     if descriptor.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise SystemExit(f"{payload.name} descriptor lacks direct-member manifest lookup")
+    if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        raise SystemExit(f"{payload.name} descriptor lacks destructive SPI NOR preflight")
+    if descriptor.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
+        raise SystemExit(f"{payload.name} descriptor lacks SPI master-enable correction")
+    scratch = descriptor.get("preflight_scratch", {})
+    if scratch != {"default_address": 0x00FF0000, "bytes": 0x10000, "minimum_address": 0x40000, "restore_original": True}:
+        raise SystemExit(f"{payload.name} descriptor preflight scratch contract mismatch")
     if descriptor.get("transport_integrity") != ["frame-crc32", "object-crc32", "object-sha256"]:
         raise SystemExit(f"{payload.name} descriptor integrity contract mismatch")
     jedec = descriptor.get("accepted_jedec_ids")
@@ -121,6 +128,10 @@ for family, (fid, spi, expected_models) in expected_targets.items():
         raise SystemExit(f"{payload.name} embedded recovery lacks corrected byte-zero entry contract")
     if embedded_record.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise SystemExit(f"{payload.name} embedded recovery lacks direct-member manifest lookup")
+    if embedded_record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        raise SystemExit(f"{payload.name} embedded recovery lacks hardware preflight support")
+    if embedded_record.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
+        raise SystemExit(f"{payload.name} embedded recovery lacks SPI master-enable correction")
 PY
 
 entry="$(readelf -h "$KERNEL_ARTIFACT_DIR/vmlinuz" | awk '/Entry point address/ {print $4}')"

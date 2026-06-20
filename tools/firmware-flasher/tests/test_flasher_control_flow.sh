@@ -112,3 +112,25 @@ for entry in '1 ram-upload' '2 embedded' '3 auto'; do
 done
 
 echo 'PASS: firmware-flasher interactive bootloader UART recovery selection'
+
+# Direct preflight must not require selecting or validating a 16 MiB firmware
+# artifact. It only needs the family-specific external recovery payload.
+preflight_cli_output=$(
+    bash -Eeuo pipefail -c '
+        source "$1"
+        need() { :; }
+        select_firmware() { echo "UNEXPECTED-FIRMWARE-SELECTION"; return 99; }
+        select_overlay_policy() { OVERLAY_POLICY=image; }
+        confirm_full_flash() { :; }
+        run_bootloader_recovery_mode() {
+            printf "REACHED-PREFLIGHT operation=%s type=%s scope=%s control=%s scratch=%s\n" \
+                "$OPERATION" "$SELECTED_TYPE" "$FLASH_SCOPE" "$CONTROL_PATH" "$PREFLIGHT_SCRATCH"
+        }
+        main --bootloader-preflight --target-model MS42P --preflight-scratch 0x00ff0000
+    ' bash "$FLASHER" 2>&1
+)
+! grep -Fq UNEXPECTED-FIRMWARE-SELECTION <<<"$preflight_cli_output"
+grep -Fq 'REACHED-PREFLIGHT operation=preflight type=preflight scope=full control=bootloader scratch=0x00ff0000' \
+    <<<"$preflight_cli_output"
+
+echo 'PASS: firmware-flasher direct preflight does not require a firmware image'
