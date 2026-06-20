@@ -9,7 +9,7 @@ LDLIBS += -ljson-c -lcrypt
 
 BASE_SRCS = main.c click_port.c click_global.c status.c json_util.c \
        config_file.c config_apply.c hardware.c network.c result.c validation.c \
-       console_cli.c release.c roles.c local_socket.c service_ops.c time_ops.c port_clone.c compatibility.c auth.c
+       console_cli.c release.c roles.c local_socket.c socket_io.c service_ops.c time_ops.c port_clone.c compatibility.c auth.c
 
 ifeq ($(ENABLE_WEBSOCKET),1)
 CPPFLAGS += -DCONFIGD_ENABLE_WEBSOCKET=1
@@ -27,8 +27,8 @@ all: configd postmerkosctl
 configd: $(SRCS) $(SUPPORT_SRCS)
 	$(CC) $(CPPFLAGS) $(INCLUDES) $(CFLAGS) -o $@ $(SRCS) $(SUPPORT_SRCS) $(LDFLAGS) $(LDLIBS)
 
-postmerkosctl: postmerkosctl.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ postmerkosctl.c $(LDFLAGS) -ljson-c
+postmerkosctl: postmerkosctl.c socket_io.c socket_io.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ postmerkosctl.c socket_io.c $(LDFLAGS) -ljson-c
 
 test-host:
 	./tests/test-host.sh

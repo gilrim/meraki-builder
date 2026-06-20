@@ -10,6 +10,11 @@ configd-ws
 
 The local console uses `/run/postmerkos/configd.sock`. Both transports resolve one role/capability session and dispatch to the same validation and operation handlers.
 
+Local requests and replies are one JSON object followed by a newline. Both peers
+read until the complete delimiter, enforce bounded message sizes and a five-second
+I/O timeout, and suppress SIGPIPE so a disconnected peer cannot terminate either
+configd or `postmerkosctl`.
+
 Run `configd --features` to confirm which transports were compiled into an image.
 
 ## Envelope

@@ -111,6 +111,7 @@ test-fwupdate:
 test-image:
 	@./buildroot/board/meraki/ms220/tests/test-post-image.sh
 	@python3 ./scripts/tests/test-artifact-manifest.py
+	@python3 ./scripts/tests/test-build-cache-contract.py
 
 test-modules:
 	@./scripts/tests/test-vendor-modules.sh
@@ -123,6 +124,7 @@ test-hardware:
 	@./buildroot/board/meraki/ms220/tests/test-board-identity.sh
 	@./buildroot/board/meraki/ms220/tests/test-poe-init.sh
 	@./buildroot/board/meraki/ms220/tests/test-configd-supervisor.sh
+	@./buildroot/board/meraki/ms220/tests/test-configd-init.sh
 	@./buildroot/packages/postmerkos-hardware/tests/test-host.sh
 
 test-docs:
@@ -142,7 +144,7 @@ menuconfig: prepare
 	@bash -c 'source ./scripts/common.sh; $(MAKE) -C "$$BUILDROOT_DIR" menuconfig'
 
 distrobox:
-	@./scripts/distrobox-run.sh env INCLUDE_UI="$${INCLUDE_UI:-ask}" ./scripts/build-all.sh
+	@./scripts/distrobox-run.sh env INCLUDE_UI="$${INCLUDE_UI:-ask}" CLEAN_BUILDROOT="$${CLEAN_BUILDROOT:-0}" ./scripts/build-all.sh
 
 clean:
 	@./scripts/clean.sh build

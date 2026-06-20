@@ -4,6 +4,8 @@ load_build_state
 need python3
 need unsquashfs
 need file
+need readelf
+need strings
 
 IMAGE="${1:-}"
 if [[ -z "$IMAGE" && -f "$ARTIFACTS_DIR/latest-image.txt" ]]; then
@@ -45,11 +47,14 @@ required=(
   usr/libexec/fwupdate/fwflash
   etc/fwupdate/sources.conf
   etc/fwupdate/preserve.list
+  bin/configd
+  usr/bin/postmerkosctl
+  etc/init.d/S15configd
+  usr/sbin/postmerkos-configd-supervisor
 )
 if bool_enabled "${INCLUDE_UI:-0}"; then
-  required+=(www/index.html bin/configd usr/bin/postmerkosctl usr/bin/uhttpd etc/init.d/S15configd \
-    usr/sbin/postmerkos-configd-supervisor \
-    etc/init.d/S16uhttpd usr/sbin/postmerkos-network-rebind)
+  required+=(www/index.html usr/bin/uhttpd etc/init.d/S16uhttpd \
+    usr/sbin/postmerkos-network-rebind etc/postmerkos/features/web-ui)
 fi
 for path in "${required[@]}"; do
   [[ -e "$VERIFY_DIR/$path" ]] || die "Rootfs verification failed: missing /$path"
@@ -76,6 +81,13 @@ if bool_enabled "${INCLUDE_UI:-0}"; then
     die "configd supervisor restart contract is missing"
   strings "$VERIFY_DIR/usr/bin/postmerkosctl" | grep -Fq 'WebSocket configd-ws hello' || \
     die "postmerkosctl lacks the WebSocket hello health probe"
+  strings "$VERIFY_DIR/bin/configd" | grep -Fxq 'websocket: enabled' || \
+    die "Web image contains a WebSocket-disabled configd binary"
+  readelf -d "$VERIFY_DIR/bin/configd" | grep -Fq 'libwebsockets' || \
+    die "Web image configd is not linked against libwebsockets"
+  grep -Fq 'web image contains WebSocket-disabled configd' \
+    "$VERIFY_DIR/etc/init.d/S15configd" || \
+    die "configd init does not fail closed for a WebSocket-disabled web image"
 fi
 
 file "$VERIFY_DIR/usr/libexec/fwupdate/fwflash" | grep -qi 'statically linked' || \
@@ -94,8 +106,10 @@ for command in curl mkfs.jffs2 hexdump sha256sum fuser mountpoint head dd awk se
 done
 
 if ! bool_enabled "${INCLUDE_UI:-0}"; then
-  [[ ! -e "$VERIFY_DIR/etc/init.d/S15configd" ]] || die "Base image unexpectedly contains S15configd"
   [[ ! -e "$VERIFY_DIR/etc/init.d/S16uhttpd" ]] || die "Base image unexpectedly contains S16uhttpd"
+  [[ ! -e "$VERIFY_DIR/etc/postmerkos/features/web-ui" ]] || die "Base image unexpectedly requires WebSocket service"
+  strings "$VERIFY_DIR/bin/configd" | grep -Fxq 'websocket: disabled' || \
+    die "Base image configd unexpectedly includes WebSocket support"
 fi
 
 find "$VERIFY_DIR/etc/init.d" -maxdepth 1 -type f -printf '%f\n' | sort \

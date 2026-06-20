@@ -1,3 +1,30 @@
+# WebSocket build-cache, local socket, and service-policy corrections
+
+## meraki-builder
+
+- Detect and clean reused Buildroot output when switching between base and web
+  images, including one-time cleanup of output created before UI-mode tracking.
+- Fingerprint the synchronized configd package and its WebSocket feature choice;
+  invalidate `configd-0.2` automatically when either changes.
+- Forward `CLEAN_BUILDROOT` through top-level Distrobox execution.
+- Mark web images explicitly and fail configd startup when a web image contains a
+  WebSocket-disabled daemon.
+- Validate the final configd binary for `websocket: enabled` and a
+  `libwebsockets` dependency before publishing a web artifact.
+- Replace split local-socket writes and one-shot reads with shared bounded,
+  newline-framed I/O; suppress SIGPIPE in configd and `postmerkosctl`.
+- Make service start/stop reconciliation idempotent to avoid duplicate chrony,
+  uhttpd, and Dropbear start failures during the late service-policy pass.
+- Add host tests for fragmented socket traffic, closed-peer writes, oversized
+  frames, WebSocket-required init failure, and build-cache contracts.
+
+## postmerkos-ui
+
+No source changes were required. The current UI already requests the `configd-ws`
+subprotocol and protocol-2 `hello` expected by the backend.
+
+---
+
 # UART recovery ACK, negotiation, and receive-window corrections
 
 ## meraki-builder

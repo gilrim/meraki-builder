@@ -47,10 +47,21 @@ cc -std=gnu11 -Wall -Wextra -Werror \
   $(pkg-config --libs json-c) -lcrypt
 "$AUTH_OUT" "$ROLE_TMP/passwd" "$ROLE_TMP/group" "$ROLE_TMP/shadow"
 
+SOCKET_OUT=${TMPDIR:-/tmp}/configd-test-socket-io
+cc -std=gnu11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+  -I"$PKG" -o "$SOCKET_OUT" "$HERE/test_socket_io.c" "$PKG/socket_io.c"
+"$SOCKET_OUT"
+
+SERVICE_OUT=${TMPDIR:-/tmp}/configd-test-service-ops
+cc -std=gnu11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+  -I"$PKG" $(pkg-config --cflags json-c) -o "$SERVICE_OUT" \
+  "$HERE/test_service_ops.c" "$PKG/service_ops.c" $(pkg-config --libs json-c)
+"$SERVICE_OUT"
+
 HEALTH_OUT=${TMPDIR:-/tmp}/postmerkosctl-test-health
 cc -std=gnu11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
-  $(pkg-config --cflags json-c) -o "$HEALTH_OUT" "$PKG/postmerkosctl.c" \
-  $(pkg-config --libs json-c)
+  -I"$PKG" $(pkg-config --cflags json-c) -o "$HEALTH_OUT" \
+  "$PKG/postmerkosctl.c" "$PKG/socket_io.c" $(pkg-config --libs json-c)
 "$HERE/test_management_health.py" "$HEALTH_OUT"
 
 BOOT_OUT=${TMPDIR:-/tmp}/configd-test-bootstrap
@@ -61,7 +72,7 @@ cc -std=gnu11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE 
   "$PKG/json_util.c" "$PKG/config_file.c" "$PKG/config_apply.c" \
   "$PKG/hardware.c" "$PKG/network.c" "$PKG/result.c" "$PKG/validation.c" \
   "$PKG/console_cli.c" "$PKG/release.c" "$PKG/roles.c" "$PKG/local_socket.c" \
-  "$PKG/service_ops.c" "$PKG/time_ops.c" "$PKG/port_clone.c" \
+  "$PKG/socket_io.c" "$PKG/service_ops.c" "$PKG/time_ops.c" "$PKG/port_clone.c" \
   "$PKG/compatibility.c" "$PKG/auth.c" "$PKG/websocket_disabled.c" \
   "$PKG/../pd690xx/libpd690xx.c" "$PKG/../postmerkos/libpostmerkos.c" \
   $(pkg-config --libs json-c) -lcrypt
