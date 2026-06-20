@@ -405,6 +405,7 @@ def main() -> int:
             auto_confirm=(not args.manual_target_confirmation and auto_confirm_authorized),
             verbose_acks=args.verbose_acks,
             operation_timeout=args.operation_timeout,
+            baud_controller=controller,
         )
         print(result)
         print("pre-kernel recovery completed successfully")

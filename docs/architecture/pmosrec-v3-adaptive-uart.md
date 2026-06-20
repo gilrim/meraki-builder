@@ -146,8 +146,12 @@ Manual confirmation retries forever. Incorrect text does not discard the image
 or terminate the target session. Power cycling is the cancellation mechanism.
 
 After erase, program and full readback verification succeed, PMOSREC emits a
-five-second countdown and requests the SoC soft-chip reset. If execution continues, PMOSREC arms the family-specific ICPU watchdog as a last-resort reset. The host continues
-listening for the next loader banner.
+five-second countdown and requests the SoC soft-chip reset. `PMOSREC REBOOT NOW`
+is the explicit baud handoff marker: the host consumes that final line at the
+negotiated transport rate, immediately restores its UART to 115200 baud, clears
+only stale high-speed receive bytes, and then watches for the next loader or
+kernel banner. If execution continues, PMOSREC arms the family-specific ICPU
+watchdog as a last-resort reset.
 
 ## Integrity boundaries
 

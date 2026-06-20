@@ -1,3 +1,13 @@
+# 2026-06-20 UART reboot baud handoff
+
+- Treat `PMOSREC REBOOT NOW` as the deterministic transition from negotiated
+  recovery speed back to the permanent 115200-baud loader console.
+- Reconfigure and flush the host TTY immediately after the final high-speed
+  reboot marker, then accept multiple known loader/kernel banners as reboot
+  confirmation.
+- Preserve a successful flash result even when post-reset console monitoring is
+  unavailable, while reporting the boot-baud handoff failure explicitly.
+
 # 2026-06-20 UART recovery ACK and negotiation corrections
 
 - Split meraki-redboot text output from byte-transparent binary UART output so

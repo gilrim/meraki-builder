@@ -62,6 +62,8 @@ CRC traffic, 4 KiB frames, flow-control-safe one-frame compact
 acknowledgements, sparse reconstruction and LZ4 blocks before transferring the manifest and image. The complete reconstructed
 16 MiB image is still SHA-256 verified before erase authorization. See
 [`docs/architecture/pmosrec-v3-adaptive-uart.md`](docs/architecture/pmosrec-v3-adaptive-uart.md).
+After a successful high-speed flash, the host detects `PMOSREC REBOOT NOW`,
+returns the adapter to 115200 baud, and resumes normal boot monitoring.
 
 ### Authoritative upstream source policy
 
