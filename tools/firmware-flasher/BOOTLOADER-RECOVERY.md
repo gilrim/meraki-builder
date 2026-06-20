@@ -162,7 +162,24 @@ that region is unchanged.
 
 The recovery descriptor must declare:
 
-- `hardware_preflight_contract: spi-nor-scratch-rw-restore-loader-crc-v2`;
+- `hardware_preflight_contract: spi-nor-scratch-rw-restore-loader-crc-v3`;
 - `spi_master_enable_contract: preserve-general-ctrl-enable-spi-v1`;
 - `operations: [verify, preflight, dry-run, flash]`;
 - `PREFLIGHT=1` in its embedded descriptor marker.
+
+## Jaguar1 all-high JEDEC response and `PREFLIGHT=3`
+
+`PMOSREC FLASH-ID ffffff` with `SPI-GENERAL ... OBSERVED=00000004` means the
+SPI master gate is enabled but CS0 was not asserted. Recovery payloads marked
+`PREFLIGHT=2` used the `SW_SPI_CS` field as active-low output levels. MSCC
+hardware instead defines it as an active mask: `BIT(0)` asserts CS0 and zero
+deselects all devices.
+
+The corrected payload declares `PREFLIGHT=3`, follows the working MSCC U-Boot
+bitbang sequence, and prints:
+
+```text
+PMOSREC SPI-CS-CONTRACT ACTIVE-MASK CS0=00000001 NONE=00000000
+```
+
+The host rejects older descriptors before uploading them.

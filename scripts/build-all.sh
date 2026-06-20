@@ -99,7 +99,7 @@ for family in ("luton26", "jaguar1"):
     assert descriptor.get("entry_address") == 0x81000000
     assert descriptor.get("entry_contract") == "flat-binary-byte-zero-v1"
     assert descriptor.get("manifest_lookup_contract") == "direct-object-members-v1"
-    assert descriptor.get("hardware_preflight_contract") == "spi-nor-scratch-rw-restore-loader-crc-v2"
+    assert descriptor.get("hardware_preflight_contract") == "spi-nor-scratch-rw-restore-loader-crc-v3"
     assert descriptor.get("spi_master_enable_contract") == "preserve-general-ctrl-enable-spi-v1"
     assert descriptor.get("operations") == ["verify", "preflight", "dry-run", "flash"]
     assert descriptor.get("preflight_scratch") == {"default_address": 0x00FF0000, "bytes": 0x10000, "minimum_address": 0x40000, "restore_original": True}
@@ -115,7 +115,7 @@ for family in ("luton26", "jaguar1"):
     assert record.get("entry_address") == 0x81000000
     assert record.get("entry_contract") == "flat-binary-byte-zero-v1"
     assert record.get("manifest_lookup_contract") == "direct-object-members-v1"
-    assert record.get("hardware_preflight_contract") == "spi-nor-scratch-rw-restore-loader-crc-v2"
+    assert record.get("hardware_preflight_contract") == "spi-nor-scratch-rw-restore-loader-crc-v3"
     assert record.get("spi_master_enable_contract") == "preserve-general-ctrl-enable-spi-v1"
 PY_LOADER
   then

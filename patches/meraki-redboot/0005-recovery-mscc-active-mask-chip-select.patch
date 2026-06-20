@@ -1,0 +1,211 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index f893a02..93e2fcf 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -206,3 +206,20 @@ Development records and prior release notes are maintained under:
+ - Increased the initial PMOSPKG package-header receive grace period to 30 seconds.
+ - Kept per-frame interbyte timeout behavior unchanged.
+ - Documented that hosts must wait for the complete `PMOSREC DESCRIPTOR` line before sending binary data, preventing RX FIFO overrun while the polling recovery stage is still transmitting startup text.
++
++## Unreleased — SPI NOR hardware preflight
++
++- Preserve Jaguar1 `GENERAL_CTRL` and assert `IF_MASTER_SPI_ENA` before software SPI access.
++- Detect all-high/all-low flash buses before any firmware package transfer.
++- Add JEDEC, SFDP, status, protection, and error-latch preflight diagnostics.
++- Add the `PMOSPFT1` destructive-but-restored 64 KiB scratch-sector test.
++- Hard-protect the 256 KiB bootloader region and verify its before/after CRC-32 is unchanged.
++- Publish `spi-nor-scratch-rw-restore-loader-crc-v3` and `preserve-general-ctrl-enable-spi-v1` capability contracts.
++
++## Unreleased — MSCC software-SPI chip-select correction
++
++- Corrected `SPI_MST:SW_MODE.SW_SPI_CS` handling to use the documented active-mask semantics.
++- Assert CS0 with `BIT(0)` and deselect all devices by clearing the CS field, matching the working MSCC U-Boot bitbang driver.
++- Ported the U-Boot mode-0 activation, transfer, and deactivation sequence.
++- Added `PREFLIGHT=3` and `spi-nor-scratch-rw-restore-loader-crc-v3` so stale payloads with inverted CS handling are rejected.
++- Added an early `SPI-CS-CONTRACT ACTIVE-MASK` diagnostic before JEDEC probing.
+diff --git a/payloads/uart-firmware-recovery/README.md b/payloads/uart-firmware-recovery/README.md
+index ec9a4d1..c3a666a 100644
+--- a/payloads/uart-firmware-recovery/README.md
++++ b/payloads/uart-firmware-recovery/README.md
+@@ -77,9 +77,11 @@ the switch is unpowered, and retain verified backups.
+ 
+ The recovery stage prepares the SoC SPI interface before its first NOR command.
+ On Jaguar1 it preserves the existing `GENERAL_CTRL` value and sets
+-`IF_MASTER_SPI_ENA`; clearing or failing to restore this bit causes MISO to read
+-high and produces a false `ffffff` JEDEC value. Luton26 retains its family-specific
+-controller policy.
++`IF_MASTER_SPI_ENA`. It also follows the MSCC software-SPI active-mask contract:
++`SW_SPI_CS=BIT(0)` asserts CS0 and `SW_SPI_CS=0` deselects all devices. Treating
++that field as active-low levels leaves CS0 unselected and produces a false
++`ffffff` JEDEC value. Luton26 uses the same active-mask software-SPI semantics
++while retaining its family-specific controller policy.
+ 
+ Immediately after the descriptor, the stage now performs a short, non-writing
+ hardware check and emits:
+diff --git a/payloads/uart-firmware-recovery/recovery.c b/payloads/uart-firmware-recovery/recovery.c
+index b093c67..e7f70ea 100644
+--- a/payloads/uart-firmware-recovery/recovery.c
++++ b/payloads/uart-firmware-recovery/recovery.c
+@@ -62,13 +62,13 @@ typedef pmos_u32 u32;
+ #define SPI_SW_MODE_ADDR 0x70000064u
+ #define SPI_GENERAL_CTRL_ADDR 0x70000024u
+ #define SPI_GENERAL_CTRL_ENABLE_MASK 0u
+-#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=2;PREFLIGHT=2;END"
++#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=2;PREFLIGHT=3;END"
+ #elif RECOVERY_SOC_FAMILY == 2
+ #define RECOVERY_SOC_NAME "jaguar1"
+ #define SPI_SW_MODE_ADDR 0x70000068u
+ #define SPI_GENERAL_CTRL_ADDR 0x70000028u
+ #define SPI_GENERAL_CTRL_ENABLE_MASK (1u << 2)
+-#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=2;END"
++#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=3;END"
+ #else
+ #error unsupported RECOVERY_SOC_FAMILY
+ #endif
+@@ -79,10 +79,11 @@ typedef pmos_u32 u32;
+ #define SPI_SW_SDO           (1u << 10)
+ #define SPI_SW_SDO_OE        (1u << 9)
+ #define SPI_SW_CS_SHIFT      5u
++#define SPI_SW_CS_MASK       (0x0fu << SPI_SW_CS_SHIFT)
+ #define SPI_SW_CS_OE_SHIFT   1u
+ #define SPI_SW_SDI           (1u << 0)
+-#define SPI_CS_ALL_HIGH      0x0fu
+-#define SPI_CS0_LOW          0x0eu
++#define SPI_CS0_MASK         0x01u
++#define SPI_CS_NONE          0x00u
+ #define SPI_HALF_PERIOD_TICKS 32u
+ 
+ struct package_header {
+@@ -754,6 +755,11 @@ static int spi_controller_prepare(void)
+         puts_b("PMOSREC RESULT ERROR SPI-MASTER-ENABLE\n");
+         return -1;
+     }
++
++    /* Release any stale software-pin state inherited from an earlier stage. */
++    *spi_sw = 0u;
++    __asm__ __volatile__("sync" ::: "memory");
++    puts_b("PMOSREC SPI-CS-CONTRACT ACTIVE-MASK CS0=00000001 NONE=00000000\n");
+     return 0;
+ }
+ 
+@@ -763,38 +769,63 @@ static void spi_delay(void)
+     while ((u32)(cp0_count() - start) < SPI_HALF_PERIOD_TICKS) {}
+ }
+ 
+-static void spi_drive(u32 chip_select, u32 clock, u32 data_out)
++static u32 spi_active_base(void)
++{
++    /*
++     * The MSCC SW_MODE chip-select field is an active-mask, not a level map:
++     * BIT(n) asserts CSn and zero deselects all chip selects.  This mirrors
++     * the working upstream mscc_bb_spi driver exactly.
++     */
++    return SPI_SW_PIN_CTRL_MODE | SPI_SW_SCK_OE | SPI_SW_SDO_OE |
++           (SPI_CS0_MASK << SPI_SW_CS_OE_SHIFT) |
++           (SPI_CS0_MASK << SPI_SW_CS_SHIFT);
++}
++
++static void spi_write(u32 value)
+ {
+-    u32 value = SPI_SW_PIN_CTRL_MODE | SPI_SW_SCK_OE | SPI_SW_SDO_OE |
+-                (1u << SPI_SW_CS_OE_SHIFT) | (chip_select << SPI_SW_CS_SHIFT);
+-    if (clock) value |= SPI_SW_SCK;
+-    if (data_out) value |= SPI_SW_SDO;
+     *spi_sw = value;
++    __asm__ __volatile__("sync" ::: "memory");
+     spi_delay();
+ }
+ 
+ static void spi_deselect(void)
+ {
+-    spi_drive(SPI_CS_ALL_HIGH, 0u, 0u);
+-    spi_drive(SPI_CS_ALL_HIGH, 1u, 0u);
+-    spi_drive(SPI_CS_ALL_HIGH, 0u, 0u);
++    u32 value = *spi_sw;
++
++    /* Actively deselect CS0 while preserving the current clock level. */
++    value &= ~SPI_SW_CS_MASK;
++    spi_write(value);
++
++    /* Stop driving SCK, then release the complete software-mode register. */
++    value &= ~SPI_SW_SCK_OE;
++    spi_write(value);
++    spi_write(0u);
+ }
+ 
+ static void spi_select(void)
+ {
+-    spi_drive(SPI_CS_ALL_HIGH, 0u, 0u);
+-    spi_drive(SPI_CS0_LOW, 0u, 0u);
++    u32 value = spi_active_base();
++
++    /* SPI mode 0: start high, then the first data setup drives SCK low. */
++    spi_write(value | SPI_SW_SCK);
+ }
+ 
+ static u8 spi_xfer(u8 output)
+ {
+     u8 input = 0u;
++    u32 base = spi_active_base();
+     int bit;
++
+     for (bit = 7; bit >= 0; bit--) {
+-        spi_drive(SPI_CS0_LOW, 0u, (output >> bit) & 1u);
+-        spi_drive(SPI_CS0_LOW, 1u, (output >> bit) & 1u);
++        u32 value = base;
++        if (((output >> bit) & 1u) != 0u) value |= SPI_SW_SDO;
++
++        /* Data setup on SCK low, target samples on rising edge. */
++        spi_write(value);
++        spi_write(value | SPI_SW_SCK);
++
++        /* Sample close to the following falling edge, as the MSCC driver does. */
+         if ((*spi_sw & SPI_SW_SDI) != 0u) input |= (u8)(1u << bit);
+-        spi_drive(SPI_CS0_LOW, 0u, (output >> bit) & 1u);
+     }
+     return input;
+ }
+diff --git a/payloads/uart-firmware-recovery/write_descriptor.py b/payloads/uart-firmware-recovery/write_descriptor.py
+index a7e5770..5a144ea 100755
+--- a/payloads/uart-firmware-recovery/write_descriptor.py
++++ b/payloads/uart-firmware-recovery/write_descriptor.py
+@@ -24,7 +24,7 @@ def main() -> int:
+     parser.add_argument("--output", type=Path, required=True)
+     args = parser.parse_args()
+     data = args.binary.read_bytes()
+-    marker = f"PMOSRECOVERY2;SOC={args.family};FAMILY={args.family_id};SPI={args.spi_address:08x};PROTO=2;PREFLIGHT=2;END".encode()
++    marker = f"PMOSRECOVERY2;SOC={args.family};FAMILY={args.family_id};SPI={args.spi_address:08x};PROTO=2;PREFLIGHT=3;END".encode()
+     if marker not in data:
+         raise SystemExit("compiled payload does not contain its machine-readable descriptor")
+     descriptor = {
+@@ -48,7 +48,7 @@ def main() -> int:
+         "entry_address": 0x81000000,
+         "entry_contract": "flat-binary-byte-zero-v1",
+         "manifest_lookup_contract": "direct-object-members-v1",
+-        "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
++        "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+         "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+         "preflight_scratch": {
+             "default_address": 0x00FF0000,
+diff --git a/scripts/write_manifest.py b/scripts/write_manifest.py
+index 8d485e5..00ba5b1 100755
+--- a/scripts/write_manifest.py
++++ b/scripts/write_manifest.py
+@@ -135,7 +135,7 @@ def main() -> int:
+                     "entry_address": 0x81000000,
+                     "entry_contract": "flat-binary-byte-zero-v1",
+                     "manifest_lookup_contract": "direct-object-members-v1",
+-                    "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
++                    "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+                     "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+                 },
+                 "jaguar1": {
+@@ -146,7 +146,7 @@ def main() -> int:
+                     "entry_address": 0x81000000,
+                     "entry_contract": "flat-binary-byte-zero-v1",
+                     "manifest_lookup_contract": "direct-object-members-v1",
+-                    "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
++                    "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+                     "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+                 },
+             } if uart_enabled else None),

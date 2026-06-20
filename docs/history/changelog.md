@@ -110,3 +110,10 @@
 - Add `PMOSPFT1` scratch-sector backup, erase, program, readback, restoration, and bootloader CRC preservation checks.
 - Add direct `--bootloader-preflight` operation, atomic JSON receipts, and hard host/target protection below `0x00040000`.
 - Bind the hardware-preflight and SPI master-enable contracts into loader, payload, rootfs, and final artifact manifests.
+
+## 2026-06-20 MSCC software-SPI chip-select correction
+
+- Corrected `SW_SPI_CS` from inverted pin-level handling to the MSCC active-mask contract.
+- Ported the known-good MSCC U-Boot CS0 activation, mode-0 transfer, and deactivation sequence.
+- Added `PREFLIGHT=3` and the `spi-nor-scratch-rw-restore-loader-crc-v3` cache boundary.
+- Added early chip-select contract diagnostics before the JEDEC probe.
