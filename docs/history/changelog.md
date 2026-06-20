@@ -89,3 +89,10 @@
   manifest fixtures, aggregate UI/configd contract coverage, and recovery
   payload structural builds.
 - Refreshed the UI development dependency lockfile to a zero-advisory audit.
+## 2026-06-20 UI dependency-build reliability
+
+- Corrected a postmerkos-ui lockfile leak that referenced an unavailable private npm package proxy.
+- Added clean UI source materialization, known-proxy URL repair, and unsafe registry rejection.
+- Added visible npm HTTP logging and bounded dependency/install timeouts with dedicated logs.
+- Added host regression coverage for public, leaked-proxy, and private/local package URLs.
+
