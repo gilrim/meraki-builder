@@ -27,6 +27,9 @@ BOOTLOADER_RECOVERY_PATH=${BOOTLOADER_RECOVERY_PATH:-ram-upload}
 SERIAL_DEVICE=${SERIAL_DEVICE:-}
 TARGET_MODEL=${TARGET_MODEL:-}
 FORCE_FLASH=0
+OPERATION=""
+OPERATION_PRESELECTED=0
+PREFLIGHT_SCRATCH=${PREFLIGHT_SCRATCH:-0x00ff0000}
 SUPPRESS_ERR_REPORT=0
 
 usage() {
@@ -47,9 +50,11 @@ Options:
   --control METHOD      ssh, serial, or bootloader; otherwise prompt
   --transport METHOD    tftp (default) or uart; UART supports serial or bootloader control
   --bootloader-recovery use meraki-redboot pre-kernel UART recovery
+  --bootloader-preflight run UART/SPI/NOR erase-program-readback-restore test
   --recovery-path PATH ram-upload (default), embedded, or auto
   --recovery-payload FILE external payload for ram-upload/legacy fallback
   --target-model MODEL  exact hardware model required for bootloader recovery
+  --preflight-scratch N  aligned 64 KiB NOR address (default: 0x00ff0000)
   --serial-device DEV   serial character device
   --modern              current manifest-aware workflow (default)
   --checksum-only       current updater with image + .sha256 only
@@ -431,8 +436,10 @@ WARNING: full-flash mode overwrites the bootloader and kernel in addition to roo
 
 activate_bootloader_recovery() {
     [[ $MODE == modern ]] || die 'bootloader UART recovery requires the modern manifest-aware artifact contract'
-    [[ $SELECTED_TYPE == full ]] || \
-        die 'bootloader UART recovery requires a supported 16 MiB postmerkOS full image'
+    if [[ $OPERATION != preflight ]]; then
+        [[ $SELECTED_TYPE == full ]] || \
+            die 'bootloader UART recovery requires a supported 16 MiB postmerkOS full image'
+    fi
     BOOTLOADER_RECOVERY=1
     CONTROL_PATH=bootloader
     if [[ $FLASH_SCOPE != full ]]; then
@@ -495,11 +502,13 @@ select_control_path() {
 
 select_operation() {
     local choice
+    (( OPERATION_PRESELECTED == 0 )) || return 0
     printf '\nOperation:\n'
     printf '  1) Verify download, checksum, manifest/metadata, board, and layout\n'
     printf '  2) Dry run; stage and prepare without stopping services or writing flash\n'
     printf '  3) Flash firmware and reboot\n'
     printf '  4) Force flash/reinstall/downgrade and reboot\n'
+    printf '  5) Preflight pre-boot UART + SPI NOR read/erase/program/readback/restore\n'
     while :; do
         read -r -p 'Select operation [1]: ' choice
         case ${choice:-1} in
@@ -507,6 +516,7 @@ select_operation() {
             2) OPERATION=dry-run; OPERATION_ARGS=(--dry-run); return ;;
             3) OPERATION=flash; OPERATION_ARGS=(); return ;;
             4) OPERATION=flash; OPERATION_ARGS=(--force); FORCE_FLASH=1; return ;;
+            5) OPERATION=preflight; OPERATION_ARGS=(); BOOTLOADER_RECOVERY=1; CONTROL_PATH=bootloader; return ;;
             *) warn 'invalid selection' ;;
         esac
     done
@@ -822,7 +832,11 @@ run_ssh_mode() {
     command=$(remote_command)
 
     printf '\nMode:              %s\n' "$MODE"
-    printf 'Selected firmware: %s\n' "$SELECTED_FIRMWARE"
+    if [[ $OPERATION == preflight ]]; then
+        printf 'Scratch sector:    %s (64 KiB; bootloader protected; restored after test)\n' "$PREFLIGHT_SCRATCH"
+    else
+        printf 'Selected firmware: %s\n' "$SELECTED_FIRMWARE"
+    fi
     printf 'Control path:      SSH to %s@%s:%s\n' "$SSH_USER" "$SSH_TARGET" "$SSH_PORT"
     if [[ $TRANSPORT == uart ]]; then printf 'Firmware source:   UART PMOSUART/1 (%s)\n' "$STAGED_NAME"; else printf 'TFTP source:       tftp://%s:%s/%s\n' "$HOST_TFTP_IP" "$TFTP_PORT" "$STAGED_NAME"; fi
     printf 'Operation:         %s\n' "$OPERATION"
@@ -957,7 +971,11 @@ run_serial_mode() {
     log_file="$LOG_DIR/firmware-flash-serial-$(date +%Y%m%d-%H%M%S).log"
 
     printf '\nMode:              %s\n' "$MODE"
-    printf 'Selected firmware: %s\n' "$SELECTED_FIRMWARE"
+    if [[ $OPERATION == preflight ]]; then
+        printf 'Scratch sector:    %s (64 KiB; bootloader protected; restored after test)\n' "$PREFLIGHT_SCRATCH"
+    else
+        printf 'Selected firmware: %s\n' "$SELECTED_FIRMWARE"
+    fi
     printf 'Control path:      serial %s, 115200 8N1 XON/XOFF\n' "$SERIAL_DEVICE"
     if [[ $TRANSPORT == uart ]]; then printf 'Firmware source:   UART PMOSUART/1 (%s)\n' "$STAGED_NAME"; else printf 'TFTP source:       tftp://%s:%s/%s\n' "$HOST_TFTP_IP" "$TFTP_PORT" "$STAGED_NAME"; fi
     printf 'Operation:         %s\n' "$OPERATION"
@@ -986,13 +1004,15 @@ run_serial_mode() {
 }
 
 run_bootloader_recovery_mode() {
-    local family default_payload args=()
+    local family default_payload preflight_receipt args=()
     need python3
     [[ -x $SCRIPT_DIR/bootloader-ramload.py ]] || die 'bootloader-ramload.py helper is missing or not executable'
     [[ -f $SCRIPT_DIR/bootloader_protocol.py ]] || die 'bootloader_protocol.py helper is missing'
     [[ $MODE == modern ]] || die 'bootloader recovery requires the modern manifest-aware artifact contract'
-    [[ $FLASH_SCOPE == full && $SELECTED_TYPE == full ]] || \
-        die 'bootloader recovery requires a supported SPIM/SquashFS 16 MiB full image'
+    if [[ $OPERATION != preflight ]]; then
+        [[ $FLASH_SCOPE == full && $SELECTED_TYPE == full ]] || \
+            die 'bootloader recovery requires a supported SPIM/SquashFS 16 MiB full image'
+    fi
     [[ -n $TARGET_MODEL ]] || TARGET_MODEL=$(prompt_default 'Exact target model (for example MS42P or MS220-8P)' 'MS42P')
     case $TARGET_MODEL in
         MS22|MS22P|MS220-8|MS220-8P|MS220-24|MS220-24P) family=luton26 ;;
@@ -1008,10 +1028,15 @@ run_bootloader_recovery_mode() {
     args=(
       --operation "$OPERATION"
       --recovery-path "$BOOTLOADER_RECOVERY_PATH"
-      --firmware "$SELECTED_FIRMWARE"
-      --manifest "$SELECTED_FIRMWARE.manifest.json"
       --target-model "$TARGET_MODEL"
     )
+    if [[ $OPERATION == preflight ]]; then
+        mkdir -p "$LOG_DIR"
+        preflight_receipt="$LOG_DIR/bootloader-preflight-${TARGET_MODEL}-${family}.json"
+        args+=(--preflight-scratch "$PREFLIGHT_SCRATCH" --preflight-receipt "$preflight_receipt")
+    else
+        args+=(--firmware "$SELECTED_FIRMWARE" --manifest "$SELECTED_FIRMWARE.manifest.json")
+    fi
     if [[ -n $BOOTLOADER_PAYLOAD ]]; then
         args+=(--payload "$BOOTLOADER_PAYLOAD")
         local payload_descriptor="${BOOTLOADER_PAYLOAD%.bin}.descriptor.json"
@@ -1023,7 +1048,11 @@ run_bootloader_recovery_mode() {
     printf '\nPre-kernel UART recovery\n'
     printf 'Operation:         %s\n' "$OPERATION"
     printf 'Target model:      %s (%s)\n' "$TARGET_MODEL" "$family"
-    printf 'Selected firmware: %s\n' "$SELECTED_FIRMWARE"
+    if [[ $OPERATION == preflight ]]; then
+        printf 'Scratch sector:    %s (64 KiB; bootloader protected; restored after test)\n' "$PREFLIGHT_SCRATCH"
+    else
+        printf 'Selected firmware: %s\n' "$SELECTED_FIRMWARE"
+    fi
     printf 'Recovery path:     %s\n' "$BOOTLOADER_RECOVERY_PATH"
     if [[ -n $BOOTLOADER_PAYLOAD ]]; then printf 'External payload:  %s\n' "$BOOTLOADER_PAYLOAD"; else printf 'External payload:  not required (embedded in meraki-redboot)\n'; fi
 
@@ -1038,6 +1067,9 @@ run_bootloader_recovery_mode() {
     printf 'Serial device:     %s, 115200 8N1, binary transport\n\n' "$SERIAL_DEVICE"
     if [[ $OPERATION == flash ]]; then
         prompt_yes_no 'Begin recovery upload and target-side validation?' n || die 'cancelled'
+    elif [[ $OPERATION == preflight ]]; then
+        printf 'The selected scratch sector will be backed up, erased, fully programmed, verified, and restored.\n'
+        prompt_yes_no 'Begin destructive-but-restored UART/NOR preflight?' n || die 'cancelled'
     else
         prompt_yes_no 'Begin non-destructive recovery dry-run?' y || die 'cancelled'
     fi
@@ -1126,9 +1158,11 @@ main() {
             --control) (($# >= 2)) || die '--control requires ssh or serial'; CONTROL_PATH=$2; shift 2 ;;
             --transport) (($# >= 2)) || die '--transport requires tftp or uart'; TRANSPORT=$2; shift 2 ;;
             --bootloader-recovery) BOOTLOADER_RECOVERY=1; CONTROL_PATH=bootloader; FLASH_SCOPE=full; FLASH_SCOPE_REQUESTED=1; shift ;;
+            --bootloader-preflight) BOOTLOADER_RECOVERY=1; CONTROL_PATH=bootloader; FLASH_SCOPE=full; FLASH_SCOPE_REQUESTED=1; OPERATION=preflight; OPERATION_PRESELECTED=1; shift ;;
             --recovery-path) (($# >= 2)) || die '--recovery-path requires embedded, auto, or ram-upload'; BOOTLOADER_RECOVERY_PATH=$2; shift 2 ;;
             --recovery-payload) (($# >= 2)) || die '--recovery-payload requires a file'; BOOTLOADER_PAYLOAD=$2; shift 2 ;;
             --target-model) (($# >= 2)) || die '--target-model requires a model'; TARGET_MODEL=$2; shift 2 ;;
+            --preflight-scratch) (($# >= 2)) || die '--preflight-scratch requires an address'; PREFLIGHT_SCRATCH=$2; shift 2 ;;
             --serial-device) (($# >= 2)) || die '--serial-device requires a device'; SERIAL_DEVICE=$2; shift 2 ;;
             --modern) MODE=modern; shift ;;
             --checksum-only|--original-artifacts) MODE=checksum; shift ;;
@@ -1151,6 +1185,7 @@ main() {
     [[ $MODE != legacy || $FLASH_SCOPE != full ]] || die '--full-flash is unavailable with --legacy'
     [[ $BOOTLOADER_RECOVERY -eq 0 || $MODE == modern ]] || die '--bootloader-recovery requires --modern'
     [[ $BOOTLOADER_RECOVERY_PATH == embedded || $BOOTLOADER_RECOVERY_PATH == auto || $BOOTLOADER_RECOVERY_PATH == ram-upload ]] || die '--recovery-path must be embedded, auto, or ram-upload'
+    [[ $PREFLIGHT_SCRATCH =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]] || die '--preflight-scratch must be a numeric address'
     if [[ $CONTROL_PATH == bootloader ]]; then
         BOOTLOADER_RECOVERY=1
         FLASH_SCOPE=full
@@ -1165,10 +1200,17 @@ main() {
 
     TMP=$(mktemp -d)
     chmod 700 "$TMP"
-    select_firmware
-    select_flash_scope
-    prepare_version_hint
-    select_operation
+    if [[ $OPERATION == preflight && $OPERATION_PRESELECTED -eq 1 ]]; then
+        MODE=modern
+        SELECTED_TYPE=preflight
+        FLASH_SCOPE=full
+        FLASH_SCOPE_REQUESTED=1
+    else
+        select_firmware
+        select_flash_scope
+        prepare_version_hint
+        select_operation
+    fi
 
     if (( BOOTLOADER_RECOVERY )); then
         activate_bootloader_recovery

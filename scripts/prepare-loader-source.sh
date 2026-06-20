@@ -53,6 +53,7 @@ clone_or_update_git_ref "$LOADER_REPO_URL" "$LOADER_SOURCE_DIR" "$LOADER_REF" "m
 entry_fix_patch="$REPO_ROOT/patches/meraki-redboot/0001-recovery-flat-binary-byte-zero-entry.patch"
 header_grace_patch="$REPO_ROOT/patches/meraki-redboot/0002-recovery-package-header-grace.patch"
 manifest_scope_patch="$REPO_ROOT/patches/meraki-redboot/0003-recovery-direct-member-json-lookup.patch"
+hardware_preflight_patch="$REPO_ROOT/patches/meraki-redboot/0004-recovery-spi-preflight-and-master-enable.patch"
 entry_descriptor="$LOADER_SOURCE_DIR/payloads/uart-firmware-recovery/write_descriptor.py"
 recovery_source="$LOADER_SOURCE_DIR/payloads/uart-firmware-recovery/recovery.c"
 if ! grep -q 'flat-binary-byte-zero-v1' "$entry_descriptor" 2>/dev/null; then
@@ -105,6 +106,25 @@ if ! grep -q 'direct-object-members-v1' "$entry_descriptor" 2>/dev/null || \
   RESOLVED_GIT_DESCRIBE="$(git -C "$LOADER_SOURCE_DIR" describe --tags --always --dirty)"
 fi
 
+if ! grep -q 'spi-nor-scratch-rw-restore-loader-crc-v2' "$entry_descriptor" 2>/dev/null || \
+   ! grep -q 'preserve-general-ctrl-enable-spi-v1' "$entry_descriptor" 2>/dev/null || \
+   ! grep -q 'spi_controller_prepare' "$recovery_source" 2>/dev/null || \
+   ! grep -q 'PMOSREC COMMAND-READY 1' "$recovery_source" 2>/dev/null; then
+  [[ -f "$hardware_preflight_patch" ]] || die "meraki-redboot SPI NOR preflight patch is missing: $hardware_preflight_patch"
+  log "Applying meraki-redboot SPI master-enable and destructive preflight correction"
+  if ! git -C "$LOADER_SOURCE_DIR" apply --check "$hardware_preflight_patch"; then
+    die "meraki-redboot source lacks the SPI NOR preflight contracts and does not match the supported recovery source layout"
+  fi
+  git -C "$LOADER_SOURCE_DIR" apply "$hardware_preflight_patch"
+  git -C "$LOADER_SOURCE_DIR" config user.name postmerkOS-builder
+  git -C "$LOADER_SOURCE_DIR" config user.email builder@localhost
+  git -C "$LOADER_SOURCE_DIR" add -A
+  GIT_AUTHOR_DATE='2026-06-20T00:03:00Z' GIT_COMMITTER_DATE='2026-06-20T00:03:00Z' \
+    git -C "$LOADER_SOURCE_DIR" commit -q -m 'Enable SPI master and add destructive recovery preflight'
+  RESOLVED_GIT_REF="$(git -C "$LOADER_SOURCE_DIR" rev-parse HEAD)"
+  RESOLVED_GIT_DESCRIBE="$(git -C "$LOADER_SOURCE_DIR" describe --tags --always --dirty)"
+fi
+
 [[ -f "$LOADER_SOURCE_DIR/Makefile" ]] || die "meraki-redboot Makefile is missing"
 [[ -f "$LOADER_SOURCE_DIR/VERSION" ]] || die "meraki-redboot VERSION is missing"
 [[ -f "$LOADER_PAYLOAD_PACKER" ]] || die "meraki-redboot payload packer is missing"
@@ -125,5 +145,14 @@ if grep -q 'direct-object-members-v1' "$entry_descriptor" && grep -q 'direct_obj
   log "meraki-redboot manifest lookup contract: direct-object-members-v1"
 else
   die "selected meraki-redboot source lacks scoped direct-member manifest parsing"
+fi
+if grep -q 'spi-nor-scratch-rw-restore-loader-crc-v2' "$entry_descriptor" && \
+   grep -q 'preserve-general-ctrl-enable-spi-v1' "$entry_descriptor" && \
+   grep -q 'spi_controller_prepare' "$recovery_source" && \
+   grep -q 'PMOSREC COMMAND-READY 1' "$recovery_source"; then
+  log "meraki-redboot hardware preflight contract: spi-nor-scratch-rw-restore-loader-crc-v2"
+  log "meraki-redboot SPI master contract: preserve-general-ctrl-enable-spi-v1"
+else
+  die "selected meraki-redboot source lacks the SPI NOR hardware preflight correction"
 fi
 log "meraki-redboot $(cat "$LOADER_SOURCE_VERSION_FILE") selected at $RESOLVED_GIT_REF"

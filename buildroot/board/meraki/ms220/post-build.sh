@@ -129,12 +129,21 @@ for family in ("luton26", "jaguar1"):
     accepted_models = descriptor.get("accepted_models")
     if descriptor.get("accepted_flash_bytes") != 16 * 1024 * 1024 or geometry != expected_geometry:
         raise SystemExit(f"Recovery descriptor flash geometry mismatch: {descriptor_path}")
-    if descriptor.get("operations") != ["verify", "dry-run", "flash"]:
+    if descriptor.get("operations") != ["verify", "preflight", "dry-run", "flash"]:
         raise SystemExit(f"Recovery descriptor operation contract mismatch: {descriptor_path}")
     if descriptor.get("load_address") != 0x81000000 or descriptor.get("entry_address") != 0x81000000:
         raise SystemExit(f"Recovery descriptor load/entry address mismatch: {descriptor_path}")
     if descriptor.get("entry_contract") != "flat-binary-byte-zero-v1":
         raise SystemExit(f"Recovery descriptor lacks corrected byte-zero entry contract: {descriptor_path}")
+    if descriptor.get("manifest_lookup_contract") != "direct-object-members-v1":
+        raise SystemExit(f"Recovery descriptor lacks direct-member manifest lookup: {descriptor_path}")
+    if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        raise SystemExit(f"Recovery descriptor lacks destructive SPI NOR preflight: {descriptor_path}")
+    if descriptor.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
+        raise SystemExit(f"Recovery descriptor lacks SPI master-enable correction: {descriptor_path}")
+    scratch = descriptor.get("preflight_scratch", {})
+    if scratch != {"default_address": 0x00FF0000, "bytes": 0x10000, "minimum_address": 0x40000, "restore_original": True}:
+        raise SystemExit(f"Recovery descriptor scratch-sector contract mismatch: {descriptor_path}")
     if descriptor.get("transport_integrity") != ["frame-crc32", "object-crc32", "object-sha256"]:
         raise SystemExit(f"Recovery descriptor integrity contract mismatch: {descriptor_path}")
     if not isinstance(jedec, list) or not jedec or any(not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{6}", item) is None for item in jedec):
@@ -146,7 +155,7 @@ for family in ("luton26", "jaguar1"):
     payload_data = binary_path.read_bytes()
     marker = (
         f"PMOSRECOVERY2;SOC={family};FAMILY={expected[family]['id']};"
-        f"SPI={expected[family]['spi']:08x};PROTO=2;END"
+        f"SPI={expected[family]['spi']:08x};PROTO=2;PREFLIGHT=2;END"
     ).encode("ascii")
     if payload_data.count(marker) != 1:
         raise SystemExit(f"Recovery payload embedded target descriptor mismatch: {binary_path}")
@@ -160,6 +169,12 @@ for family in ("luton26", "jaguar1"):
         raise SystemExit(f"meraki-redboot embedded recovery load/entry mismatch: {family}")
     if embedded_record.get("entry_contract") != "flat-binary-byte-zero-v1":
         raise SystemExit(f"meraki-redboot embedded recovery lacks corrected byte-zero entry contract: {family}")
+    if embedded_record.get("manifest_lookup_contract") != "direct-object-members-v1":
+        raise SystemExit(f"meraki-redboot embedded recovery lacks direct-member manifest lookup: {family}")
+    if embedded_record.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        raise SystemExit(f"meraki-redboot embedded recovery lacks hardware preflight: {family}")
+    if embedded_record.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
+        raise SystemExit(f"meraki-redboot embedded recovery lacks SPI master-enable correction: {family}")
     if common_geometry is None:
         common_geometry, common_jedec = geometry, jedec
     elif common_geometry != geometry or common_jedec != jedec:
@@ -174,6 +189,10 @@ for family in ("luton26", "jaguar1"):
         "load_address": descriptor["load_address"],
         "entry_address": descriptor["entry_address"],
         "entry_contract": descriptor["entry_contract"],
+        "manifest_lookup_contract": descriptor["manifest_lookup_contract"],
+        "hardware_preflight_contract": descriptor["hardware_preflight_contract"],
+        "spi_master_enable_contract": descriptor["spi_master_enable_contract"],
+        "preflight_scratch": descriptor["preflight_scratch"],
     }
 data = {
     "version": release,
@@ -207,6 +226,9 @@ data = {
                     "load_address": payloads[family]["load_address"],
                     "entry_address": payloads[family]["entry_address"],
                     "entry_contract": payloads[family]["entry_contract"],
+                    "manifest_lookup_contract": payloads[family]["manifest_lookup_contract"],
+                    "hardware_preflight_contract": payloads[family]["hardware_preflight_contract"],
+                    "spi_master_enable_contract": payloads[family]["spi_master_enable_contract"],
                 } for family in ("luton26", "jaguar1")
             },
         },
@@ -214,7 +236,10 @@ data = {
             "enabled": True,
             "protocol_version": 2,
             "full_image_bytes": 16 * 1024 * 1024,
-            "operations": ["verify", "dry-run", "flash"],
+            "operations": ["verify", "preflight", "dry-run", "flash"],
+            "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+            "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+            "preflight_scratch": {"default_address": 0x00FF0000, "bytes": 0x10000, "minimum_address": 0x40000, "restore_original": True},
             "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
             "flash_geometry": common_geometry,
             "accepted_jedec_ids": common_jedec,

@@ -135,7 +135,7 @@ for family, (family_id, spi, models) in expected.items():
     descriptor_path = recovery_dir / f"recovery-{family}.descriptor.json"
     raw = payload.read_bytes()
     descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
-    marker = f"PMOSRECOVERY2;SOC={family};FAMILY={family_id};SPI={spi:08x};PROTO=2;END".encode()
+    marker = f"PMOSRECOVERY2;SOC={family};FAMILY={family_id};SPI={spi:08x};PROTO=2;PREFLIGHT=2;END".encode()
     if raw.count(marker) != 1:
         raise SystemExit(f"{payload.name} has an invalid embedded target descriptor")
     if descriptor.get("format") != "postmerkos.uart-recovery-payload.v2":
@@ -148,6 +148,14 @@ for family, (family_id, spi, models) in expected.items():
         raise SystemExit(f"{payload.name} lacks the corrected flat-binary byte-zero entry contract")
     if descriptor.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise SystemExit(f"{payload.name} lacks scoped direct-member manifest parsing")
+    if descriptor.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        raise SystemExit(f"{payload.name} lacks destructive SPI NOR preflight support")
+    if descriptor.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
+        raise SystemExit(f"{payload.name} lacks the SPI master-enable correction")
+    if descriptor.get("operations") != ["verify", "preflight", "dry-run", "flash"]:
+        raise SystemExit(f"{payload.name} has an invalid operation contract")
+    if descriptor.get("preflight_scratch") != {"default_address": 0x00FF0000, "bytes": 0x10000, "minimum_address": 0x40000, "restore_original": True}:
+        raise SystemExit(f"{payload.name} has an invalid preflight scratch contract")
     embedded = cap.get("embedded_recovery", {}).get(family, {})
     if embedded.get("load_address") != 0x81000000 or embedded.get("entry_address") != 0x81000000:
         raise SystemExit(f"meraki-redboot embedded recovery address is invalid for {family}")
@@ -155,6 +163,10 @@ for family, (family_id, spi, models) in expected.items():
         raise SystemExit(f"meraki-redboot embedded recovery lacks the corrected entry contract for {family}")
     if embedded.get("manifest_lookup_contract") != "direct-object-members-v1":
         raise SystemExit(f"meraki-redboot embedded recovery lacks scoped manifest parsing for {family}")
+    if embedded.get("hardware_preflight_contract") != "spi-nor-scratch-rw-restore-loader-crc-v2":
+        raise SystemExit(f"meraki-redboot embedded recovery lacks hardware preflight for {family}")
+    if embedded.get("spi_master_enable_contract") != "preserve-general-ctrl-enable-spi-v1":
+        raise SystemExit(f"meraki-redboot embedded recovery lacks SPI master-enable correction for {family}")
     binary = descriptor.get("binary", {})
     if binary.get("bytes") != len(raw) or binary.get("sha256") != hashlib.sha256(raw).hexdigest():
         raise SystemExit(f"{payload.name} descriptor binary record mismatch")

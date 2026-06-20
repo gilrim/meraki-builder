@@ -95,3 +95,11 @@
 - Added the `direct-object-members-v1` recovery payload contract to loader, release-manifest, and flasher validation.
 - Forced rebuild/rejection of recovery payloads that lack the scoped manifest parser.
 
+
+## 2026-06-20 pre-boot UART SPI NOR hardware preflight
+
+- Re-enable and verify the Jaguar1 SPI master while preserving `GENERAL_CTRL`.
+- Move JEDEC/status/SFDP checks before firmware package transfer.
+- Add `PMOSPFT1` scratch-sector backup, erase, program, readback, restoration, and bootloader CRC preservation checks.
+- Add direct `--bootloader-preflight` operation, atomic JSON receipts, and hard host/target protection below `0x00040000`.
+- Bind the hardware-preflight and SPI master-enable contracts into loader, payload, rootfs, and final artifact manifests.

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import re
@@ -15,6 +17,8 @@ from bootloader_protocol import (
     SerialLink,
     inspect_payload,
     make_package_header,
+    make_preflight_header,
+    MODEL_FAMILY,
     send_object,
     send_ram_payload,
     validate_bundle,
@@ -27,7 +31,7 @@ READY_SOC = re.compile(r"\bSOC=(luton26|jaguar1)\b")
 INFO_SOC = re.compile(r"\bSOC:\s*(luton26|jaguar1)\b")
 RECOVERY_DESCRIPTOR = re.compile(
     r"^PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=(luton26|jaguar1);"
-    r"FAMILY=([12]);SPI=([0-9a-fA-F]{8});PROTO=2;END$"
+    r"FAMILY=([12]);SPI=([0-9a-fA-F]{8});PROTO=2;PREFLIGHT=2;END$"
 )
 MENU_BYTE = re.compile(r"\bBYTE:\s*0x([0-9a-fA-F]{8})\b")
 MENU_SELECTION = re.compile(r"\bSELECTED:\s*0x([0-9a-fA-F]{8})\b")
@@ -109,6 +113,10 @@ def accept_recovery_ready(link: SerialLink, ready_line: str, expected_family: st
                           stage: str) -> None:
     require_soc(ready_line, expected_family, stage)
     wait_for_recovery_descriptor(link, expected_family)
+    flash_ready = link.wait_for(("PMOSREC FLASH-PREFLIGHT-OK",), 10.0)
+    if f"ID=" not in flash_ready:
+        raise ProtocolError(f"recovery hardware preflight did not report a JEDEC ID: {flash_ready}")
+    link.wait_for(("PMOSREC COMMAND-READY 1",), 5.0)
 
 
 def require_hex_field(line: str, pattern: re.Pattern[str], expected: int, label: str) -> None:
@@ -227,13 +235,13 @@ def enter_recovery(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--operation", choices=("verify", "dry-run", "flash"), default="verify")
+    parser.add_argument("--operation", choices=("verify", "preflight", "dry-run", "flash"), default="verify")
     parser.add_argument("--port", help="Linux serial character device")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--recovery-path", choices=("embedded", "ram-upload", "auto"), default="embedded")
     parser.add_argument("--payload", type=Path, help="external recovery payload for RAM-loader fallback")
     parser.add_argument("--payload-descriptor", type=Path, help="entry-contract descriptor for --payload")
-    parser.add_argument("--firmware", type=Path, required=True)
+    parser.add_argument("--firmware", type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--target-model", required=True)
     parser.add_argument("--force", action="store_true", help="permit a manifest status of untested")
@@ -246,17 +254,31 @@ def main() -> int:
     parser.add_argument("--fallback-ready-timeout", type=float, default=180.0)
     parser.add_argument("--operation-timeout", type=float, default=1800.0)
     parser.add_argument("--auto-confirm-erase", action="store_true")
+    parser.add_argument("--preflight-scratch", default="0x00ff0000")
+    parser.add_argument("--preflight-seed", default="0x504d4f53")
+    parser.add_argument("--preflight-receipt", type=Path,
+                        help="write an atomic JSON receipt after a successful destructive preflight")
     args = parser.parse_args()
 
-    manifest = args.manifest or Path(str(args.firmware) + ".manifest.json")
-    compatibility_override = args.force or args.operation in ("verify", "dry-run")
-    bundle = validate_bundle(args.firmware, manifest, args.target_model, force=compatibility_override)
+    if args.target_model not in MODEL_FAMILY:
+        raise ProtocolError(f"unsupported exact target model: {args.target_model}")
+    compatibility_override = args.force or args.operation in ("verify", "preflight", "dry-run")
+    bundle = None
+    manifest = None
+    if args.operation != "preflight":
+        if args.firmware is None:
+            raise ProtocolError("--firmware is required except for --operation preflight")
+        manifest = args.manifest or Path(str(args.firmware) + ".manifest.json")
+        bundle = validate_bundle(args.firmware, manifest, args.target_model, force=compatibility_override)
 
     payload_data: bytes | None = None
     descriptor = None
     if args.payload is not None:
         descriptor = inspect_payload(args.payload, args.payload_descriptor)
-        validate_recovery_payload(args.payload, descriptor, bundle)
+        if descriptor.family != MODEL_FAMILY[args.target_model]:
+            raise ProtocolError("recovery payload family does not match the selected target")
+        if bundle is not None:
+            validate_recovery_payload(args.payload, descriptor, bundle)
         payload_data = args.payload.read_bytes()
         if len(payload_data) > 4 * 1024 * 1024:
             raise ProtocolError("recovery payload exceeds the loader's 4 MiB limit")
@@ -265,20 +287,27 @@ def main() -> int:
 
     load = int(args.load_address, 0)
     entry = int(args.entry, 0) if args.entry else load
-    print(f"firmware: {args.firmware} ({args.firmware.stat().st_size} bytes)")
-    print(f"manifest: {manifest} ({len(bundle.manifest_bytes)} bytes)")
-    print(f"target: {bundle.model} / boot-family={bundle.family} / status={bundle.model_status}")
+    if bundle is not None:
+        print(f"firmware: {args.firmware} ({args.firmware.stat().st_size} bytes)")
+        print(f"manifest: {manifest} ({len(bundle.manifest_bytes)} bytes)")
+        print(f"target: {bundle.model} / boot-family={bundle.family} / status={bundle.model_status}")
+    else:
+        print(f"target: {args.target_model} / boot-family={MODEL_FAMILY[args.target_model]}")
+        print(f"preflight scratch: {int(args.preflight_scratch, 0):#010x} (64 KiB, restored after test)")
     print(f"recovery path: {args.recovery_path}")
     if descriptor is not None:
         print(f"external payload: {args.payload} ({descriptor.family}, {descriptor.size} bytes, sha256 {descriptor.sha256})")
     else:
         print("external payload: not required; meraki-redboot embeds the family recovery stage")
-    print("local validation: loader menu, embedded recovery binding, SPIM alignment/CRC, image digest, and model policy OK")
+    if bundle is not None:
+        print("local validation: loader menu, embedded recovery binding, SPIM alignment/CRC, image digest, and model policy OK")
+    else:
+        print("local validation: recovery payload entry, SoC family, SPI enable, and preflight contracts OK")
     if args.operation == "verify":
         print("verify completed without opening the serial port or sending data")
         return 0
     if not args.port:
-        raise ProtocolError("--port is required for dry-run and flash operations")
+        raise ProtocolError("--port is required for preflight, dry-run and flash operations")
 
     fd = os.open(args.port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     old = configure_serial(fd, args.baud)
@@ -287,7 +316,7 @@ def main() -> int:
         print("Reset or power-cycle the switch now; waiting for the meraki-redboot recovery menu...")
         try:
             selected_path = enter_recovery(
-                link, args.recovery_path, bundle.family, args.ready_timeout, payload_data,
+                link, args.recovery_path, MODEL_FAMILY[args.target_model], args.ready_timeout, payload_data,
                 load, entry, args.chunk_size, args.frame_retries, args.ack_timeout,
             )
         except EmbeddedRecoveryEntryError as exc:
@@ -304,7 +333,7 @@ def main() -> int:
             )
             link.discard_buffer()
             selected_path = enter_recovery(
-                link, "ram-upload", bundle.family, args.fallback_ready_timeout, payload_data,
+                link, "ram-upload", MODEL_FAMILY[args.target_model], args.fallback_ready_timeout, payload_data,
                 load, entry, args.chunk_size, args.frame_retries, args.ack_timeout,
             )
         print(
@@ -313,6 +342,49 @@ def main() -> int:
             flush=True,
         )
 
+        if args.operation == "preflight":
+            preflight_header = make_preflight_header(
+                scratch_address=int(args.preflight_scratch, 0),
+                pattern_seed=int(args.preflight_seed, 0),
+            )
+            link.write_all(preflight_header)
+            link.wait_for(("PMOSPFT HEADER-ACK",), 5.0)
+            result = link.wait_for(("PMOSREC RESULT PREFLIGHT-OK",), args.operation_timeout)
+            print(result)
+            if args.preflight_receipt is not None:
+                receipt = {
+                    "format": "postmerkos.bootloader-preflight-receipt.v1",
+                    "result": "pass",
+                    "completed_utc": datetime.now(timezone.utc).isoformat(),
+                    "target_model": args.target_model,
+                    "soc_family": MODEL_FAMILY[args.target_model],
+                    "recovery_path": selected_path,
+                    "serial_device": args.port,
+                    "scratch_address": int(args.preflight_scratch, 0),
+                    "scratch_bytes": 64 * 1024,
+                    "pattern_seed": int(args.preflight_seed, 0),
+                    "restore_original": True,
+                    "recovery_payload_sha256": descriptor.sha256 if descriptor is not None else None,
+                    "hardware_preflight_contract": (
+                        descriptor.hardware_preflight_contract if descriptor is not None
+                        else "spi-nor-scratch-rw-restore-loader-crc-v2"
+                    ),
+                    "spi_master_enable_contract": (
+                        descriptor.spi_master_enable_contract if descriptor is not None
+                        else "preserve-general-ctrl-enable-spi-v1"
+                    ),
+                    "target_result_line": result,
+                }
+                args.preflight_receipt.parent.mkdir(parents=True, exist_ok=True)
+                temporary = args.preflight_receipt.with_name(args.preflight_receipt.name + ".tmp")
+                temporary.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                os.chmod(temporary, 0o600)
+                temporary.replace(args.preflight_receipt)
+                print(f"preflight receipt: {args.preflight_receipt}")
+            print("pre-kernel UART/NOR preflight completed successfully; original scratch sector restored")
+            return 0
+
+        assert bundle is not None
         package_header = make_package_header(
             bundle, dry_run=args.operation == "dry-run", force=compatibility_override,
             chunk_size=args.chunk_size,

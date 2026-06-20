@@ -55,10 +55,10 @@ class BundleFixture:
         self.payload_luton = root / "recovery-luton26.bin"
         self.payload_jaguar = root / "recovery-jaguar1.bin"
         self.payload_luton.write_bytes(
-            b"xPMOSRECOVERY2;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=2;ENDy"
+            b"xPMOSRECOVERY2;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=2;PREFLIGHT=2;ENDy"
         )
         self.payload_jaguar.write_bytes(
-            b"xPMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;ENDy"
+            b"xPMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=2;ENDy"
         )
         for payload, family, family_id, spi in (
             (self.payload_luton, "luton26", 1, 0x70000064),
@@ -75,6 +75,8 @@ class BundleFixture:
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
                 "binary": {
                     "filename": payload.name,
                     "bytes": len(raw),
@@ -97,6 +99,8 @@ class BundleFixture:
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
             },
             "jaguar1": {
                 "filename": self.payload_jaguar.name,
@@ -109,6 +113,8 @@ class BundleFixture:
                 "entry_address": 0x81000000,
                 "entry_contract": "flat-binary-byte-zero-v1",
                 "manifest_lookup_contract": "direct-object-members-v1",
+                "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
             },
         }
         data = {
@@ -133,6 +139,8 @@ class BundleFixture:
                             "entry_address": record["entry_address"],
                             "entry_contract": record["entry_contract"],
                             "manifest_lookup_contract": record["manifest_lookup_contract"],
+                            "hardware_preflight_contract": record["hardware_preflight_contract"],
+                            "spi_master_enable_contract": record["spi_master_enable_contract"],
                         }
                         for family, record in payload_records.items()
                     },
@@ -141,6 +149,15 @@ class BundleFixture:
                     "enabled": True,
                     "protocol_version": 2,
                     "full_image_bytes": bp.FULL_IMAGE_SIZE,
+                    "operations": ["verify", "preflight", "dry-run", "flash"],
+                    "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                    "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+                    "preflight_scratch": {
+                        "default_address": bp.DEFAULT_PREFLIGHT_SCRATCH,
+                        "bytes": bp.PREFLIGHT_SCRATCH_BYTES,
+                        "minimum_address": bp.LOADER_REGION_SIZE,
+                        "restore_original": True,
+                    },
                     "flash_geometry": {
                         "bytes": bp.FULL_IMAGE_SIZE,
                         "erase_bytes": 64 * 1024,
@@ -397,8 +414,10 @@ class ProtocolTests(unittest.TestCase):
             f"PMOSREC READY 2 SOC={family} FAMILY={family_id:08x}",
             (
                 f"PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC={family};FAMILY={family_id};"
-                f"SPI={'70000064' if family == 'luton26' else '70000068'};PROTO=2;END"
+                f"SPI={'70000064' if family == 'luton26' else '70000068'};PROTO=2;PREFLIGHT=2;END"
             ),
+            "PMOSREC FLASH-PREFLIGHT-OK ID=c22018 ERASE=00010000 PAGE=00000100",
+            "PMOSREC COMMAND-READY 1",
         ]
         selected = br.enter_recovery(
             link, "embedded", family, 30.0, None, 0x81000000, 0x81000000,
@@ -425,7 +444,9 @@ class ProtocolTests(unittest.TestCase):
             "PMOSBOOT PASS-MENU-CHOICE: SELECTED: 0x00000001",
             "PMOSRAM READY 2 SOC=jaguar1",
             "PMOSREC READY 2 SOC=jaguar1 FAMILY=00000002",
-            "PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;END",
+            "PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=2;END",
+            "PMOSREC FLASH-PREFLIGHT-OK ID=c22018 ERASE=00010000 PAGE=00000100",
+            "PMOSREC COMMAND-READY 1",
         ]
         with mock.patch.object(br, "send_ram_payload") as send_payload:
             selected = br.enter_recovery(
@@ -434,10 +455,7 @@ class ProtocolTests(unittest.TestCase):
             )
         self.assertEqual(selected, "ram-upload")
         send_payload.assert_called_once()
-        self.assertEqual(
-            link.wait_for.call_args_list[-1],
-            mock.call(("PMOSREC DESCRIPTOR ",), 5.0),
-        )
+        self.assertEqual(link.wait_for.call_args_list[-1], mock.call(("PMOSREC COMMAND-READY 1",), 5.0))
 
 
     def test_package_header_is_not_sent_until_descriptor_line_completes(self) -> None:
@@ -458,8 +476,10 @@ class ProtocolTests(unittest.TestCase):
                     pass
                 target.sendall(
                     b"PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;"
-                    b"SPI=70000068;PROTO=2;END\n"
+                    b"SPI=70000068;PROTO=2;PREFLIGHT=2;END\n"
                 )
+                target.sendall(b"PMOSREC FLASH-PREFLIGHT-OK ID=c22018 ERASE=00010000 PAGE=00000100\n")
+                target.sendall(b"PMOSREC COMMAND-READY 1\n")
                 if not observed["early"]:
                     target.settimeout(1.0)
                     observed["header"] = read_exact(target, 124)
@@ -490,7 +510,7 @@ class ProtocolTests(unittest.TestCase):
         link = mock.Mock()
         link.wait_for.return_value = (
             "PMOSREC DESCRIPTOR PMOSRECOVERY2;SOC=luton26;FAMILY=1;"
-            "SPI=70000064;PROTO=2;END"
+            "SPI=70000064;PROTO=2;PREFLIGHT=2;END"
         )
         with self.assertRaisesRegex(bp.ProtocolError, "recovery descriptor mismatch"):
             br.wait_for_recovery_descriptor(link, "jaguar1")
@@ -524,6 +544,16 @@ class ProtocolTests(unittest.TestCase):
             bundle.manifest.write_text(json.dumps(manifest))
             with self.assertRaisesRegex(bp.ProtocolError, "SPIM kernel CRC mismatch"):
                 bp.validate_bundle(bundle.image, bundle.manifest, "MS42P", force=False)
+
+    def test_preflight_header_protects_loader_and_has_crc(self) -> None:
+        header = bp.make_preflight_header(scratch_address=0x00FF0000, pattern_seed=0x12345678)
+        self.assertEqual(len(header), bp.PREFLIGHT_HEADER.size)
+        values = bp.PREFLIGHT_HEADER.unpack(header)
+        self.assertEqual(values[0], bp.PREFLIGHT_MAGIC)
+        self.assertEqual(values[3], 0x00FF0000)
+        self.assertEqual(values[-1], zlib.crc32(header[:-4]) & 0xFFFFFFFF)
+        with self.assertRaisesRegex(bp.ProtocolError, "protected bootloader"):
+            bp.make_preflight_header(scratch_address=0x00030000)
 
     def test_verify_operation_never_opens_serial(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
