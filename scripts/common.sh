@@ -30,7 +30,7 @@ KERNEL_HEADERS_TARBALL="$BUILD_DIR/linux-3.18.123.tar.bz2"
 KERNEL_ARTIFACT_DIR="$ARTIFACTS_DIR/kernel"
 
 UI_REPO_URL="${UI_REPO_URL:-https://github.com/Gadorach/postmerkos-ui.git}"
-UI_REF="${UI_REF:-main}"
+UI_REF="${UI_REF:-ms42p-dev}"
 UI_DIR="${UI_DIR:-$SOURCES_DIR/postmerkos-ui}"
 NODE_VERSION="${NODE_VERSION:-22.14.0}"
 
