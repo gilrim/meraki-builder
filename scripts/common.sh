@@ -38,8 +38,30 @@ DONOR_URL="${DONOR_URL:-https://watchmysys.com/files/meraki/ms220/postmerkOS-202
 DONOR_DEFAULT="$INPUTS_DIR/postmerkOS-20240818.bin"
 DONOR_ROOT="$EXTRACTED_DIR/donor-rootfs"
 DONOR_ROOTFS_REGION="$EXTRACTED_DIR/donor-rootfs-region.squashfs"
+LOADER_REPO_URL="${LOADER_REPO_URL:-https://github.com/Gadorach/meraki-redboot.git}"
+LOADER_SOURCE_ARCHIVE="${LOADER_SOURCE_ARCHIVE:-}"
+if [[ -z "$LOADER_SOURCE_ARCHIVE" && -f "$REPO_ROOT/../reference-inputs/meraki-redboot-main-v0.7.0.zip" ]]; then
+  LOADER_SOURCE_ARCHIVE="$REPO_ROOT/../reference-inputs/meraki-redboot-main-v0.7.0.zip"
+fi
+# "latest" resolves to the highest version tag available from the repository.
+# Set LOADER_REF to an exact tag/commit for a reproducible offline release build.
+LOADER_REF="${LOADER_REF:-latest}"
+LOADER_SOURCE_DIR="${LOADER_SOURCE_DIR:-$SOURCES_DIR/meraki-redboot}"
+LOADER_WORK_DIR="${LOADER_WORK_DIR:-$LOADER_SOURCE_DIR/.work}"
+LOADER_VARIANT="${LOADER_VARIANT:-development}"
+LOADER_BUILD_MODE="${LOADER_BUILD_MODE:-auto}"
+LOADER_PAYLOAD_SLOT_END="${LOADER_PAYLOAD_SLOT_END:-0x00300000}"
+LOADER_HARD_PAYLOAD_LIMIT="${LOADER_HARD_PAYLOAD_LIMIT:-0x002bffe0}"
 LOADER_ARTIFACT="$ARTIFACTS_DIR/loader1.bin"
-REDBOOT_URL="${REDBOOT_URL:-https://github.com/halmartin/MS42-GPL-sources-3-18-122/raw/master/redboot/redboot-nocrc-sz.bin}"
+LOADER_MANIFEST="$ARTIFACTS_DIR/loader1.bin.manifest.json"
+LOADER_PAYLOAD_PACKER="$LOADER_SOURCE_DIR/tools/mkvcoreiii_payload.py"
+LOADER_SOURCE_REVISION_FILE="$ARTIFACTS_DIR/meraki-redboot-source-revision.txt"
+LOADER_SOURCE_VERSION_FILE="$ARTIFACTS_DIR/meraki-redboot-version.txt"
+LOADER_BUILD_SOURCE_RECORD="$ARTIFACTS_DIR/loader1.bin.source.json"
+RECOVERY_ARTIFACT_DIR="$ARTIFACTS_DIR/recovery"
+
+VENDOR_MODULE_TOOL="$REPO_ROOT/buildroot/board/meraki/ms220/vendor-module-tree.py"
+VENDOR_MODULE_REQUIRED="$REPO_ROOT/buildroot/board/meraki/ms220/vendor-modules.required"
 
 JOBS="${JOBS:-$(nproc 2>/dev/null || printf '1')}"
 DISTROBOX_NAME="${DISTROBOX_NAME:-meraki-build}"
@@ -53,6 +75,12 @@ log() { printf '\n==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"; }
+
+verify_vendor_module_tree() {
+  local tree="$1"
+  need python3
+  python3 "$VENDOR_MODULE_TOOL" verify "$tree"     --required-file "$VENDOR_MODULE_REQUIRED" --quiet
+}
 
 is_interactive() { [[ -t 0 && -t 1 && "${NONINTERACTIVE:-0}" != 1 ]]; }
 
@@ -130,6 +158,77 @@ clone_or_update_ref() {
     git -C "$dir" fetch origin "+refs/heads/$ref:refs/remotes/origin/$ref" --tags
     git -C "$dir" checkout -B "$ref" "origin/$ref"
   fi
+}
+
+
+select_latest_version_tag() {
+  local stable any
+  stable="$(grep -E '^[vV]?[0-9]+([.][0-9]+){1,3}$' | sort -V | tail -n 1)"
+  if [[ -n "$stable" ]]; then
+    printf '%s\n' "$stable"
+    return 0
+  fi
+  any="$(grep -E '^[vV]?[0-9]+([.][0-9]+){1,3}([-.][0-9A-Za-z.-]+)?$' \
+    | sort -V | tail -n 1)"
+  [[ -n "$any" ]] || return 1
+  printf '%s\n' "$any"
+}
+
+resolve_latest_git_tag() {
+  local url="$1" tag
+  need git
+  tag="$(git ls-remote --tags --refs "$url" 'refs/tags/*' 2>/dev/null \
+    | awk -F/ '{print $3}' \
+    | select_latest_version_tag)"
+  [[ -n "$tag" ]] || return 1
+  printf '%s\n' "$tag"
+}
+
+latest_local_git_tag() {
+  local dir="$1"
+  git -C "$dir" tag --list | select_latest_version_tag
+}
+
+clone_or_update_git_ref() {
+  local url="$1" dir="$2" requested_ref="$3" label="${4:-repository}" ref remote_ok=1
+  ref="$requested_ref"
+  need git
+
+  if [[ "$ref" == latest ]]; then
+    log "Resolving latest tagged $label release"
+    if ! ref="$(resolve_latest_git_tag "$url")"; then
+      if [[ -d "$dir/.git" ]]; then
+        ref="$(latest_local_git_tag "$dir")"
+      fi
+      [[ -n "$ref" ]] || die "Unable to resolve a remote or cached version tag for $label"
+      warn "Network tag lookup failed; using cached $label tag $ref"
+    fi
+  fi
+
+  if [[ ! -d "$dir/.git" ]]; then
+    log "Cloning $label"
+    git clone "$url" "$dir"
+  fi
+  if [[ "${ALLOW_DIRTY_SOURCES:-0}" != 1 && -n "$(git -C "$dir" status --porcelain)" ]]; then
+    die "$label has local changes in $dir. Commit/stash them or set ALLOW_DIRTY_SOURCES=1."
+  fi
+  if ! git -C "$dir" fetch origin --tags --prune; then
+    remote_ok=0
+    warn "Unable to refresh $label from origin; attempting the requested cached revision"
+  fi
+  log "Selecting $label revision $ref"
+  if git -C "$dir" rev-parse --verify --quiet "refs/tags/$ref^{commit}" >/dev/null; then
+    git -C "$dir" checkout --detach "refs/tags/$ref^{commit}"
+  elif [[ "$ref" =~ ^[0-9a-fA-F]{7,40}$ ]] && git -C "$dir" rev-parse --verify --quiet "$ref^{commit}" >/dev/null; then
+    git -C "$dir" checkout --detach "$ref^{commit}"
+  elif git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$ref"; then
+    git -C "$dir" checkout -B "$ref" "origin/$ref"
+  else
+    (( remote_ok )) || die "$label revision $ref is not available in the offline cache"
+    die "$label revision not found as a tag, commit, or branch: $ref"
+  fi
+  RESOLVED_GIT_REF="$(git -C "$dir" rev-parse HEAD)"
+  RESOLVED_GIT_DESCRIBE="$(git -C "$dir" describe --tags --always --dirty)"
 }
 
 sha256_record() {

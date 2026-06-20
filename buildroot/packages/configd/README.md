@@ -15,7 +15,7 @@ Configd is the always-running privileged management core for postmerkOS. It owns
 - Local Unix socket: `/run/postmerkos/configd.sock`
 - Optional authenticated WebSocket frontend on port 4001
 
-Desired configuration is persistent state; status is observed state and may omit unavailable hardware. Invalid requests never replace the saved configuration. Missing Click handlers and transient hardware reads become structured warnings rather than daemon termination.
+Desired configuration is persistent state; status is observed state and may omit unavailable hardware. Invalid requests never replace the saved configuration. Required Click, PoE, network, and service operations are applied before persistence; a required failure rejects the transaction and attempts runtime rollback. Only explicitly optional or unreadable status paths become structured warnings.
 
 ## Interfaces
 

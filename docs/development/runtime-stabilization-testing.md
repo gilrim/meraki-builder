@@ -1,115 +1,57 @@
 # Runtime stabilization hardware testing
 
-This checklist validates the access, WebSocket, reset-button, and LED changes introduced by the Phase 7 runtime-stabilization revision. Run it first on serial console with a known hardware-recovery method available.
+Run these checks from serial with a verified SPI backup and recovery method.
 
-## 1. Configd and WebSocket readiness
-
-```sh
-configd --features
-/etc/init.d/S15configd status && echo ready
-ls -l /run/postmerkos/configd.sock
-grep -i ':0FA1' /proc/net/tcp /proc/net/tcp6
-cat /run/postmerkos/configd.log
-cat /run/postmerkos/websocket.log
-```
-
-A web build must report WebSocket support, protocol `configd-ws`, and a listener on TCP port 4001 (`0FA1` hexadecimal).
-
-Open the web UI and confirm the login page progresses through transport connection, protocol validation, authentication required, and authenticated role. No status/configuration request should occur before login.
-
-## 2. Role repeatability
-
-From root serial and SSH sessions, run repeatedly:
+## Identity and module selection
 
 ```sh
-for n in 1 2 3 4 5 6 7 8 9 10; do
-    postmerkosctl session
-    postmerkosctl has users.manage && echo admin
-    postmerkosctl has system.reboot && echo reboot-ok
-done
+cat /run/postmerkos/boardinfo
+/etc/init.d/S08kmods profile
+lsmod
+mount | grep ' /click '
+cat /run/postmerkos/click-config.status
 ```
 
-The role and capability results must not alternate. Repeat with administrator, operator, viewer, and roleless test accounts.
+Confirm the exact model, expected Luton26/Jaguar1/Jaguar Dual family, correct logical port count, matching module vermagic/hash, and required Click handlers. Unknown identity must disable model-specific actions rather than borrowing another profile.
 
-## 3. Serial lifecycle
+## Management transactions
 
-1. Press Enter at the `pmc:` prompt.
-2. Enter and leave several menus.
-3. Select Shell, then run `exit`; the console should return.
-4. Select Shell, run `pmc`, then exit the nested console and shell.
-5. Select Logout; the serial `pmc:` prompt should return.
-6. Re-enter without rebooting.
+Apply a valid port/network/service change and confirm desired and observed state match. Then deliberately target a missing required handler in a recovery environment and confirm the request fails, the prior configuration remains primary, and runtime rollback is attempted. Invalid external edits must restore the known-good configuration.
 
-The default-password warning should appear at console entry while `/config/postmerkos/default-password-active` exists.
+## Access and WebSocket
 
-## 4. SSH lifecycle
+Confirm serial/SSH console lifecycle, role repeatability, noninteractive `postmerkosctl`, WebSocket protocol version 2, dynamic WS/WSS selection, authentication before subscriptions, and bounded unauthenticated/authenticated idle behavior.
 
-- Interactive root/admin login should enter the console.
-- Operator and viewer accounts should receive role-filtered consoles.
-- A roleless account should not receive an unrestricted shell.
-- Administrator Shell should work.
-- Logout should close the SSH session.
-- Non-interactive commands must remain usable:
-
-```sh
-ssh root@SWITCH 'postmerkosctl session'
-```
-
-## 5. Service menu
-
-Open Service Management and confirm it begins with a compact table rather than raw JSON. Raw policy output should appear only when explicitly requested.
-
-## 6. Reset-button discovery
-
-Do not enable a guessed reset input.
+## Reset discovery
 
 ```sh
 postmerkos-hwprobe reset-button
 postmerkos-hwprobe reset-button --watch 30
 cat /run/postmerkos/hardware-controls.json
-cat /run/postmerkos/button-status.json
-cat /run/postmerkos/buttond.log
 ```
 
-Press and release the reset button several times during watch mode. Record any GPIO, LED-class, input-device, platform, or Click state that changes. If only an evdev node is suspected, record `/proc/bus/input/devices` and the corresponding `/dev/input/event*` node for a follow-up profile.
+Discovery is read-only. Record input/GPIO/Click changes while pressing the button. Destructive reset remains disabled for every shipped profile; do not perform an erase test until a separately reviewed implementation exists.
 
-The shipped profile intentionally reports `unidentified` and will not erase JFFS2 until a model mapping is marked verified.
-
-## 7. LED discovery
+## LED validation
 
 ```sh
 postmerkos-hwprobe leds
-postmerkos-hwprobe leds --watch 30
 postmerkos-ledctl capabilities
+postmerkos-ledctl test-status
 ```
 
-Capture observations:
+Only run `test-status` when the exact-model capability reports both `power_led_green` and `power_led_orange` writable. The protocol is `STATE n`; normal state is captured and restored. `led_mode` is manual-validation only. `poe_led_state` is an LED indication handler, not PoE power control, and is registered only for MS220-8/MS220-8P.
 
-- before Click initialization;
-- while the chassis status LED is orange;
-- when it changes green;
-- after all startup scripts complete.
+## UART updater
 
-Search candidate paths without writing first. A status LED must be registered and marked verified before `postmerkos-ledctl test-status` is used.
+From the host:
 
-The known `/click/sw0_ctrl/poe_led_state` port method is registered as binary per-port control and is used when the handler is writable.
+```sh
+./tools/firmware-flasher/firmware-flasher.sh --control serial --transport uart
+```
 
-## 8. Verified reset test
+Test an interrupted frame, retransmission, CRC rejection, complete image plus optional manifest, exact byte/SHA reconstruction, verification-only operation, system update, and—only with full recovery available—full-flash acknowledgement. Observe RAM use because the candidate is reconstructed under `/run/fwupdate/uploads`.
 
-Only after a verified model profile has been added:
+## Destructive hardware matrix
 
-1. Short press: detected, no reset.
-2. Hold and release before ten seconds: countdown cancels.
-3. Hold for ten seconds: JFFS2 is erased and the switch reboots.
-4. Hold before daemon startup: current-state detection starts the countdown once the daemon opens the input.
-5. Repeat with LED output unavailable; serial/status reporting must still work.
-
-## 9. Firmware LED behavior
-
-Before an update, the UI and console should report the selected LED method:
-
-- binary port progress;
-- binary status-LED accelerated blink;
-- no LED output.
-
-When a verified status LED is the fallback, its cycle accelerates from 2.0 seconds at 0% to 0.8 seconds at 100%. Firmware failure uses a bounded error pattern before reboot. The RAM-resident `fwflash` helper owns this fallback after normal userspace is stopped.
+Record results separately for boot, Click forwarding, all copper/uplink ports, VLAN/STP/LACP, PD690xx PoE/af/at, status LEDs, read-only reset discovery, firmware system update, full flash, power loss during each erase/write region, and post-boot finalization. Host tests do not prove these behaviors.

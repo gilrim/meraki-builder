@@ -12,21 +12,14 @@ fi
 [[ -f "$IMAGE" ]] || die "No firmware image was supplied and latest-image.txt is unavailable"
 [[ "$(file_size "$IMAGE")" -eq $((0x1000000)) ]] || die "Firmware image is not exactly 16 MiB"
 
-python3 - "$IMAGE" "$KERNEL_ARTIFACT_DIR/vmlinuz.bin" <<'PY'
+python3 "$SCRIPT_DIR/validate-vcoreiii-payload.py" "$IMAGE" \
+  --expected-payload "$KERNEL_ARTIFACT_DIR/vmlinuz.bin" \
+  --json-output "$ARTIFACTS_DIR/kernel-payload-validation.json"
+python3 - "$IMAGE" <<'PY'
 from pathlib import Path
-import hashlib, struct, sys
-image=Path(sys.argv[1]).read_bytes()
-kernel=Path(sys.argv[2]).read_bytes()
-assert image[0x40000:0x40004] == b'SPIM', 'missing SPIM header at 0x40000'
-load,length,entry=struct.unpack_from('<III',image,0x40004)
-assert load == 0x81000000, f'unexpected load address: 0x{load:08x}'
-assert entry == 0x81000000, f'unexpected entry address: 0x{entry:08x}'
-assert length == len(kernel), f'header length {length} != kernel length {len(kernel)}'
-embedded=image[0x40020:0x40020+length]
-assert hashlib.sha256(embedded).digest() == hashlib.sha256(kernel).digest(), 'embedded kernel mismatch'
+import sys
+image = Path(sys.argv[1]).read_bytes()
 assert image[0x300000:0x300004] == b'hsqs', 'missing SquashFS magic at 0x300000'
-print(f'SPIM load/entry: 0x{load:08x}')
-print(f'Kernel payload:   {length} bytes')
 PY
 
 VERIFY_DIR="$BUILD_DIR/rootfs-validation"
@@ -39,11 +32,9 @@ required=(
   etc/init.d/S09clickinit
   etc/init.d/S10clickconfig
   etc/init.d/S11poe
-  lib/modules/elts_meraki.ko
-  lib/modules/merakiclick.ko
-  lib/modules/proclikefs.ko
-  lib/modules/jaguar_dual/vc_click.ko
-  lib/modules/jaguar_dual/vtss_core.ko
+  lib/modules/postmerkos-required-modules.txt
+  lib/modules/postmerkos-all-modules.txt
+  lib/modules/postmerkos-modules.sha256
   bin/pd690xx
   bin/fw_update
   bin/fw_update_http
@@ -62,6 +53,10 @@ fi
 for path in "${required[@]}"; do
   [[ -e "$VERIFY_DIR/$path" ]] || die "Rootfs verification failed: missing /$path"
 done
+python3 "$VENDOR_MODULE_TOOL" verify "$VERIFY_DIR/lib/modules" \
+  --required-file "$VENDOR_MODULE_REQUIRED" --quiet || \
+  die "Rootfs verification failed: platform-complete vendor module matrix is missing"
+
 
 if bool_enabled "${INCLUDE_UI:-0}"; then
   for path in bin/configd usr/bin/uhttpd etc/init.d/S15configd \

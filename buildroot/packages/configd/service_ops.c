@@ -201,8 +201,8 @@ static int write_dropbear_defaults(struct json_object *ssh) {
   return rc;
 }
 
-int service_policy_apply(char *error, size_t error_size) {
-  struct json_object *policy = service_policy_load();
+static int service_policy_apply_object(struct json_object *policy,
+                                       char *error, size_t error_size) {
   if (!policy) { set_error(error, error_size, "service policy unavailable"); return -ENOENT; }
   struct json_object *ssh = member(policy, "ssh");
   int rc = write_dropbear_defaults(ssh);
@@ -220,9 +220,17 @@ int service_policy_apply(char *error, size_t error_size) {
     char local_error[128] = {0};
     int action_rc = service_action(names[i], desired ? "start" : "stop",
                                    local_error, sizeof(local_error));
-    if (action_rc != 0 && action_rc != -ENOENT && rc == 0) rc = action_rc;
+    if (action_rc != 0 && rc == 0) rc = action_rc;
   }
-  if (rc != 0 && error && !*error) set_error(error, error_size, "one or more service settings could not be applied");
+  if (rc != 0 && error && !*error)
+    set_error(error, error_size, "one or more service settings could not be applied");
+  return rc;
+}
+
+int service_policy_apply(char *error, size_t error_size) {
+  struct json_object *policy = service_policy_load();
+  if (!policy) { set_error(error, error_size, "service policy unavailable"); return -ENOENT; }
+  int rc = service_policy_apply_object(policy, error, error_size);
   json_object_put(policy);
   return rc;
 }
@@ -230,10 +238,31 @@ int service_policy_apply(char *error, size_t error_size) {
 int service_policy_save(struct json_object *policy, char *error, size_t error_size) {
   int rc = validate_policy(policy, error, error_size);
   if (rc != 0) return rc;
+  struct json_object *previous = service_policy_load();
+
+  /* Apply before persist.  A desired policy is not committed unless its
+   * observable service state can be established. */
+  rc = service_policy_apply_object(policy, error, error_size);
+  if (rc != 0) {
+    char rollback_error[128] = {0};
+    if (previous) service_policy_apply_object(previous, rollback_error,
+                                              sizeof(rollback_error));
+    if (previous) json_object_put(previous);
+    return rc;
+  }
+
   ensure_parent();
   rc = atomic_json_write(SERVICE_POLICY_PATH, policy);
-  if (rc != 0) { set_error(error, error_size, strerror(-rc)); return rc; }
-  return service_policy_apply(error, error_size);
+  if (rc != 0) {
+    char rollback_error[128] = {0};
+    if (previous) service_policy_apply_object(previous, rollback_error,
+                                              sizeof(rollback_error));
+    if (previous) json_object_put(previous);
+    set_error(error, error_size, strerror(-rc));
+    return rc;
+  }
+  if (previous) json_object_put(previous);
+  return 0;
 }
 
 struct json_object *service_status_json(void) {
@@ -244,9 +273,19 @@ struct json_object *service_status_json(void) {
   for (size_t i = 0; i < 3; i++) {
     struct json_object *entry = member(policy, names[i]);
     struct json_object *status = json_object_new_object();
+    bool desired = bool_member(entry, "enabled", true) &&
+                   bool_member(entry, "autostart", true);
+    if (!strcmp(names[i], "chrony")) {
+      struct json_object *time = time_policy_load();
+      desired = desired && bool_member(time, "ntp_enabled", true);
+      if (time) json_object_put(time);
+    }
+    bool observed = process_running(processes[i]);
     json_object_object_add(status, "enabled", json_object_new_boolean(bool_member(entry, "enabled", true)));
     json_object_object_add(status, "autostart", json_object_new_boolean(bool_member(entry, "autostart", true)));
-    json_object_object_add(status, "running", json_object_new_boolean(process_running(processes[i])));
+    json_object_object_add(status, "desired_running", json_object_new_boolean(desired));
+    json_object_object_add(status, "running", json_object_new_boolean(observed));
+    json_object_object_add(status, "in_sync", json_object_new_boolean(desired == observed));
     if (!strcmp(names[i], "ssh")) {
       json_object_object_add(status, "password_auth", json_object_new_boolean(bool_member(entry, "password_auth", true)));
       json_object_object_add(status, "port", json_object_new_int(int_member(entry, "port", 22)));

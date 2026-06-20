@@ -3,7 +3,7 @@ source "$(dirname "$0")/common.sh"
 load_build_state
 
 # Keep Buildroot host tools in the same supported Ubuntu environment as the
-# legacy kernel toolchain.  This also protects direct `make rootfs` invocations
+# pinned kernel toolchain. This also protects direct `make rootfs` invocations
 # that do not pass through build-all.sh.
 if [[ "${MS42P_IN_DISTROBOX:-0}" != 1 ]] && ! bool_enabled "${ALLOW_UNSUPPORTED_HOST_BUILD:-0}"; then
   if bool_enabled "${USE_DISTROBOX:-0}"; then
@@ -25,7 +25,14 @@ fi
 [[ -f "$BUILDROOT_DIR/.config" ]] || die "Buildroot is not prepared. Run make prepare first."
 [[ -f "$KERNEL_ARTIFACT_DIR/vmlinuz" ]] || die "Missing kernel ELF"
 [[ -f "$KERNEL_ARTIFACT_DIR/vmlinuz.bin" ]] || die "Missing compressed kernel binary"
-[[ -f "$LOADER_ARTIFACT" ]] || die "Missing RedBoot loader"
+[[ -f "$LOADER_ARTIFACT" ]] || die "Missing source-built LinuxLoader boot region"
+[[ -f "$LOADER_MANIFEST" ]] || die "Missing LinuxLoader capability manifest"
+
+# Refresh and validate both module staging paths for direct build-rootfs.sh
+# invocations and reused Buildroot output trees.
+"$SCRIPT_DIR/stage-vendor-modules.sh" \
+  "$GENERATED_OVERLAY/lib/modules" \
+  "$BUILDROOT_DIR/board/meraki/ms220/vendor-modules"
 
 cd "$BUILDROOT_DIR"
 
@@ -75,6 +82,9 @@ log "Building root filesystem and complete NOR image"
 export MS42P_KERNEL_ELF="$KERNEL_ARTIFACT_DIR/vmlinuz"
 export MS42P_KERNEL_BIN="$KERNEL_ARTIFACT_DIR/vmlinuz.bin"
 export MS42P_LOADER="$LOADER_ARTIFACT"
+export MS42P_LOADER_MANIFEST="$LOADER_MANIFEST"
+export MS42P_PAYLOAD_PACKER="$LOADER_PAYLOAD_PACKER"
+export MS42P_RECOVERY_ARTIFACT_DIR="$RECOVERY_ARTIFACT_DIR"
 export MS42P_RELEASE="${MS42P_RELEASE:-$(date -u +%Y%m%d)}"
 run_logged buildroot-build \
   make -j"$JOBS" BR2_DL_DIR="$BUILDROOT_DL_DIR" \
@@ -86,6 +96,12 @@ IMAGE="$BUILDROOT_DIR/output/images/ms42p-firmware.bin"
 [[ -f "$IMAGE" ]] || die "The MS42P post-image script did not produce ms42p-firmware.bin"
 [[ "$(file_size "$IMAGE")" -eq $((0x1000000)) ]] || die "Firmware image is not 16 MiB"
 
+python3 "$VENDOR_MODULE_TOOL" verify \
+  "$BUILDROOT_DIR/output/target/lib/modules" \
+  --required-file "$VENDOR_MODULE_REQUIRED" --quiet || \
+  die "Built target does not contain the complete platform module matrix"
+
+
 stamp="$(date -u +%Y%m%d-%H%M%S)"
 name="ms42p-postmerkos-$stamp.bin"
 if bool_enabled "${INCLUDE_UI:-0}"; then
@@ -93,6 +109,22 @@ if bool_enabled "${INCLUDE_UI:-0}"; then
 fi
 cp -f "$IMAGE" "$ARTIFACTS_DIR/$name"
 cp -f "$ROOTFS" "$ARTIFACTS_DIR/rootfs.squashfs"
+
+release_manifest="$BUILDROOT_DIR/output/images/postmerkos-release.json"
+if [[ -f "$release_manifest" ]]; then
+  python3 "$SCRIPT_DIR/write-artifact-manifest.py" \
+    "$release_manifest" \
+    "$ARTIFACTS_DIR/$name.manifest.json" \
+    "$ARTIFACTS_DIR/$name" \
+    "$ARTIFACTS_DIR/rootfs.squashfs" \
+    "$LOADER_MANIFEST" \
+    "$RECOVERY_ARTIFACT_DIR" \
+    "$LOADER_SOURCE_VERSION_FILE" \
+    "$LOADER_SOURCE_REVISION_FILE"
+  write_sha256_sidecar "$ARTIFACTS_DIR/$name.manifest.json"
+else
+  warn "Release manifest was not produced; modern artifact manifest sidecar omitted."
+fi
 write_sha256_sidecar "$ARTIFACTS_DIR/$name"
 write_sha256_sidecar "$ARTIFACTS_DIR/rootfs.squashfs"
 printf '%s\n' "$ARTIFACTS_DIR/$name" > "$ARTIFACTS_DIR/latest-image.txt"

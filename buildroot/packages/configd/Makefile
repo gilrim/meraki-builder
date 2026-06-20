@@ -4,6 +4,7 @@ POSTMERKOS_DIR ?= ../postmerkos
 ENABLE_WEBSOCKET ?= 1
 INCLUDES = -I$(PD690XX_DIR) -I$(POSTMERKOS_DIR)
 CFLAGS ?= -Os
+CPPFLAGS += -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 LDLIBS += -ljson-c -lcrypt
 
 BASE_SRCS = main.c click_port.c click_global.c status.c json_util.c \
