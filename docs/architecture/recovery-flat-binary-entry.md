@@ -19,8 +19,9 @@ discards non-runtime MIPS metadata, asserts `_start == 0x81000000`, initializes
 stack/GP/BSS, and then calls `recovery_main`. Every generated descriptor and
 release manifest declares `entry_contract: flat-binary-byte-zero-v1`.
 
-The builder applies this source correction to an unmodified 0.7.0 checkout and
-refuses to emit a loader, rootfs release record or complete image if the entry
-contract is absent. For hardware still running the original loader, use menu
-option 1 to upload the corrected external stage. Once a corrected loader is
-flashed, menu option 2 is safe for later recovery.
+The correction lives in the authoritative meraki-redboot repository. The builder
+fetches `origin/main`, validates that the entry contract is present, and refuses
+to emit a loader or complete image when it is absent. It never patches the
+checkout. For hardware still running the original loader, use menu option 1 to
+upload the corrected external stage. Once a corrected loader is flashed, menu
+option 2 is safe for later recovery.

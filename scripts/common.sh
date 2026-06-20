@@ -40,12 +40,10 @@ DONOR_ROOT="$EXTRACTED_DIR/donor-rootfs"
 DONOR_ROOTFS_REGION="$EXTRACTED_DIR/donor-rootfs-region.squashfs"
 LOADER_REPO_URL="${LOADER_REPO_URL:-https://github.com/Gadorach/meraki-redboot.git}"
 LOADER_SOURCE_ARCHIVE="${LOADER_SOURCE_ARCHIVE:-}"
-if [[ -z "$LOADER_SOURCE_ARCHIVE" && -f "$REPO_ROOT/../reference-inputs/meraki-redboot-main-v0.7.0.zip" ]]; then
-  LOADER_SOURCE_ARCHIVE="$REPO_ROOT/../reference-inputs/meraki-redboot-main-v0.7.0.zip"
-fi
-# "latest" resolves to the highest version tag available from the repository.
-# Set LOADER_REF to an exact tag/commit for a reproducible offline release build.
-LOADER_REF="${LOADER_REF:-latest}"
+# Upstream main is authoritative. The builder fetches it and never patches it.
+# An exact commit may be supplied explicitly for reproducible release builds.
+# "latest" remains a compatibility alias for "main".
+LOADER_REF="${LOADER_REF:-main}"
 LOADER_SOURCE_DIR="${LOADER_SOURCE_DIR:-$SOURCES_DIR/meraki-redboot}"
 LOADER_WORK_DIR="${LOADER_WORK_DIR:-$LOADER_SOURCE_DIR/.work}"
 LOADER_VARIANT="${LOADER_VARIANT:-development}"
@@ -161,72 +159,41 @@ clone_or_update_ref() {
 }
 
 
-select_latest_version_tag() {
-  local stable any
-  stable="$(grep -E '^[vV]?[0-9]+([.][0-9]+){1,3}$' | sort -V | tail -n 1)"
-  if [[ -n "$stable" ]]; then
-    printf '%s\n' "$stable"
-    return 0
-  fi
-  any="$(grep -E '^[vV]?[0-9]+([.][0-9]+){1,3}([-.][0-9A-Za-z.-]+)?$' \
-    | sort -V | tail -n 1)"
-  [[ -n "$any" ]] || return 1
-  printf '%s\n' "$any"
-}
-
-resolve_latest_git_tag() {
-  local url="$1" tag
-  need git
-  tag="$(git ls-remote --tags --refs "$url" 'refs/tags/*' 2>/dev/null \
-    | awk -F/ '{print $3}' \
-    | select_latest_version_tag)"
-  [[ -n "$tag" ]] || return 1
-  printf '%s\n' "$tag"
-}
-
-latest_local_git_tag() {
-  local dir="$1"
-  git -C "$dir" tag --list | select_latest_version_tag
-}
-
 clone_or_update_git_ref() {
-  local url="$1" dir="$2" requested_ref="$3" label="${4:-repository}" ref remote_ok=1
+  local url="$1" dir="$2" requested_ref="$3" label="${4:-repository}" ref
   ref="$requested_ref"
   need git
 
   if [[ "$ref" == latest ]]; then
-    log "Resolving latest tagged $label release"
-    if ! ref="$(resolve_latest_git_tag "$url")"; then
-      if [[ -d "$dir/.git" ]]; then
-        ref="$(latest_local_git_tag "$dir")"
-      fi
-      [[ -n "$ref" ]] || die "Unable to resolve a remote or cached version tag for $label"
-      warn "Network tag lookup failed; using cached $label tag $ref"
-    fi
+    warn "$label ref 'latest' is deprecated; tracking origin/main"
+    ref=main
   fi
 
   if [[ ! -d "$dir/.git" ]]; then
     log "Cloning $label"
     git clone "$url" "$dir"
   fi
-  if [[ "${ALLOW_DIRTY_SOURCES:-0}" != 1 && -n "$(git -C "$dir" status --porcelain)" ]]; then
-    die "$label has local changes in $dir. Commit/stash them or set ALLOW_DIRTY_SOURCES=1."
+
+  if [[ -n "$(git -C "$dir" status --porcelain)" ]]; then
+    die "$label has local changes in $dir. Commit them to the upstream repository before building. The builder never patches source checkouts."
   fi
-  if ! git -C "$dir" fetch origin --tags --prune; then
-    remote_ok=0
-    warn "Unable to refresh $label from origin; attempting the requested cached revision"
-  fi
-  log "Selecting $label revision $ref"
-  if git -C "$dir" rev-parse --verify --quiet "refs/tags/$ref^{commit}" >/dev/null; then
-    git -C "$dir" checkout --detach "refs/tags/$ref^{commit}"
-  elif [[ "$ref" =~ ^[0-9a-fA-F]{7,40}$ ]] && git -C "$dir" rev-parse --verify --quiet "$ref^{commit}" >/dev/null; then
+
+  if [[ "$ref" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+    log "Refreshing $label and selecting exact commit $ref"
+    git -C "$dir" fetch origin --tags --prune
+    git -C "$dir" cat-file -e "$ref^{commit}" 2>/dev/null || \
+      die "$label commit is unavailable after fetch: $ref"
     git -C "$dir" checkout --detach "$ref^{commit}"
-  elif git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$ref"; then
-    git -C "$dir" checkout -B "$ref" "origin/$ref"
   else
-    (( remote_ok )) || die "$label revision $ref is not available in the offline cache"
-    die "$label revision not found as a tag, commit, or branch: $ref"
+    log "Refreshing authoritative $label branch origin/$ref"
+    git -C "$dir" fetch origin "+refs/heads/$ref:refs/remotes/origin/$ref" --prune
+    git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$ref" || \
+      die "$label branch is unavailable: origin/$ref"
+    git -C "$dir" checkout -B "$ref" "origin/$ref"
+    git -C "$dir" reset --hard "origin/$ref"
   fi
+
+  RESOLVED_GIT_SYMBOLIC_REF="$ref"
   RESOLVED_GIT_REF="$(git -C "$dir" rev-parse HEAD)"
   RESOLVED_GIT_DESCRIBE="$(git -C "$dir" describe --tags --always --dirty)"
 }

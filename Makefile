@@ -14,10 +14,10 @@ help:
 	  '' \
 	  '  make all          Interactive complete build; prompts for optional UI' \
 	  '  make base         Complete build without the web UI' \
-	  '  make web          Complete build with Gadorach/postmerkos-ui ms42p-dev' \
+	  '  make web          Complete build with latest Gadorach/postmerkos-ui main' \
 	  '  make doctor       Check host tools and local build state' \
 	  '  make deps         Install dependencies for the current distribution' \
-	  '  make sources      Clone/select kernel/OpenWrt and the latest tagged meraki-redboot source' \
+	  '  make sources      Clone/select kernel/OpenWrt and latest meraki-redboot main' \
 	  '  make kernel       Build the OpenWrt toolchain and Linux 3.18 kernel' \
 	  '  make loader       Build meraki-redboot, its embedded recovery stages, and payload packer from source' \
 	  '  make donor        Download/extract the donor switch module tree' \
@@ -31,7 +31,7 @@ help:
 	  '  make test-hardware Verify board identity and hardware capability policy' \
 	  '  make test-docs     Check repository Markdown links' \
 	  '  make test-ui-contract UI_DIR=../postmerkos-ui checks browser/configd methods' \
-	  '  make test-loader-contract Check meraki-redboot PMOSREC validator patching' \
+	  '  make test-loader-contract Check authoritative upstream source policy' \
 	  '  make test-all      Run all builder host-side validation targets' \
 	  '  make test-modules  Test complete multi-platform module staging and boot selection' \
 	  '  make verify-modules Verify all platform modules in ROOTFS=artifacts/rootfs.squashfs' \
@@ -52,7 +52,7 @@ help:
 	  '  make distclean    Remove .work and artifacts completely' \
 	  '' \
 	  'Useful variables:' \
-	  '  JOBS=8 INCLUDE_UI=1 DONOR_IMAGE=/path/file.bin LOADER_REF=latest' \
+	  '  JOBS=8 INCLUDE_UI=1 DONOR_IMAGE=/path/file.bin LOADER_REF=main UI_REF=main' \
 	  '  USE_DISTROBOX=1 NONINTERACTIVE=1 AUTO_DOWNLOAD_DONOR=1 LOADER_BUILD_MODE=auto'
 
 all:

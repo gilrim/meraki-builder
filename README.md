@@ -30,7 +30,7 @@ See [Hardware compatibility](docs/hardware/compatibility.md) for the complete mo
 4. Flash the complete image using the [hardware flashing guide](docs/installation/hardware-flashing.md).
 5. Connect using serial, SSH, or the optional web interface and follow the [first-boot guide](docs/getting-started/first-boot.md).
 
-VCore-III builds resolve the selected `Gadorach/meraki-redboot` release, compile its 256 KiB boot region and embedded family recovery stages from source, and use that release's canonical SPIM payload packer. The watchmysys donor remains only for proprietary Vitesse/Click module extraction. Release generation fails unless source provenance, boot-menu capability, SPIM alignment/CRC, recovery descriptors, model allow-lists, and flash geometry all match the final image.
+VCore-III builds fetch the latest `Gadorach/meraki-redboot` `main` revision, compile its 256 KiB boot region and embedded family recovery stages from source, and use that checkout's canonical SPIM payload packer. The watchmysys donor remains only for proprietary Vitesse/Click module extraction. Release generation fails unless source provenance, boot-menu capability, SPIM alignment/CRC, recovery descriptors, model allow-lists, and flash geometry all match the final image.
 
 Build help is available with:
 
@@ -63,10 +63,12 @@ blocks before transferring the manifest and image. The complete reconstructed
 16 MiB image is still SHA-256 verified before erase authorization. See
 [`docs/architecture/pmosrec-v3-adaptive-uart.md`](docs/architecture/pmosrec-v3-adaptive-uart.md).
 
-### PMOSREC v3 stage-validator hotfix
+### Authoritative upstream source policy
 
-The loader source preparation step now detects and repairs the transitional
-PMOSREC v3 source state where the recovery payloads advertise `PMOSRECOVERY3`
-but `scripts/validate_uart_stage1.py` still requires `PMOSRECOVERY2`. The
-`0007-pmosrec-v3-stage-validator.patch` update is applied automatically before
-the loader build and is verified by `make test-loader-contract`.
+The build always refreshes `Gadorach/meraki-redboot` and
+`Gadorach/postmerkos-ui` from `origin/main` by default. `meraki-builder` does
+not apply patches, create repair commits, or rewrite either checkout. Loader,
+recovery, and UI changes must be committed to their own repositories. The
+builder records the exact selected commits and fails clearly when an upstream
+contract is missing. See
+[`docs/building/upstream-source-policy.md`](docs/building/upstream-source-policy.md).
