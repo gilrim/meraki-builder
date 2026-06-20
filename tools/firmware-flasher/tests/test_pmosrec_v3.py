@@ -18,6 +18,8 @@ class FakeBinaryLink:
     def __init__(self, reads: list[bytes]) -> None:
         self.data = bytearray().join(reads)
         self.writes: list[bytes] = []
+        self.buffer = bytearray()
+        self.drains = 0
 
     def read_exact(self, length: int, timeout: float, *, echo: bool = False) -> bytes:
         if len(self.data) < length:
@@ -28,6 +30,12 @@ class FakeBinaryLink:
 
     def write_all(self, data: bytes, timeout: float = 10.0) -> None:
         self.writes.append(bytes(data))
+
+    def prepend_buffer(self, data: bytes) -> None:
+        self.buffer[:0] = data
+
+    def drain_output(self) -> None:
+        self.drains += 1
 
 
 class FakeLineLink:
@@ -127,6 +135,57 @@ class PMOSRECv3Tests(unittest.TestCase):
         damaged = good[:11] + good[12:]
         link = FakeBinaryLink([damaged, good, good])
         self.assertEqual(p3._read_ack(link, p3.OBJECT_IMAGE, 10.0), (8, 4, 0, 0))
+
+
+    def test_failed_ack_preserves_terminal_feature_status_for_resynchronization(self) -> None:
+        terminal = b"PMOS3 FEATURE-FAIL MODE=0 FRAME-ERROR=3 EXPECTED-SEQ=1 UARTERR=00000002 DRAINED=4096\r\n"
+        link = FakeBinaryLink([terminal])
+        with self.assertRaises(ProtocolError):
+            p3._read_ack(link, p3.OBJECT_TEST, 0.01)
+        self.assertIn(b"PMOS3 FEATURE-FAIL MODE=0", link.buffer)
+
+    def test_feature_resynchronizer_accepts_terminal_status_after_binary_noise(self) -> None:
+        link = FakeLineLink(["\ufffd\ufffdPMOS3 FEATURE-FAIL MODE=0 FRAME-ERROR=3 DRAINED=4096"])
+        self.assertTrue(p3._synchronize_failed_feature(link, 0, timeout=0.1))
+
+    def test_default_transport_qualifies_only_flow_control_safe_window_one(self) -> None:
+        calls: list[tuple[int, int]] = []
+
+        def feature(_link, mode, frame_size, window_size, _baud, **_kwargs):
+            calls.append((mode, window_size))
+            return True
+
+        with mock.patch.object(p3, "feature_test", side_effect=feature):
+            selected = p3.qualify_transport(object(), 929828)
+        self.assertEqual(selected.window_size, 1)
+        self.assertEqual(calls[0], (p3.REP_RAW, 1))
+        self.assertFalse(any(mode == p3.REP_RAW and window > 1 for mode, window in calls))
+
+    def test_diagnostic_window_scan_is_ascending_and_keeps_last_safe_window(self) -> None:
+        raw_windows: list[int] = []
+
+        def feature(_link, mode, frame_size, window_size, _baud, **_kwargs):
+            if mode == p3.REP_RAW:
+                raw_windows.append(window_size)
+                return window_size <= 4
+            return True
+
+        with mock.patch.object(p3, "feature_test", side_effect=feature):
+            selected = p3.qualify_transport(object(), 929828, diagnostic_window_scan=True)
+        self.assertEqual(raw_windows, [1, 2, 4, 8])
+        self.assertEqual(selected.window_size, 4)
+
+    def test_multi_frame_window_is_drained_and_guarded_between_frames(self) -> None:
+        frames = (
+            p3.EncodedFrame(0, 0, 4, 0, b"aaaa", zlib.crc32(b"aaaa") & 0xFFFFFFFF),
+            p3.EncodedFrame(1, 4, 4, 0, b"bbbb", zlib.crc32(b"bbbb") & 0xFFFFFFFF),
+        )
+        link = FakeBinaryLink([])
+        with mock.patch.object(p3, "_read_ack", return_value=(0, 2, 0, 0)), \
+             mock.patch.object(p3.time, "sleep") as sleep:
+            p3.send_frames(link, frames, p3.OBJECT_TEST, 2, baud=929828)
+        self.assertEqual(link.drains, 1)
+        sleep.assert_called_once_with(p3.MULTI_FRAME_GUARD_SECONDS)
 
     def test_package_header_is_v3_manifest_first_and_crc_bound(self) -> None:
         class Bundle:

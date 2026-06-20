@@ -11,7 +11,7 @@ tests adaptive UART transport and SPI NOR read/write behavior.
 3. Complete early SPI-controller, JEDEC, SFDP, status and protection checks.
 4. Try the conventional 921600, 460800, and 230400 UART rates once each and run deterministic bidirectional
    CRC tests with independent rollback.
-5. Qualify 4096-byte frames, window sizes, compact ACKs, sparse reconstruction
+5. Qualify 4096-byte frames, the safe one-frame window, compact ACKs, sparse reconstruction
    and independent LZ4 blocks.
 6. CRC-32 the complete 256 KiB bootloader region.
 7. Back up one non-loader 64 KiB sector into RAM.
@@ -38,7 +38,7 @@ part. The default scratch sector is `0x00ff0000`.
 
 No firmware image or release manifest is required. A passing receipt records
 model, SoC family, recovery payload SHA-256, negotiated baud, selected frame and
-window sizes, optional sparse/LZ4 capabilities, scratch address and restoration
+the selected window, optional sparse/LZ4 capabilities, scratch address and restoration
 result.
 
 ## Safety boundary

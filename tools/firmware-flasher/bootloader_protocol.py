@@ -11,6 +11,7 @@ import re
 import select
 import struct
 import sys
+import termios
 import time
 import zlib
 
@@ -498,6 +499,16 @@ class SerialLink:
                 pass
         except OSError:
             pass
+
+    def prepend_buffer(self, data: bytes) -> None:
+        if data:
+            self.buffer[:0] = data
+
+    def drain_output(self) -> None:
+        try:
+            termios.tcdrain(self.fd)
+        except OSError as exc:
+            raise ProtocolError(f"serial output drain failed: {exc}") from exc
 
     def read_exact(self, length: int, timeout: float, *, echo: bool = False) -> bytes:
         if length < 0:

@@ -31,14 +31,18 @@ independent full-flash acknowledgements.
 The default RAM-upload path keeps bootloader and executable transfer at the
 stable 115200 baud, then runs PMOSREC v3 from RAM. By default the host tries
 921600, 460800, and 230400 baud once each, fastest first, and stops at the first
-bidirectional pass. It then qualifies 4096-byte frames, windowed compact ACKs,
-sparse reconstruction and LZ4 blocks. It validates the manifest before the image and
+bidirectional pass. It then qualifies 4096-byte frames with a flow-control-safe
+one-frame compact-ACK window, sparse reconstruction and LZ4 blocks. It
+validates the manifest before the image and
 selects the smallest qualified wire representation.
 
 The wrapper automatically returns the target's live erase challenge only after
 the user has supplied `FLASH-ALL`. `--manual-target-confirmation` keeps the
 target waiting indefinitely and allows unlimited retries. Successful flashing
 ends with a target-side five-second reset countdown.
+
+Use `--diagnostic-window-scan` only for engineering tests of paced multi-frame
+windows; normal flashing deliberately remains at window 1.
 
 Use `--bootloader-preflight` to qualify UART and destructive-but-restored SPI
 NOR behavior without transferring a firmware image. Detailed behavior is in
