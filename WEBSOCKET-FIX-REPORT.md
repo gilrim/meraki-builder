@@ -25,6 +25,33 @@ No listener existed on TCP port 4001 and `/run/postmerkos/websocket.log` was abs
 7. Service policy reconciliation avoids duplicate start/stop operations for uhttpd, chronyd, and Dropbear.
 8. Regression tests cover fragmented frames, oversized frames, closed peers, fail-closed WebSocket startup, service idempotence, and Buildroot cache contracts.
 
+
+## Follow-up compile-flag correction
+
+A complete target build exposed a second issue that the original source review did
+not catch. Buildroot invokes the configd package Makefile with `CPPFLAGS` assigned
+on the command line. GNU make gives command-line variable assignments precedence
+over ordinary Makefile `+=` assignments, so both
+`-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE` and
+`-DCONFIGD_ENABLE_WEBSOCKET=1` were silently omitted.
+
+The result was internally contradictory: `websocket.c` was compiled and
+libwebsockets was linked, but `main.c` compiled its WebSocket initialization and
+feature reporting out. The final-image validator correctly rejected that binary as
+WebSocket-disabled.
+
+The package Makefile now uses:
+
+```make
+override CPPFLAGS += -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
+...
+override CPPFLAGS += -DCONFIGD_ENABLE_WEBSOCKET=1
+```
+
+The build-cache contract test now performs a real GNU make dry run with
+Buildroot-style command-line `CPPFLAGS` and verifies that all package macros remain
+in the configd compiler command.
+
 ## Repository scope
 
 - `meraki-builder`: changed.
@@ -37,7 +64,7 @@ No listener existed on TCP port 4001 and `/run/postmerkos/websocket.log` was abs
 - Configd built successfully with WebSocket disabled under `-Wall -Wextra -Werror`.
 - Socket framing and SIGPIPE regression tests passed.
 - Configd supervisor and WebSocket-required init tests passed.
-- Build cache/image contract tests passed.
+- Build cache/image contract tests passed, including command-line `CPPFLAGS` propagation.
 - UI/configd contract passed for all 28 UI request methods.
 - Board identity, PoE initialization, and postmerkos-hardware host tests passed.
 - Documentation link validation passed.

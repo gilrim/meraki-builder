@@ -4,7 +4,7 @@ POSTMERKOS_DIR ?= ../postmerkos
 ENABLE_WEBSOCKET ?= 1
 INCLUDES = -I$(PD690XX_DIR) -I$(POSTMERKOS_DIR)
 CFLAGS ?= -Os
-CPPFLAGS += -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
+override CPPFLAGS += -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 LDLIBS += -ljson-c -lcrypt
 
 BASE_SRCS = main.c click_port.c click_global.c status.c json_util.c \
@@ -12,7 +12,7 @@ BASE_SRCS = main.c click_port.c click_global.c status.c json_util.c \
        console_cli.c release.c roles.c local_socket.c socket_io.c service_ops.c time_ops.c port_clone.c compatibility.c auth.c
 
 ifeq ($(ENABLE_WEBSOCKET),1)
-CPPFLAGS += -DCONFIGD_ENABLE_WEBSOCKET=1
+override CPPFLAGS += -DCONFIGD_ENABLE_WEBSOCKET=1
 LDLIBS += -lwebsockets
 SRCS = $(BASE_SRCS) websocket.c system_ops.c
 else

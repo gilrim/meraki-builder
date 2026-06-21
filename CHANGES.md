@@ -2,6 +2,13 @@
 
 ## meraki-builder
 
+- Preserve configd's required feature macros when Buildroot supplies `CPPFLAGS`
+  as a command-line variable. The package Makefile now uses `override CPPFLAGS +=`
+  for the POSIX/default-source flags and `CONFIGD_ENABLE_WEBSOCKET`, preventing a
+  binary that links `websocket.c`/libwebsockets but reports and behaves as
+  WebSocket-disabled.
+- Extend the Buildroot contract test to execute a dry-run configd build with
+  command-line `CPPFLAGS` and verify that all required package macros survive.
 - Detect and clean reused Buildroot output when switching between base and web
   images, including one-time cleanup of output created before UI-mode tracking.
 - Fingerprint the synchronized configd package and its WebSocket feature choice;
