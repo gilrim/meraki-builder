@@ -99,3 +99,12 @@ websocket: enabled
 websocket-port: 4001
 websocket-protocol: configd-ws
 ```
+
+## Revision 3: validator SIGPIPE and poisoned package cache
+
+A subsequent real build exposed two remaining issues:
+
+1. `validate-image.sh` used `strings ... | grep -q` and `readelf ... | grep -q` while `common.sh` enables `set -o pipefail`. On a sufficiently large configd binary, `grep -q` exits immediately after finding the valid marker, `strings` receives SIGPIPE, and the successful check is reported as status 141. The validator therefore falsely claimed that an enabled binary was disabled. The probes now consume their complete input.
+2. A failed validation could leave a synchronized configd fingerprint alongside an older installed target binary. Every rootfs build now runs `configd-dirclean`, removes installed configd tools, rebuilds the local package explicitly, and verifies its feature marker and dynamic dependency before filesystem finalization.
+
+The target compiler command must contain `-DCONFIGD_ENABLE_WEBSOCKET=1` for web builds, and the freshly installed binary must contain `websocket: enabled` and a `libwebsockets` dynamic dependency.

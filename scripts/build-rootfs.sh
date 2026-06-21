@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/common.sh"
 load_build_state
+for cmd in strings readelf; do need "$cmd"; done
 
 # Keep Buildroot host tools in the same supported Ubuntu environment as the
 # pinned kernel toolchain. This also protects direct `make rootfs` invocations
@@ -106,19 +107,51 @@ for line in config.read_text(errors='replace').splitlines():
 print(h.hexdigest())
 PY_CONFIGD_FINGERPRINT
 )"
-if compgen -G 'output/build/configd-*' >/dev/null; then
-  previous_configd_fingerprint=''
-  [[ -f "$configd_fingerprint_stamp" ]] && previous_configd_fingerprint="$(cat "$configd_fingerprint_stamp")"
-  if [[ "$previous_configd_fingerprint" != "$current_configd_fingerprint" ]]; then
-    warn "configd source or feature selection changed; invalidating the cached Buildroot package."
-    make configd-dirclean
-  fi
+previous_configd_fingerprint=''
+[[ -f "$configd_fingerprint_stamp" ]] && previous_configd_fingerprint="$(cat "$configd_fingerprint_stamp")"
+if [[ "$previous_configd_fingerprint" != "$current_configd_fingerprint" ]]; then
+  warn "configd source or feature selection changed; a fresh local-package build is required."
 fi
 
 log "Prefetching Buildroot sources"
 run_logged buildroot-download \
   make -j1 BR2_DL_DIR="$BUILDROOT_DL_DIR" \
   BR2_PRIMARY_SITE="https://sources.buildroot.net" source
+
+# configd is maintained as a fixed-version local Buildroot package. Buildroot's
+# normal stamp logic cannot prove that output/build/configd-* and output/target
+# correspond to the just-synchronized repository source. Always rebuild this
+# comparatively small package, then verify the installed target binary before
+# allowing filesystem finalization. Removing the installed files also prevents
+# a failed package build from being masked by an older target copy.
+log "Rebuilding configd from synchronized local sources"
+make configd-dirclean
+rm -f output/target/bin/configd output/target/usr/bin/postmerkosctl
+run_logged buildroot-configd \
+  make -j"$JOBS" BR2_DL_DIR="$BUILDROOT_DL_DIR" \
+  BR2_PRIMARY_SITE="https://sources.buildroot.net" configd
+
+configd_binary="output/target/bin/configd"
+postmerkosctl_binary="output/target/usr/bin/postmerkosctl"
+[[ -x "$configd_binary" ]] || die "Fresh configd package build did not install /bin/configd"
+[[ -x "$postmerkosctl_binary" ]] || die "Fresh configd package build did not install /usr/bin/postmerkosctl"
+
+# Do not use grep -q in producer pipelines while pipefail is enabled. grep -q
+# closes the pipe after the first match and can make strings/readelf exit with
+# SIGPIPE (141), turning a successful feature check into a false failure.
+if (( current_ui_mode )); then
+  strings "$configd_binary" | grep -Fx 'websocket: enabled' >/dev/null || \
+    die "Fresh web configd build lacks the 'websocket: enabled' feature marker"
+  readelf -d "$configd_binary" | grep -F 'libwebsockets' >/dev/null || \
+    die "Fresh web configd build is not linked against libwebsockets"
+else
+  strings "$configd_binary" | grep -Fx 'websocket: disabled' >/dev/null || \
+    die "Fresh console configd build lacks the 'websocket: disabled' feature marker"
+  if readelf -d "$configd_binary" | grep -F 'libwebsockets' >/dev/null; then
+    die "Fresh console configd build unexpectedly links against libwebsockets"
+  fi
+fi
+printf '%s\n' "$current_configd_fingerprint" > "$configd_fingerprint_stamp"
 
 log "Building root filesystem and complete NOR image"
 export MS42P_KERNEL_ELF="$KERNEL_ARTIFACT_DIR/vmlinuz"
@@ -137,8 +170,6 @@ IMAGE="$BUILDROOT_DIR/output/images/ms42p-firmware.bin"
 [[ -f "$IMAGE" ]] || die "The MS42P post-image script did not produce ms42p-firmware.bin"
 [[ "$(file_size "$IMAGE")" -eq $((0x1000000)) ]] || die "Firmware image is not 16 MiB"
 printf '%s\n' "$current_ui_mode" > "$ui_mode_stamp"
-printf '%s\n' "$current_configd_fingerprint" > "$configd_fingerprint_stamp"
-
 python3 "$VENDOR_MODULE_TOOL" verify \
   "$BUILDROOT_DIR/output/target/lib/modules" \
   --required-file "$VENDOR_MODULE_REQUIRED" --quiet || \

@@ -79,18 +79,20 @@ if bool_enabled "${INCLUDE_UI:-0}"; then
   grep -Fq 'postmerkOS management: restarting configd' \
     "$VERIFY_DIR/usr/sbin/postmerkos-configd-supervisor" || \
     die "configd supervisor restart contract is missing"
-  strings "$VERIFY_DIR/usr/bin/postmerkosctl" | grep -Fq 'WebSocket configd-ws hello' || \
+  strings "$VERIFY_DIR/usr/bin/postmerkosctl" | grep -F 'WebSocket configd-ws hello' >/dev/null || \
     die "postmerkosctl lacks the WebSocket hello health probe"
-  strings "$VERIFY_DIR/bin/configd" | grep -Fxq 'websocket: enabled' || \
-    die "Web image contains a WebSocket-disabled configd binary"
-  readelf -d "$VERIFY_DIR/bin/configd" | grep -Fq 'libwebsockets' || \
+  strings "$VERIFY_DIR/bin/configd" | grep -Fx 'websocket: enabled' >/dev/null || {
+    detected_features="$(strings "$VERIFY_DIR/bin/configd" | grep -E '^websocket: (enabled|disabled)$' || true)"
+    die "Web image configd feature marker mismatch; found: ${detected_features:-none}"
+  }
+  readelf -d "$VERIFY_DIR/bin/configd" | grep -F 'libwebsockets' >/dev/null || \
     die "Web image configd is not linked against libwebsockets"
   grep -Fq 'web image contains WebSocket-disabled configd' \
     "$VERIFY_DIR/etc/init.d/S15configd" || \
     die "configd init does not fail closed for a WebSocket-disabled web image"
 fi
 
-file "$VERIFY_DIR/usr/libexec/fwupdate/fwflash" | grep -qi 'statically linked' || \
+file "$VERIFY_DIR/usr/libexec/fwupdate/fwflash" | grep -i 'statically linked' >/dev/null || \
   die "Firmware updater helper is not statically linked"
 
 rootfs_has_command() {
@@ -108,7 +110,7 @@ done
 if ! bool_enabled "${INCLUDE_UI:-0}"; then
   [[ ! -e "$VERIFY_DIR/etc/init.d/S16uhttpd" ]] || die "Base image unexpectedly contains S16uhttpd"
   [[ ! -e "$VERIFY_DIR/etc/postmerkos/features/web-ui" ]] || die "Base image unexpectedly requires WebSocket service"
-  strings "$VERIFY_DIR/bin/configd" | grep -Fxq 'websocket: disabled' || \
+  strings "$VERIFY_DIR/bin/configd" | grep -Fx 'websocket: disabled' >/dev/null || \
     die "Base image configd unexpectedly includes WebSocket support"
 fi
 

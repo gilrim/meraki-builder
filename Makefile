@@ -112,6 +112,7 @@ test-image:
 	@./buildroot/board/meraki/ms220/tests/test-post-image.sh
 	@python3 ./scripts/tests/test-artifact-manifest.py
 	@python3 ./scripts/tests/test-build-cache-contract.py
+	@python3 ./scripts/tests/test-pipefail-feature-probe.py
 
 test-modules:
 	@./scripts/tests/test-vendor-modules.sh

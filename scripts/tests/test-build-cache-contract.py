@@ -11,12 +11,22 @@ marker = root / "buildroot/features/web-overlay/etc/postmerkos/features/web-ui"
 configd_dir = root / "buildroot/packages/configd"
 
 assert build_all.count('CLEAN_BUILDROOT="${CLEAN_BUILDROOT:-0}"') >= 2
-for text in ('.ms42p-built-ui-mode', '.ms42p-configd-build-fingerprint', 'make configd-dirclean'):
+for text in ('.ms42p-built-ui-mode', '.ms42p-configd-build-fingerprint', 'make configd-dirclean', 'run_logged buildroot-configd'):
     assert text in build_rootfs, text
 for text in ('websocket: enabled', 'libwebsockets', 'WebSocket-disabled configd'):
     assert text in validate, text
 assert 'websocket_required' in init and 'web image contains WebSocket-disabled configd' in init
 assert marker.is_file()
+
+# With pipefail enabled, grep -q can close producer pipelines early and turn a
+# valid strings/readelf match into status 141. Validators must consume all input.
+for forbidden in (
+    "strings \"$VERIFY_DIR/bin/configd\" | grep -Fxq",
+    "readelf -d \"$VERIFY_DIR/bin/configd\" | grep -Fq",
+    "strings \"$VERIFY_DIR/usr/bin/postmerkosctl\" | grep -Fq",
+):
+    assert forbidden not in validate, forbidden
+assert "grep -Fx 'websocket: enabled' >/dev/null" in validate
 
 # Buildroot passes CPPFLAGS on the make command line. The package Makefile must
 # use GNU make's `override` directive or its feature macros are silently lost.

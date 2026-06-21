@@ -1,3 +1,28 @@
+# Revision 3: deterministic configd rebuild and pipefail-safe validation
+
+## meraki-builder
+
+- Fix a false WebSocket-disabled result in `validate-image.sh`. The scripts run
+  with `set -o pipefail`; `strings ... | grep -q` could find the valid marker,
+  exit early, cause `strings` to receive SIGPIPE, and make the successful probe
+  return status 141. Binary feature and dependency probes now consume all input.
+- Rebuild the fixed-version local `configd` package on every rootfs build after
+  package synchronization. The build performs `configd-dirclean`, removes stale
+  installed tools, runs the explicit Buildroot `configd` target, and validates
+  the freshly installed binary before filesystem finalization.
+- Keep the source/config fingerprint as diagnostic state, but no longer trust it
+  as the sole cache-invalidation mechanism after a failed image validation.
+- Report the actual discovered WebSocket feature marker when final validation
+  fails, instead of always describing the binary as disabled.
+- Add a regression test with enough trailing binary strings to reproduce the
+  former SIGPIPE/141 validator failure.
+
+## postmerkos-ui
+
+No source changes were required.
+
+---
+
 # WebSocket build-cache, local socket, and service-policy corrections
 
 ## meraki-builder
