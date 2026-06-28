@@ -7,6 +7,7 @@
 #include "network.h"
 #include "local_socket.h"
 #include "result.h"
+#include "ssh_keys.h"
 #include "status.h"
 #include "telemetry.h"
 #include "validation.h"
@@ -531,6 +532,12 @@ int main(int argc, char **argv) {
   }
 
   network_manager_init(config, &startup);
+  {
+    char ssh_error[200] = {0};
+    if (ssh_keys_render(ssh_error, sizeof(ssh_error)) != 0)
+      fprintf(stderr, "%s configd: authorized_keys render failed: %s\n",
+              get_time(), ssh_error);
+  }
   const struct network_runtime *net_rt = network_manager_runtime();
   const char *mgmt_addr = (net_rt && net_rt->applied.address[0]) ? net_rt->applied.address : NULL;
   telemetry_apply(config, mgmt_addr);
