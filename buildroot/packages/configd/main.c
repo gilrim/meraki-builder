@@ -538,10 +538,6 @@ int main(int argc, char **argv) {
       fprintf(stderr, "%s configd: authorized_keys render failed: %s\n",
               get_time(), ssh_error);
   }
-  const struct network_runtime *net_rt = network_manager_runtime();
-  const char *mgmt_addr = (net_rt && net_rt->applied.address[0]) ? net_rt->applied.address : NULL;
-  telemetry_apply(config, mgmt_addr);
-
   if (command == COMMAND_REPLACE_FILE) {
     struct json_object *candidate = load_json_file(command_value);
     if (!candidate) {
@@ -622,6 +618,19 @@ int main(int argc, char **argv) {
    * write-only Click settings such as storm control. */
   click_apply_globals_full(config, &startup);
   click_apply_ports_full(config, &startup);
+  const struct network_runtime *net_rt = network_manager_runtime();
+  const char *mgmt_addr = (net_rt && net_rt->applied.address[0])
+      ? net_rt->applied.address : NULL;
+  if (telemetry_apply(config, mgmt_addr, &startup) != 0 ||
+      !apply_result_success(&startup)) {
+    fprintf(stderr, "%s configd: startup runtime apply failed: %s\n",
+            get_time(), json_object_to_json_string(startup.failures));
+    apply_result_cleanup(&startup);
+    json_object_put(config);
+    telemetry_shutdown();
+    i2c_close(&pd690xx);
+    return 1;
+  }
   if (json_object_array_length(startup.warnings) > 0)
     fprintf(stderr, "%s configd: startup completed with warnings: %s\n",
             get_time(), json_object_to_json_string(startup.warnings));
@@ -673,6 +682,7 @@ int main(int argc, char **argv) {
       telemetry_tick();
       telemetry_poll_due = now + telemetry_interval_seconds();
     }
+    telemetry_service_io();
     int local_rc = local_socket_service_once(local_fd, 50);
     if (local_rc < 0) {
       fprintf(stderr, "configd: FAIL local-socket-service rc=%d error=%s\n",
@@ -700,6 +710,7 @@ int main(int argc, char **argv) {
   ws_shutdown(context);
 #endif
   local_socket_shutdown(local_fd, local_socket_path);
+  telemetry_shutdown();
   i2c_close(&pd690xx);
   return service_exit_code;
 }

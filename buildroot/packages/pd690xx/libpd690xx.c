@@ -474,6 +474,7 @@ float* get_temp(struct pd690xx_cfg *pd690xx) {
     unsigned int res;
     int pd690xx_count = pd690xx_pres_count(pd690xx);
     float* temps = malloc (sizeof (float) * pd690xx_count);
+    if (!temps) return NULL;
     for (int i=0; i<pd690xx_count; i++) {
         int i2c_fd = pd690xx_fd(pd690xx, i*12);
         i2c_read(i2c_fd, pd690xx->pd690xx_addrs[i], AVG_JCT_TEMP, &res);

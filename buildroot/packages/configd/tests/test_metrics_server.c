@@ -148,6 +148,29 @@ static void test_root_path(int port,
   }
 }
 
+
+static void test_slow_client_does_not_block(int port,
+                                            const struct portstats_snapshot *snap,
+                                            const struct device_health *health) {
+  int slow = connect_to_server(port);
+  int fast = connect_to_server(port);
+  if (slow < 0 || fast < 0) {
+    fprintf(stderr, "Failed to connect slow-client test\n");
+    exit(1);
+  }
+  /* Deliberately leave the first client silent. */
+  send_all(fast, "GET /metrics HTTP/1.0\r\n\r\n");
+  for (int i = 0; i < 4; i++) metrics_server_service(snap, health);
+  char response[4096];
+  int length = recv_response(fast, response, sizeof(response));
+  close(fast);
+  close(slow);
+  if (length <= 0 || strncmp(response, "HTTP/1.0 200", 12) != 0) {
+    fprintf(stderr, "silent metrics client blocked a later scrape\n");
+    exit(1);
+  }
+}
+
 int main(void) {
   struct portstats_snapshot snap;
   memset(&snap, 0, sizeof(snap));
@@ -176,6 +199,7 @@ int main(void) {
   test_valid_metrics_request(port, &snap, &health);
   test_invalid_path(port, &snap, &health);
   test_root_path(port, &snap, &health);
+  test_slow_client_does_not_block(port, &snap, &health);
 
   metrics_server_stop();
 

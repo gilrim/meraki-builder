@@ -51,7 +51,6 @@ struct per_session_data {
   enum postmerkos_role role;
   char username[65];
   char session_token[65];
-  unsigned int auth_failures;
   bool send_initial_status;
   bool send_initial_config;
   bool send_status;
@@ -98,6 +97,41 @@ static bool terminal_poll_scheduled;
 static struct lws_context *ws_context;
 static struct lws *upload_owner;
 
+#define AUTH_BUCKET_MAX 64
+#define AUTH_BLOCK_BASE_MS 500LL
+#define AUTH_BLOCK_MAX_MS 30000LL
+struct auth_bucket {
+  char key[128];
+  unsigned int failures;
+  long long blocked_until_ms;
+  long long last_seen_ms;
+};
+static struct auth_bucket auth_buckets[AUTH_BUCKET_MAX];
+
+enum firmware_job_state {
+  FIRMWARE_JOB_IDLE = 0,
+  FIRMWARE_JOB_VALIDATING,
+  FIRMWARE_JOB_READY,
+  FIRMWARE_JOB_FAILED
+};
+
+struct firmware_validation_job {
+  enum firmware_job_state state;
+  pid_t pid;
+  char username[65];
+  char token[40];
+  char path[256];
+  char manifest_path[256];
+  char name[128];
+  char overlay[16];
+  char error_path[256];
+  char error[256];
+  size_t expected;
+  size_t received;
+  bool force;
+  bool accept_untested;
+};
+static struct firmware_validation_job firmware_job;
 
 static void websocket_log(const char *format, ...) {
   char message[512];
@@ -385,6 +419,93 @@ static long long terminal_monotonic_ms(void) {
   return (long long)now.tv_sec * 1000LL + now.tv_nsec / 1000000LL;
 }
 
+static struct auth_bucket *auth_bucket_for(const char *key, bool create) {
+  struct auth_bucket *oldest = &auth_buckets[0];
+  for (size_t i = 0; i < AUTH_BUCKET_MAX; i++) {
+    if (auth_buckets[i].key[0] && !strcmp(auth_buckets[i].key, key))
+      return &auth_buckets[i];
+    if (!auth_buckets[i].key[0]) {
+      if (!create) return NULL;
+      snprintf(auth_buckets[i].key, sizeof(auth_buckets[i].key), "%s", key);
+      return &auth_buckets[i];
+    }
+    if (auth_buckets[i].last_seen_ms < oldest->last_seen_ms)
+      oldest = &auth_buckets[i];
+  }
+  if (!create) return NULL;
+  memset(oldest, 0, sizeof(*oldest));
+  snprintf(oldest->key, sizeof(oldest->key), "%s", key);
+  return oldest;
+}
+
+static void auth_account_key(const char *username, char *out, size_t size) {
+  snprintf(out, size, "account:%s",
+           username && *username ? username : "<invalid>");
+}
+
+static void auth_peer_key(struct lws *wsi, char *out, size_t size) {
+  char peer[80] = {0};
+  if (!lws_get_peer_simple(wsi, peer, sizeof(peer)) || !peer[0])
+    snprintf(peer, sizeof(peer), "%s", "<unknown>");
+  snprintf(out, size, "peer:%s", peer);
+}
+
+static long long auth_retry_after_key(const char *key, long long now) {
+  struct auth_bucket *bucket = auth_bucket_for(key, false);
+  if (!bucket || bucket->blocked_until_ms <= now) return 0;
+  bucket->last_seen_ms = now;
+  return bucket->blocked_until_ms - now;
+}
+
+static long long auth_retry_after_ms(struct lws *wsi, const char *username) {
+  char account[128], peer[128];
+  auth_account_key(username, account, sizeof(account));
+  auth_peer_key(wsi, peer, sizeof(peer));
+  long long now = terminal_monotonic_ms();
+  long long account_wait = auth_retry_after_key(account, now);
+  long long peer_wait = auth_retry_after_key(peer, now);
+  long long global_wait = auth_retry_after_key("global", now);
+  long long wait = account_wait > peer_wait ? account_wait : peer_wait;
+  return wait > global_wait ? wait : global_wait;
+}
+
+static void auth_record_failure_key(const char *key, long long now) {
+  struct auth_bucket *bucket = auth_bucket_for(key, true);
+  bucket->last_seen_ms = now;
+  bucket->failures++;
+  if (bucket->failures >= 3) {
+    unsigned int shift = bucket->failures - 3;
+    if (shift > 6) shift = 6;
+    long long delay = AUTH_BLOCK_BASE_MS << shift;
+    if (delay > AUTH_BLOCK_MAX_MS) delay = AUTH_BLOCK_MAX_MS;
+    bucket->blocked_until_ms = now + delay;
+  }
+}
+
+static void auth_record_failure(struct lws *wsi, const char *username) {
+  char account[128], peer[128];
+  auth_account_key(username, account, sizeof(account));
+  auth_peer_key(wsi, peer, sizeof(peer));
+  long long now = terminal_monotonic_ms();
+  auth_record_failure_key(account, now);
+  auth_record_failure_key(peer, now);
+  auth_record_failure_key("global", now);
+}
+
+static void auth_clear_bucket(const char *key) {
+  struct auth_bucket *bucket = auth_bucket_for(key, false);
+  if (bucket) memset(bucket, 0, sizeof(*bucket));
+}
+
+static void auth_record_success(struct lws *wsi, const char *username) {
+  char account[128], peer[128];
+  auth_account_key(username, account, sizeof(account));
+  auth_peer_key(wsi, peer, sizeof(peer));
+  auth_clear_bucket(account);
+  auth_clear_bucket(peer);
+  auth_clear_bucket("global");
+}
+
 static void terminal_stop(struct per_session_data *session, bool kill_process) {
   if (!session) return;
   if (kill_process && session->terminal_pid > 0) {
@@ -632,6 +753,229 @@ static struct json_object *upload_status_json(
   return data;
 }
 
+static const char *firmware_job_state_name(enum firmware_job_state state) {
+  switch (state) {
+    case FIRMWARE_JOB_VALIDATING: return "validating";
+    case FIRMWARE_JOB_READY: return "ready";
+    case FIRMWARE_JOB_FAILED: return "failed";
+    default: return "idle";
+  }
+}
+
+static struct json_object *firmware_job_status_json(void) {
+  struct json_object *data = json_object_new_object();
+  bool active = firmware_job.state == FIRMWARE_JOB_VALIDATING ||
+                firmware_job.state == FIRMWARE_JOB_READY;
+  json_object_object_add(data, "active", json_object_new_boolean(active));
+  json_object_object_add(data, "validating", json_object_new_boolean(
+      firmware_job.state == FIRMWARE_JOB_VALIDATING));
+  json_object_object_add(data, "ready", json_object_new_boolean(
+      firmware_job.state == FIRMWARE_JOB_READY));
+  json_object_object_add(data, "state", json_object_new_string(
+      firmware_job_state_name(firmware_job.state)));
+  json_object_object_add(data, "token", json_object_new_string(firmware_job.token));
+  json_object_object_add(data, "name", json_object_new_string(firmware_job.name));
+  json_object_object_add(data, "received",
+      json_object_new_int64((int64_t)firmware_job.received));
+  json_object_object_add(data, "expected",
+      json_object_new_int64((int64_t)firmware_job.expected));
+  int progress = firmware_job.expected
+      ? (int)((firmware_job.received * 100U) / firmware_job.expected) : 0;
+  json_object_object_add(data, "progress", json_object_new_int(progress));
+  if (firmware_job.error[0])
+    json_object_object_add(data, "error",
+                           json_object_new_string(firmware_job.error));
+  return data;
+}
+
+static void firmware_job_forget(bool unlink_files) {
+  if (unlink_files) {
+    if (firmware_job.path[0]) unlink(firmware_job.path);
+    if (firmware_job.manifest_path[0]) unlink(firmware_job.manifest_path);
+  }
+  if (firmware_job.error_path[0]) unlink(firmware_job.error_path);
+  memset(&firmware_job, 0, sizeof(firmware_job));
+}
+
+static void firmware_job_cancel(void) {
+  if (firmware_job.state == FIRMWARE_JOB_VALIDATING && firmware_job.pid > 0) {
+    kill(-firmware_job.pid, SIGKILL);
+    kill(firmware_job.pid, SIGKILL);
+    while (waitpid(firmware_job.pid, NULL, 0) < 0 && errno == EINTR) {}
+  }
+  firmware_job_forget(true);
+}
+
+static void firmware_job_notify(const char *type) {
+  struct json_object *data = firmware_job_status_json();
+  for (size_t i = 0; i < client_count; i++) {
+    struct per_session_data *session = lws_wsi_user(clients[i]);
+    if (!session || !session->authenticated ||
+        !role_has_capability(session->role, "firmware.update")) continue;
+    queue_response(clients[i], session, type, data, NULL);
+  }
+  json_object_put(data);
+}
+
+static int firmware_job_start(struct per_session_data *session,
+                              char *error, size_t error_size) {
+  if (firmware_job.state == FIRMWARE_JOB_VALIDATING ||
+      firmware_job.state == FIRMWARE_JOB_READY) {
+    snprintf(error, error_size, "another firmware validation is active");
+    return -EBUSY;
+  }
+  if (firmware_job.state == FIRMWARE_JOB_FAILED) firmware_job_forget(true);
+  memset(&firmware_job, 0, sizeof(firmware_job));
+  firmware_job.state = FIRMWARE_JOB_VALIDATING;
+  snprintf(firmware_job.username, sizeof(firmware_job.username), "%s",
+           session->username);
+  snprintf(firmware_job.token, sizeof(firmware_job.token), "%s",
+           session->upload_token);
+  snprintf(firmware_job.path, sizeof(firmware_job.path), "%s",
+           session->upload_path);
+  snprintf(firmware_job.manifest_path, sizeof(firmware_job.manifest_path), "%s",
+           session->upload_manifest_path);
+  snprintf(firmware_job.name, sizeof(firmware_job.name), "%s",
+           session->upload_name);
+  snprintf(firmware_job.overlay, sizeof(firmware_job.overlay), "%s",
+           session->upload_overlay);
+  snprintf(firmware_job.error_path, sizeof(firmware_job.error_path),
+           "/run/fwupdate/uploads/%s.verify", firmware_job.token);
+  firmware_job.expected = session->upload_expected;
+  firmware_job.received = session->upload_received;
+  firmware_job.force = session->upload_force;
+  firmware_job.accept_untested = session->upload_accept_untested;
+
+  pid_t child = fork();
+  if (child < 0) {
+    int saved = errno;
+    firmware_job_forget(false);
+    snprintf(error, error_size, "%s", strerror(saved));
+    return -saved;
+  }
+  if (child == 0) {
+    setpgid(0, 0);
+    char validation_error[256] = {0};
+    int rc = firmware_validate_update(
+        firmware_job.path, firmware_job.name,
+        firmware_job.manifest_path[0] ? firmware_job.manifest_path : NULL,
+        firmware_job.overlay, firmware_job.force,
+        firmware_job.accept_untested, validation_error,
+        sizeof(validation_error));
+    FILE *file = fopen(firmware_job.error_path, "w");
+    if (file) {
+      fprintf(file, "%s\n", validation_error);
+      fclose(file);
+    }
+    _exit(rc == 0 ? 0 : 1);
+  }
+  /* Establish the process group from the parent too, closing the race where a
+   * cancellation could arrive before the child executes setpgid(). */
+  if (setpgid(child, child) != 0 && errno != EACCES && errno != ESRCH)
+    websocket_log("firmware validator setpgid failed: %s", strerror(errno));
+  firmware_job.pid = child;
+  return 0;
+}
+
+static void firmware_job_poll(void) {
+  if (firmware_job.state != FIRMWARE_JOB_VALIDATING || firmware_job.pid <= 0)
+    return;
+  int status = 0;
+  pid_t waited = waitpid(firmware_job.pid, &status, WNOHANG);
+  if (waited == 0) return;
+  if (waited < 0) {
+    if (errno == EINTR) return;
+    snprintf(firmware_job.error, sizeof(firmware_job.error),
+             "unable to observe firmware validator: %s", strerror(errno));
+    firmware_job.state = FIRMWARE_JOB_FAILED;
+  } else if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+    firmware_job.state = FIRMWARE_JOB_READY;
+  } else {
+    FILE *file = fopen(firmware_job.error_path, "r");
+    if (file) {
+      while (fgets(firmware_job.error, sizeof(firmware_job.error), file)) {}
+      fclose(file);
+      firmware_job.error[strcspn(firmware_job.error, "\r\n")] = '\0';
+    }
+    if (!firmware_job.error[0])
+      snprintf(firmware_job.error, sizeof(firmware_job.error),
+               "firmware validation failed");
+    firmware_job.state = FIRMWARE_JOB_FAILED;
+  }
+  firmware_job.pid = 0;
+  if (firmware_job.error_path[0]) unlink(firmware_job.error_path);
+  if (firmware_job.state == FIRMWARE_JOB_FAILED) {
+    if (firmware_job.path[0]) unlink(firmware_job.path);
+    if (firmware_job.manifest_path[0]) unlink(firmware_job.manifest_path);
+    firmware_job.path[0] = '\0';
+    firmware_job.manifest_path[0] = '\0';
+  }
+  firmware_job_notify(firmware_job.state == FIRMWARE_JOB_READY
+                        ? "firmware_ready" : "firmware_validation_failed");
+}
+
+static void deauthenticate_session(struct lws *wsi,
+                                   struct per_session_data *session,
+                                   bool revoke_token) {
+  if (!session) return;
+  if (revoke_token && session->session_token[0])
+    session_revoke_token(session->session_token);
+  cleanup_upload(wsi, session);
+  terminal_stop(session, true);
+  session->authenticated = false;
+  session->role = POSTMERKOS_ROLE_NONE;
+  session->username[0] = '\0';
+  session->session_token[0] = '\0';
+  session->send_initial_status = false;
+  session->send_initial_config = false;
+  session->send_status = false;
+  session->send_config = false;
+}
+
+static bool revalidate_session(struct lws *wsi,
+                               struct per_session_data *session,
+                               struct json_object *request_id) {
+  char username[65] = {0};
+  if (!session->authenticated || !session->session_token[0] ||
+      session_lookup(session->session_token, (long)time(NULL), username,
+                     sizeof(username)) != 0 ||
+      strcmp(username, session->username)) {
+    deauthenticate_session(wsi, session, false);
+    queue_error(wsi, session, request_id, 401, "Unauthorized",
+                "session expired or was revoked");
+    return false;
+  }
+  enum postmerkos_role role = role_for_username(username);
+  if (role == POSTMERKOS_ROLE_NONE) {
+    deauthenticate_session(wsi, session, true);
+    queue_error(wsi, session, request_id, 403, "Forbidden",
+                "account no longer has a postmerkOS management role");
+    return false;
+  }
+  session->role = role;
+  return true;
+}
+
+void ws_revoke_user_sessions(const char *username) {
+  if (!username || !*username) return;
+  session_revoke_user(username);
+  if (firmware_job.state != FIRMWARE_JOB_IDLE &&
+      !strcmp(firmware_job.username, username))
+    firmware_job_cancel();
+  for (size_t i = 0; i < client_count; i++) {
+    struct lws *wsi = clients[i];
+    struct per_session_data *session = lws_wsi_user(wsi);
+    if (!session || !session->authenticated ||
+        strcmp(session->username, username)) continue;
+    deauthenticate_session(wsi, session, false);
+    struct json_object *data = json_object_new_object();
+    json_object_object_add(data, "message",
+                           json_object_new_string("Session revoked"));
+    queue_response(wsi, session, "auth_required", data, NULL);
+    json_object_put(data);
+  }
+}
+
 static int replace_configuration(struct json_object *candidate,
                                  struct apply_result *result,
                                  char *error, size_t error_size) {
@@ -693,12 +1037,17 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     const char *username = object_string(data, "username");
     const char *password = object_string(data, "password");
     char error[256] = {0};
+    long long retry_after = auth_retry_after_ms(wsi, username);
+    if (retry_after > 0) {
+      char detail[160];
+      snprintf(detail, sizeof(detail),
+               "too many failed attempts; retry in %lld ms", retry_after);
+      queue_error(wsi, session, request_id, 429, "Too Many Requests", detail);
+      return 0;
+    }
     if (!data || auth_verify_user(username, password, error, sizeof(error)) != 0) {
-      session->authenticated = false;
-      session->role = POSTMERKOS_ROLE_NONE;
-      session->username[0] = '\0';
-      session->auth_failures++;
-      if (session->auth_failures > 2) usleep(500000);
+      auth_record_failure(wsi, username);
+      deauthenticate_session(wsi, session, true);
       queue_error(wsi, session, request_id, 401, "Unauthorized", error);
       return 0;
     }
@@ -710,23 +1059,29 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
                   "account has no postmerkOS management role");
       return 0;
     }
-    session->authenticated = true;
-    session->auth_failures = 0;
-    snprintf(session->username, sizeof(session->username), "%s", username);
-    session->send_initial_status = true;
-    session->send_initial_config = true;
-    struct json_object *auth = role_identity_json(username);
+    auth_record_success(wsi, username);
+    const char *token = NULL;
     struct json_object *remember_obj = NULL;
     bool remember = data && json_object_object_get_ex(data, "remember", &remember_obj) &&
                     json_object_get_boolean(remember_obj);
     long now = (long)time(NULL);
     long ttl = remember ? SESSION_TTL_REMEMBER : SESSION_TTL_DEFAULT;
-    const char *token = session_create(username, ttl, now);
-    if (token) {
-      snprintf(session->session_token, sizeof(session->session_token), "%s", token);
-      json_object_object_add(auth, "token", json_object_new_string(token));
-      json_object_object_add(auth, "expires_at", json_object_new_int64((int64_t)(now + ttl)));
+    token = session_create(username, ttl, now);
+    if (!token) {
+      deauthenticate_session(wsi, session, true);
+      queue_error(wsi, session, request_id, 503, "Service Unavailable",
+                  "unable to create a secure management session");
+      return 0;
     }
+    session->authenticated = true;
+    snprintf(session->username, sizeof(session->username), "%s", username);
+    session->send_initial_status = true;
+    session->send_initial_config = true;
+    struct json_object *auth = role_identity_json(username);
+    snprintf(session->session_token, sizeof(session->session_token), "%s", token);
+    json_object_object_add(auth, "token", json_object_new_string(token));
+    json_object_object_add(auth, "expires_at",
+                           json_object_new_int64((int64_t)(now + ttl)));
     if (role_has_capability(session->role, "users.manage"))
       json_object_object_add(auth, "users", auth_list_users());
     queue_response(wsi, session, "auth", auth, request_id);
@@ -750,9 +1105,10 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
                   "account has no postmerkOS management role");
       return 0;
     }
+    if (session->session_token[0] && strcmp(session->session_token, token))
+      session_revoke_token(session->session_token);
     session->authenticated = true;
     session->role = role;
-    session->auth_failures = 0;
     snprintf(session->username, sizeof(session->username), "%s", username);
     snprintf(session->session_token, sizeof(session->session_token), "%s", token);
     session->send_initial_status = true;
@@ -766,15 +1122,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   }
 
   if (!strcmp(type, "logout")) {
-    session_revoke_token(session->session_token);
-    session->session_token[0] = '\0';
-    session->authenticated = false;
-    session->role = POSTMERKOS_ROLE_NONE;
-    session->username[0] = '\0';
-    session->send_initial_status = false;
-    session->send_initial_config = false;
-    cleanup_upload(wsi, session);
-    terminal_stop(session, true);
+    deauthenticate_session(wsi, session, true);
     struct json_object *data = json_object_new_object();
     json_object_object_add(data, "message", json_object_new_string("Logged out"));
     queue_response(wsi, session, "auth_required", data, request_id);
@@ -782,11 +1130,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     return 0;
   }
 
-  if (!session->authenticated) {
-    queue_error(wsi, session, request_id, 401, "Unauthorized",
-                "authenticate with a local Linux account before using this interface");
-    return 0;
-  }
+  if (!revalidate_session(wsi, session, request_id)) return 0;
 
   if (!strcmp(type, "get_auth")) {
     struct json_object *data = role_identity_json(session->username);
@@ -816,13 +1160,14 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     if (!require_capability(wsi, session, request_id, "users.manage")) return 0;
     struct json_object *data=request_data_object(message);const char *username=object_string(data,"username");char error[256]={0};
     if(auth_delete_user(username,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
-    session_revoke_user(username);
+    ws_revoke_user_sessions(username);
     struct json_object *reply=json_object_new_object();json_object_object_add(reply,"message",json_object_new_string("Account deleted"));json_object_object_add(reply,"users",auth_list_users());queue_response(wsi,session,"users",reply,request_id);json_object_put(reply);return 0;
   }
   if (!strcmp(type, "user_role")) {
     if (!require_capability(wsi, session, request_id, "users.manage")) return 0;
     struct json_object *data=request_data_object(message);const char *username=object_string(data,"username"),*role=object_string(data,"role");char error[256]={0};
     if(auth_set_role(username,role,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
+    ws_revoke_user_sessions(username);
     struct json_object *reply=json_object_new_object();json_object_object_add(reply,"message",json_object_new_string("Account role updated"));json_object_object_add(reply,"users",auth_list_users());queue_response(wsi,session,"users",reply,request_id);json_object_put(reply);return 0;
   }
   if (!strcmp(type, "ssh_key_list")) {
@@ -879,13 +1224,13 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
       queue_error(wsi, session, request_id, 400, "Password update failed", error);
       return 0;
     }
-    session_revoke_user(target);
     struct json_object *ack = json_object_new_object();
     json_object_object_add(ack, "message",
                            json_object_new_string("Password updated"));
     json_object_object_add(ack, "username", json_object_new_string(target));
     queue_response(wsi, session, "ack", ack, request_id);
     json_object_put(ack);
+    ws_revoke_user_sessions(target);
     return 0;
   }
 
@@ -933,7 +1278,8 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
 
   if (!strcmp(type, "firmware_upload_status")) {
     if (!require_capability(wsi, session, request_id, "firmware.update")) return 0;
-    struct json_object *data = upload_status_json(session);
+    struct json_object *data = firmware_job.state != FIRMWARE_JOB_IDLE
+        ? firmware_job_status_json() : upload_status_json(session);
     queue_response(wsi, session, "firmware_upload_status", data, request_id);
     json_object_put(data);
     return 0;
@@ -941,6 +1287,7 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
 
   if (!strcmp(type, "firmware_upload_cancel")) {
     if (!require_capability(wsi, session, request_id, "firmware.update")) return 0;
+    firmware_job_cancel();
     cleanup_upload(wsi, session);
     struct json_object *data = json_object_new_object();
     json_object_object_add(data, "message",
@@ -974,6 +1321,13 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
                         "invalid firmware size or overlay policy");
       return 0;
     }
+    if (firmware_job.state == FIRMWARE_JOB_VALIDATING ||
+        firmware_job.state == FIRMWARE_JOB_READY) {
+      queue_error(wsi, session, request_id, 409, "Conflict",
+                  "a firmware image is validating or awaiting confirmation");
+      return 0;
+    }
+    if (firmware_job.state == FIRMWARE_JOB_FAILED) firmware_job_forget(true);
     if (upload_owner && upload_owner != wsi) {
       queue_error(wsi, session, request_id, 409, "Conflict",
                   "another firmware upload is active");
@@ -1044,22 +1398,21 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
       return 0;
     }
     char error[256] = {0};
-    if (firmware_validate_update(session->upload_path, session->upload_name,
-                                 session->upload_manifest_path[0] ? session->upload_manifest_path : NULL,
-                                 session->upload_overlay, session->upload_force,
-                                 session->upload_accept_untested,
-                                 error, sizeof(error)) != 0) {
-      queue_error(wsi, session, request_id, 400,
-                  "Firmware validation failed", error);
+    if (firmware_job_start(session, error, sizeof(error)) != 0) {
+      queue_error(wsi, session, request_id, 500,
+                  "Firmware validation could not be started", error);
       cleanup_upload(wsi, session);
       return 0;
     }
-    session->upload_ready = true;
-    struct json_object *ready = upload_status_json(session);
-    json_object_object_add(ready, "message", json_object_new_string(
-        "Firmware is validated and ready. Confirm the final update prompt to begin flashing."));
-    queue_response(wsi, session, "firmware_ready", ready, request_id);
-    json_object_put(ready);
+    session->upload_active = false;
+    session->upload_ready = false;
+    session->upload_handed_off = true;
+    upload_owner = NULL;
+    struct json_object *validating = firmware_job_status_json();
+    json_object_object_add(validating, "message", json_object_new_string(
+        "Upload complete; firmware validation is running asynchronously."));
+    queue_response(wsi, session, "firmware_validating", validating, request_id);
+    json_object_put(validating);
     return 0;
   }
 
@@ -1067,21 +1420,20 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     if (!require_capability(wsi, session, request_id, "firmware.update")) return 0;
     struct json_object *data = request_data_object(message);
     const char *token = object_string(data, "token");
-    if (!session->upload_ready || !session->upload_path[0] || !token ||
-        strcmp(token, session->upload_token)) {
+    if (firmware_job.state != FIRMWARE_JOB_READY || !firmware_job.path[0] ||
+        !token || strcmp(token, firmware_job.token)) {
       queue_bad_request(wsi, session, request_id,
                         "firmware upload token is stale or not ready");
       return 0;
     }
     char error[256] = {0};
-    if (firmware_start_update(session->upload_path, session->upload_name,
-                              session->upload_manifest_path[0] ? session->upload_manifest_path : NULL,
-                              session->upload_overlay, session->upload_force,
-                              session->upload_accept_untested,
+    if (firmware_start_update(firmware_job.path, firmware_job.name,
+                              firmware_job.manifest_path[0] ? firmware_job.manifest_path : NULL,
+                              firmware_job.overlay, firmware_job.force,
+                              firmware_job.accept_untested,
                               error, sizeof(error)) != 0) {
       queue_error(wsi, session, request_id, 500,
                   "Firmware update could not be started", error);
-      cleanup_upload(wsi, session);
       return 0;
     }
     session->upload_active = false;
@@ -1091,10 +1443,11 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     struct json_object *started = json_object_new_object();
     json_object_object_add(started, "message", json_object_new_string(
         "Starting firmware update. Management services will stop shortly; LED progress and serial status remain available."));
-    json_object_object_add(started, "name", json_object_new_string(session->upload_name));
-    json_object_object_add(started, "token", json_object_new_string(session->upload_token));
+    json_object_object_add(started, "name", json_object_new_string(firmware_job.name));
+    json_object_object_add(started, "token", json_object_new_string(firmware_job.token));
     queue_response(wsi, session, "firmware_starting", started, request_id);
     json_object_put(started);
+    firmware_job_forget(false);
     return 0;
   }
 
@@ -1251,9 +1604,6 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
   json_object_put(ack);
   apply_result_cleanup(&result);
   config_file_mtime(&config_mtime_ns);
-  const struct network_runtime *net_rt = network_manager_runtime();
-  const char *mgmt_addr = (net_rt && net_rt->applied.address[0]) ? net_rt->applied.address : NULL;
-  telemetry_apply(saved, mgmt_addr);
   refresh_config_cache(saved, true);
   refresh_status_cache(true);
   json_object_put(saved);
@@ -1469,6 +1819,7 @@ void ws_schedule_timers(struct lws_context *context, int status_interval) {
 }
 
 int ws_service_once(struct lws_context *context, int timeout_ms) {
+  firmware_job_poll();
   return lws_service(context, timeout_ms);
 }
 
@@ -1477,6 +1828,7 @@ void ws_shutdown(struct lws_context *context) {
   lws_sul_cancel(&config_sul);
   lws_sul_cancel(&terminal_sul);
   terminal_poll_scheduled = false;
+  firmware_job_cancel();
   for (size_t i = 0; i < client_count; i++) {
     struct per_session_data *session = lws_wsi_user(clients[i]);
     if (session) terminal_stop(session, true);

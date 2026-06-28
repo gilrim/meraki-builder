@@ -74,11 +74,18 @@ struct json_object *config_load_or_create(char *error, size_t error_size) {
   return config;
 }
 
+static const char *current_management_address(void) {
+  const struct network_runtime *runtime = network_manager_runtime();
+  return runtime && runtime->applied.address[0] ? runtime->applied.address : NULL;
+}
+
 int config_apply_full(struct json_object *config, struct apply_result *result) {
   int rc = 0;
   if (click_apply_globals_full(config, result) != 0) rc = -EIO;
   if (click_apply_ports_full(config, result) != 0) rc = -EIO;
   if (network_manager_configure(config, result, false) != 0) rc = -EIO;
+  if (telemetry_apply(config, current_management_address(), result) != 0)
+    rc = -EIO;
   if (!apply_result_success(result)) rc = -EIO;
   return rc;
 }
@@ -93,6 +100,10 @@ int config_apply_delta(struct json_object *full_config,
   struct json_object *network = NULL;
   if (json_object_object_get_ex(delta, "network", &network) &&
       network_manager_configure(full_config, result, defer_network) != 0)
+    rc = -EIO;
+  struct json_object *telemetry = NULL;
+  if (json_object_object_get_ex(delta, "telemetry", &telemetry) &&
+      telemetry_apply(full_config, current_management_address(), result) != 0)
     rc = -EIO;
   if (!apply_result_success(result)) rc = -EIO;
   return rc;

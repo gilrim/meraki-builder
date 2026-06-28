@@ -9,6 +9,7 @@
 #include "network.h"
 #include "port_clone.h"
 #include "validation.h"
+#include "websocket.h"
 #include "console_cli.h"
 #include "roles.h"
 #include "status.h"
@@ -100,11 +101,6 @@ static int save_delta_reply(int fd, struct json_object *delta) {
                                              error, sizeof(error));
   if (rc != 0) send_error(fd, 400, error[0] ? error : "configuration rejected");
   else {
-    if (saved) {
-      const struct network_runtime *net_rt = network_manager_runtime();
-      const char *mgmt_addr = (net_rt && net_rt->applied.address[0]) ? net_rt->applied.address : NULL;
-      telemetry_apply(saved, mgmt_addr);
-    }
     struct json_object *ack = apply_result_json(&result, "Configuration accepted");
     send_json(fd, "ack", ack);
     json_object_put(ack);
@@ -243,10 +239,10 @@ static void handle_client(int fd) {
     if(!role_has_capability(role,"users.manage"))send_error(fd,403,"account management requires administrator access");else{char error[256]={0};if(auth_create_user(target,password,new_role,error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *users=auth_list_users();send_json(fd,"users",users);json_object_put(users);}}
   } else if (!strcmp(type, "users.delete")) {
     struct json_object *data=request_data(request);const char *target=object_string(data,"username");
-    if(!role_has_capability(role,"users.manage"))send_error(fd,403,"account management requires administrator access");else{char error[256]={0};if(auth_delete_user(target,error,sizeof(error))!=0)send_error(fd,400,error);else{session_revoke_user(target);struct json_object *users=auth_list_users();send_json(fd,"users",users);json_object_put(users);}}
+    if(!role_has_capability(role,"users.manage"))send_error(fd,403,"account management requires administrator access");else{char error[256]={0};if(auth_delete_user(target,error,sizeof(error))!=0)send_error(fd,400,error);else{ws_revoke_user_sessions(target);struct json_object *users=auth_list_users();send_json(fd,"users",users);json_object_put(users);}}
   } else if (!strcmp(type, "users.role")) {
     struct json_object *data=request_data(request);const char *target=object_string(data,"username"),*new_role=object_string(data,"role");
-    if(!role_has_capability(role,"users.manage"))send_error(fd,403,"account management requires administrator access");else{char error[256]={0};if(auth_set_role(target,new_role,error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *users=auth_list_users();send_json(fd,"users",users);json_object_put(users);}}
+    if(!role_has_capability(role,"users.manage"))send_error(fd,403,"account management requires administrator access");else{char error[256]={0};if(auth_set_role(target,new_role,error,sizeof(error))!=0)send_error(fd,400,error);else{ws_revoke_user_sessions(target);struct json_object *users=auth_list_users();send_json(fd,"users",users);json_object_put(users);}}
   } else if (!strcmp(type, "ssh.keys.get") && role_has_capability(role, "users.manage")) {
     struct json_object *keys=ssh_keys_list();send_json(fd,"ssh_keys",keys);json_object_put(keys);
   } else if (!strcmp(type, "ssh.keys.add")) {

@@ -149,7 +149,10 @@ static void add_clients(struct json_object *root, struct json_object *errors) {
   const char *clients_path = getenv("CONFIGD_CLIENTS_FILE");
   if (!clients_path || !*clients_path) clients_path = CLIENTS_FILE;
   FILE *file = fopen(clients_path, "r");
-  if (!file) return;
+  if (!file) {
+    add_error(errors, "clients", "Click client table handler unavailable");
+    return;
+  }
 
   char line[512];
   bool header = true;

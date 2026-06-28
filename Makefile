@@ -5,7 +5,7 @@ JOBS ?= $(shell nproc 2>/dev/null || echo 1)
 export JOBS
 
 .PHONY: help all base web doctor deps sources kernel loader donor ui prepare rootfs image \
-        validate verify-inputs test-fwupdate test-image test-modules test-hardware test-docs test-ui-contract test-loader-contract verify-modules test-all menuconfig distrobox clean distclean print-config \
+        validate verify-inputs test-fwupdate test-image test-modules test-hardware test-docs test-ui-contract test-ui-build test-loader-contract test-configd verify-modules test-all menuconfig distrobox clean distclean print-config \
         mx80 mx80-prepare mx80-validate mx80-check mx80-menuconfig mx80-clean mx80-distclean mx84-check
 
 help:
@@ -31,6 +31,8 @@ help:
 	  '  make test-hardware Verify board identity and hardware capability policy' \
 	  '  make test-docs     Check repository Markdown links' \
 	  '  make test-ui-contract UI_DIR=../postmerkos-ui checks browser/configd methods' \
+	  '  make test-ui-build UI_DIR=../postmerkos-ui compiles the production UI' \
+	  '  make test-configd  Compile and run configd host tests' \
 	  '  make test-loader-contract Check authoritative upstream source policy' \
 	  '  make test-all      Run all builder host-side validation targets' \
 	  '  make test-modules  Test complete multi-platform module staging and boot selection' \
@@ -126,6 +128,7 @@ test-hardware:
 	@./buildroot/board/meraki/ms220/tests/test-poe-init.sh
 	@./buildroot/board/meraki/ms220/tests/test-configd-supervisor.sh
 	@./buildroot/board/meraki/ms220/tests/test-configd-init.sh
+	@./buildroot/board/meraki/ms220/tests/test-snmpd-init.sh
 	@./buildroot/packages/postmerkos-hardware/tests/test-host.sh
 
 test-docs:
@@ -134,12 +137,18 @@ test-docs:
 test-ui-contract:
 	@./scripts/tests/test-ui-configd-contract.py "$${UI_DIR:-../postmerkos-ui}"
 
+test-ui-build:
+	@test -f "$${UI_DIR:-../postmerkos-ui}/package-lock.json" || { echo "UI_DIR does not contain postmerkos-ui" >&2; exit 1; }
+	@cd "$${UI_DIR:-../postmerkos-ui}" && npm ci && npm run lint && node --test src/*.test.js && npm run build
+
+test-configd:
+	@$(MAKE) -C buildroot/packages/configd test-host
+
 test-loader-contract:
 	@python3 ./scripts/tests/test-loader-source-contract.py
 
-test-all: test-fwupdate test-image test-modules test-hardware test-docs test-ui-contract test-loader-contract
+test-all: test-fwupdate test-image test-modules test-hardware test-docs test-ui-contract test-loader-contract test-configd
 	@./buildroot/packages/postmerkos-console/tests/test-host.sh
-	@$(MAKE) -C buildroot/packages/configd test-host
 
 menuconfig: prepare
 	@bash -c 'source ./scripts/common.sh; $(MAKE) -C "$$BUILDROOT_DIR" menuconfig'

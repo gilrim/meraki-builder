@@ -1,338 +1,474 @@
 #include "telemetry.h"
 
+#include "configd.h"
+#include "hardware.h"
 #include "metrics.h"
 #include "portstats.h"
-#include "hardware.h"
 #include "service_ops.h"
 
 #include <dirent.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#include <libpostmerkos.h>   /* get_time, click/read helpers, get_field_copy */
-#include <libpd690xx.h>      /* port_power, get_temp */
+#include <libpostmerkos.h>
+#include <libpd690xx.h>
 
-/* External hardware/pd690xx config (defined in main/hardware.c) */
 extern struct hardware_info hardware;
 extern struct pd690xx_cfg pd690xx;
 
-/* ---- shared state (single-threaded main loop: no locking needed) ---- */
 static struct portstats_snapshot g_snap;
 static struct device_health g_health;
-static struct portstats_snapshot g_prev;   /* for discontinuity detection */
+static struct portstats_snapshot g_prev;
 static int g_have_prev;
 
-/* ---- small json helpers (mirroring service_ops.c idioms) ---- */
 static struct json_object *member(struct json_object *o, const char *k) {
   struct json_object *v = NULL;
   if (!o || !json_object_is_type(o, json_type_object) ||
       !json_object_object_get_ex(o, k, &v)) return NULL;
   return v;
 }
-static bool bool_member(struct json_object *o, const char *k, bool fb) {
+
+static bool bool_member(struct json_object *o, const char *k, bool fallback) {
   struct json_object *v = member(o, k);
-  return v && json_object_is_type(v, json_type_boolean) ? json_object_get_boolean(v) : fb;
-}
-static int int_member(struct json_object *o, const char *k, int fb) {
-  struct json_object *v = member(o, k);
-  return v && json_object_is_type(v, json_type_int) ? json_object_get_int(v) : fb;
-}
-static const char *str_member(struct json_object *o, const char *k, const char *fb) {
-  struct json_object *v = member(o, k);
-  return v && json_object_is_type(v, json_type_string) ? json_object_get_string(v) : fb;
+  return v && json_object_is_type(v, json_type_boolean)
+             ? json_object_get_boolean(v) : fallback;
 }
 
-static int bad(char *error, size_t n, const char *fmt, ...) {
-  if (error && n) {
-    va_list ap; va_start(ap, fmt);
-    vsnprintf(error, n, fmt, ap);
-    va_end(ap);
+static int int_member(struct json_object *o, const char *k, int fallback) {
+  struct json_object *v = member(o, k);
+  return v && json_object_is_type(v, json_type_int)
+             ? json_object_get_int(v) : fallback;
+}
+
+static const char *str_member(struct json_object *o, const char *k,
+                              const char *fallback) {
+  struct json_object *v = member(o, k);
+  return v && json_object_is_type(v, json_type_string)
+             ? json_object_get_string(v) : fallback;
+}
+
+static int bad(char *error, size_t size, const char *format, ...) {
+  if (error && size) {
+    va_list args;
+    va_start(args, format);
+    vsnprintf(error, size, format, args);
+    va_end(args);
   }
   return -EINVAL;
 }
 
+static const char *management_interface(void) {
+  const char *value = getenv("CONFIGD_MGMT_IFACE");
+  return value && *value ? value : TELEMETRY_MGMT_IFACE_DEFAULT;
+}
+
 struct json_object *telemetry_default_config(void) {
-  struct json_object *t = json_object_new_object();
+  struct json_object *telemetry = json_object_new_object();
   struct json_object *snmp = json_object_new_object();
-  json_object_object_add(snmp, "enabled", json_object_new_boolean(0));
+  json_object_object_add(snmp, "enabled", json_object_new_boolean(false));
   json_object_object_add(snmp, "community", json_object_new_string(""));
   json_object_object_add(snmp, "location", json_object_new_string(""));
   json_object_object_add(snmp, "contact", json_object_new_string(""));
-  json_object_object_add(t, "snmp", snmp);
-  struct json_object *prom = json_object_new_object();
-  json_object_object_add(prom, "enabled", json_object_new_boolean(0));
-  json_object_object_add(prom, "port", json_object_new_int(TELEMETRY_PROM_DEFAULT_PORT));
-  json_object_object_add(t, "prometheus", prom);
-  return t;
+  json_object_object_add(snmp, "management_only", json_object_new_boolean(true));
+  json_object_object_add(telemetry, "snmp", snmp);
+
+  struct json_object *prometheus = json_object_new_object();
+  json_object_object_add(prometheus, "enabled", json_object_new_boolean(false));
+  json_object_object_add(prometheus, "port",
+                         json_object_new_int(TELEMETRY_PROM_DEFAULT_PORT));
+  json_object_object_add(prometheus, "management_only",
+                         json_object_new_boolean(true));
+  json_object_object_add(telemetry, "prometheus", prometheus);
+  return telemetry;
 }
 
-static int key_allowed(const char *k, const char *const *allowed, size_t n) {
-  for (size_t i = 0; i < n; i++) if (!strcmp(k, allowed[i])) return 1;
+static int key_allowed(const char *key, const char *const *allowed, size_t count) {
+  for (size_t i = 0; i < count; i++)
+    if (!strcmp(key, allowed[i])) return 1;
   return 0;
 }
-static int reject_unknown(struct json_object *o, const char *const *allowed,
-                          size_t n, const char *path, char *err, size_t errn) {
-  json_object_object_foreach(o, k, v) {
-    (void)v;
-    if (!key_allowed(k, allowed, n)) return bad(err, errn, "%s.%s is not supported", path, k);
+
+static int reject_unknown(struct json_object *object,
+                          const char *const *allowed, size_t count,
+                          const char *path, char *error, size_t error_size) {
+  json_object_object_foreach(object, key, value) {
+    (void)value;
+    if (!key_allowed(key, allowed, count))
+      return bad(error, error_size, "%s.%s is not supported", path, key);
   }
   return 0;
 }
 
+static int require_boolean(struct json_object *object, const char *key,
+                           const char *path, char *error, size_t error_size) {
+  struct json_object *value = member(object, key);
+  if (value && !json_object_is_type(value, json_type_boolean))
+    return bad(error, error_size, "%s.%s must be a boolean", path, key);
+  return 0;
+}
+
 int telemetry_validate(struct json_object *config, char *error, size_t error_size) {
-  struct json_object *t = member(config, "telemetry");
-  if (!t) return 0;                       /* absent is valid */
-  if (!json_object_is_type(t, json_type_object))
+  struct json_object *telemetry = member(config, "telemetry");
+  if (!telemetry) return 0;
+  if (!json_object_is_type(telemetry, json_type_object))
     return bad(error, error_size, "telemetry must be an object");
   const char *keys[] = {"snmp", "prometheus"};
-  if (reject_unknown(t, keys, 2, "telemetry", error, error_size) != 0) return -EINVAL;
+  if (reject_unknown(telemetry, keys, 2, "telemetry", error, error_size) != 0)
+    return -EINVAL;
 
-  struct json_object *snmp = member(t, "snmp");
+  struct json_object *snmp = member(telemetry, "snmp");
   if (snmp) {
     if (!json_object_is_type(snmp, json_type_object))
       return bad(error, error_size, "telemetry.snmp must be an object");
-    const char *sk[] = {"enabled", "community", "location", "contact"};
-    if (reject_unknown(snmp, sk, 4, "telemetry.snmp", error, error_size) != 0) return -EINVAL;
-    bool enabled = bool_member(snmp, "enabled", false);
+    const char *allowed[] = {
+      "enabled", "community", "location", "contact", "management_only"
+    };
+    if (reject_unknown(snmp, allowed, 5, "telemetry.snmp", error,
+                       error_size) != 0 ||
+        require_boolean(snmp, "enabled", "telemetry.snmp", error,
+                        error_size) != 0 ||
+        require_boolean(snmp, "management_only", "telemetry.snmp", error,
+                        error_size) != 0)
+      return -EINVAL;
+
+    struct json_object *community_value = member(snmp, "community");
+    struct json_object *location_value = member(snmp, "location");
+    struct json_object *contact_value = member(snmp, "contact");
+    if (community_value && !json_object_is_type(community_value, json_type_string))
+      return bad(error, error_size, "telemetry.snmp.community must be a string");
+    if (location_value && !json_object_is_type(location_value, json_type_string))
+      return bad(error, error_size, "telemetry.snmp.location must be a string");
+    if (contact_value && !json_object_is_type(contact_value, json_type_string))
+      return bad(error, error_size, "telemetry.snmp.contact must be a string");
+
     const char *community = str_member(snmp, "community", "");
-    /* community required when enabled; printable, no whitespace/control, bounded */
-    if (enabled && (!community || !*community))
-      return bad(error, error_size, "telemetry.snmp.community is required when SNMP is enabled");
+    if (bool_member(snmp, "enabled", false) && !*community)
+      return bad(error, error_size,
+                 "telemetry.snmp.community is required when SNMP is enabled");
     if (strlen(community) > 64)
       return bad(error, error_size, "telemetry.snmp.community is too long");
     for (const unsigned char *p = (const unsigned char *)community; *p; p++)
       if (*p < 0x21 || *p == 0x7f)
-        return bad(error, error_size, "telemetry.snmp.community contains invalid characters");
+        return bad(error, error_size,
+                   "telemetry.snmp.community contains invalid characters");
     if (strlen(str_member(snmp, "location", "")) > 256)
       return bad(error, error_size, "telemetry.snmp.location is too long");
     if (strlen(str_member(snmp, "contact", "")) > 256)
       return bad(error, error_size, "telemetry.snmp.contact is too long");
   }
 
-  struct json_object *prom = member(t, "prometheus");
-  if (prom) {
-    if (!json_object_is_type(prom, json_type_object))
-      return bad(error, error_size, "telemetry.prometheus must be an object");
-    const char *pk[] = {"enabled", "port"};
-    if (reject_unknown(prom, pk, 2, "telemetry.prometheus", error, error_size) != 0) return -EINVAL;
-    struct json_object *pv = member(prom, "port");
-    if (pv) {
-      if (!json_object_is_type(pv, json_type_int))
-        return bad(error, error_size, "telemetry.prometheus.port must be an integer");
-      int port = json_object_get_int(pv);
+  struct json_object *prometheus = member(telemetry, "prometheus");
+  if (prometheus) {
+    if (!json_object_is_type(prometheus, json_type_object))
+      return bad(error, error_size,
+                 "telemetry.prometheus must be an object");
+    const char *allowed[] = {"enabled", "port", "management_only"};
+    if (reject_unknown(prometheus, allowed, 3, "telemetry.prometheus", error,
+                       error_size) != 0 ||
+        require_boolean(prometheus, "enabled", "telemetry.prometheus", error,
+                        error_size) != 0 ||
+        require_boolean(prometheus, "management_only", "telemetry.prometheus",
+                        error, error_size) != 0)
+      return -EINVAL;
+    struct json_object *port_value = member(prometheus, "port");
+    if (port_value) {
+      if (!json_object_is_type(port_value, json_type_int))
+        return bad(error, error_size,
+                   "telemetry.prometheus.port must be an integer");
+      int port = json_object_get_int(port_value);
       if (port < 1 || port > 65535)
-        return bad(error, error_size, "telemetry.prometheus.port must be between 1 and 65535");
-      /* static denylist (spec §9.3): SNMP ports + UI/web port 80 */
-      if (port == 161 || port == 162 || port == 80)
-        return bad(error, error_size, "telemetry.prometheus.port %d is reserved", port);
+        return bad(error, error_size,
+                   "telemetry.prometheus.port must be between 1 and 65535");
+      if (port == 80 || port == 161 || port == 162)
+        return bad(error, error_size,
+                   "telemetry.prometheus.port %d is reserved", port);
     }
   }
   return 0;
 }
 
-void telemetry_apply(struct json_object *config, const char *bind_addr) {
-  struct json_object *t = member(config, "telemetry");
-  struct json_object *prom = member(t, "prometheus");
-  bool enabled = bool_member(prom, "enabled", false);
-  int port = int_member(prom, "port", TELEMETRY_PROM_DEFAULT_PORT);
-
-  if (enabled) {
-    /* restart on (re)apply to pick up a port change.
-     * Bind 0.0.0.0: the device's L3 management IP lives in the Click/brain
-     * datapath, not on a Linux interface, so it is not bindable here (same
-     * reason the websocket and mini_snmpd bind all interfaces). bind_addr is
-     * retained only for the informational SNMP_BIND in the snmpd env. */
-    metrics_server_stop();
-    if (metrics_server_start(NULL, port) != 0)
-      fprintf(stderr, "%s telemetry: metrics listener bind failed on 0.0.0.0:%d\n",
-              get_time(), port);
-    else
-      fprintf(stderr, "%s telemetry: metrics listener started on 0.0.0.0:%d\n",
-              get_time(), port);
-  } else if (metrics_server_running()) {
-    metrics_server_stop();
-    fprintf(stderr, "%s telemetry: metrics listener stopped\n", get_time());
-  }
-
-  /* --- SNMP --- */
-  struct json_object *snmp = member(t, "snmp");
-  bool snmp_enabled = bool_member(snmp, "enabled", false);
-  char serr[128] = {0};
-  if (snmp_enabled) {
-    telemetry_write_snmpd_env(config, bind_addr);
-    if (service_action("snmp", "restart", serr, sizeof(serr)) != 0)
-      fprintf(stderr, "%s telemetry: snmp start failed: %s\n", get_time(), serr);
-  } else {
-    service_action("snmp", "stop", serr, sizeof(serr));
-  }
-}
-
 int telemetry_interval_seconds(void) {
-  const char *e = getenv("CONFIGD_PORTSTATS_INTERVAL");
-  int v = e ? atoi(e) : 5;
-  return v >= 1 ? v : 5;
+  const char *value = getenv("CONFIGD_PORTSTATS_INTERVAL");
+  int interval = value ? atoi(value) : 5;
+  return interval >= 1 ? interval : 5;
 }
 
 int telemetry_server_fd(void) { return metrics_server_fd(); }
 
-/* ---- snmpd.env writer ---- */
-
-static void sq(FILE *f, const char *key, const char *val) {
-  /* single-quote, turning ' into '\'' */
-  fprintf(f, "%s='", key);
-  for (const char *p = val ? val : ""; *p; p++) {
-    if (*p == '\'') fputs("'\\''", f);
-    else fputc(*p, f);
+static void shell_quote(FILE *file, const char *key, const char *value) {
+  fprintf(file, "%s='", key);
+  for (const char *p = value ? value : ""; *p; p++) {
+    if (*p == '\'') fputs("'\\''", file);
+    else fputc(*p, file);
   }
-  fputs("'\n", f);
+  fputs("'\n", file);
 }
 
 int telemetry_write_snmpd_env(struct json_object *config, const char *bind_addr) {
   struct json_object *snmp = member(member(config, "telemetry"), "snmp");
-  const char *community = str_member(snmp, "community", "");
-  const char *location = str_member(snmp, "location", "");
-  const char *contact = str_member(snmp, "contact", "");
-
   const char *path = getenv("CONFIGD_SNMPD_ENV");
   if (!path || !*path) path = "/run/postmerkos/snmpd.env";
-  char tmp[512];
-  if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= (int)sizeof(tmp)) return -1;
+  char temporary[512];
+  if (snprintf(temporary, sizeof(temporary), "%s.tmp", path) >=
+      (int)sizeof(temporary)) return -ENAMETOOLONG;
 
-  FILE *f = fopen(tmp, "w");
-  if (!f) return -1;
-  sq(f, "SNMP_COMMUNITY", community);
-  sq(f, "SNMP_LOCATION", location);
-  sq(f, "SNMP_CONTACT", contact);
-  sq(f, "SNMP_BIND", bind_addr ? bind_addr : "");
-  if (fflush(f) != 0) { fclose(f); unlink(tmp); return -1; }
-  int fd = fileno(f); if (fd >= 0) fsync(fd);
-  if (fclose(f) != 0) { unlink(tmp); return -1; }
-  if (rename(tmp, path) != 0) { unlink(tmp); return -1; }
+  FILE *file = fopen(temporary, "w");
+  if (!file) return -errno;
+  shell_quote(file, "SNMP_ENABLED",
+              bool_member(snmp, "enabled", false) ? "1" : "0");
+  shell_quote(file, "SNMP_COMMUNITY", str_member(snmp, "community", ""));
+  shell_quote(file, "SNMP_LOCATION", str_member(snmp, "location", ""));
+  shell_quote(file, "SNMP_CONTACT", str_member(snmp, "contact", ""));
+  shell_quote(file, "SNMP_BIND", bind_addr ? bind_addr : "");
+  shell_quote(file, "SNMP_BIND_DEVICE",
+              bool_member(snmp, "management_only", true)
+                ? management_interface() : "");
+  if (fflush(file) != 0) {
+    int saved = errno;
+    fclose(file);
+    unlink(temporary);
+    return -saved;
+  }
+  int fd = fileno(file);
+  if (fd >= 0 && fsync(fd) != 0) {
+    int saved = errno;
+    fclose(file);
+    unlink(temporary);
+    return -saved;
+  }
+  if (fclose(file) != 0) {
+    int saved = errno;
+    unlink(temporary);
+    return -saved;
+  }
+  if (rename(temporary, path) != 0) {
+    int saved = errno;
+    unlink(temporary);
+    return -saved;
+  }
   return 0;
 }
 
-/* ---- telemetry_tick implementation ---- */
-
 static enum port_link_state phy_admin_state(unsigned int port) {
-  char line[512], mode[32];
+  char line[512];
+  char mode[32];
   if (read_switch_port_table("dump_port_phy_cfgs", port, line, sizeof(line)) != 0 ||
       get_field_copy(line, 2, mode, sizeof(mode)) != 0)
     return PORT_LINK_UNKNOWN;
   return strcmp(mode, "off") == 0 ? PORT_LINK_DOWN : PORT_LINK_UP;
 }
 
-static void enrich_port_status(struct portstats_snapshot *snap) {
-  /* Use the SAME handler status.c reads for link state: PORTS_FILE
-   * (/click/switch_port_table/dump_pports), field 2 = established, field 3 =
-   * speed Mbps. dump_lports is STP state, not link state — wrong source. */
-  const char *ports_path = getenv("CONFIGD_PORTS_FILE");
-  if (!ports_path || !*ports_path) ports_path = PORTS_FILE;
-  FILE *f = fopen(ports_path, "r");
-  if (!f) return;
+void telemetry_enrich_port_status(struct portstats_snapshot *snapshot) {
+  const char *path = getenv("CONFIGD_PORTS_FILE");
+  if (!path || !*path) path = PORTS_FILE;
+  FILE *file = fopen(path, "r");
+  if (!file) return;
+
   char line[512];
-  unsigned int port = 0;
   bool header = true;
-  while (fgets(line, sizeof(line), f)) {
-    if (header) { header = false; continue; }
-    port++;
-    if (port < 1 || port > PORTSTATS_MAX_PORTS) continue;
-    struct port_counters *p = &snap->ports[port - 1];
-    char est[32] = "0", spd[32] = "0";
-    if (get_field_copy(line, 2, est, sizeof(est)) == 0 &&
-        get_field_copy(line, 3, spd, sizeof(spd)) == 0) {
-      p->oper = atoi(est) != 0 ? PORT_LINK_UP : PORT_LINK_DOWN;
-      p->speed_mbps = atoi(spd);
+  while (fgets(line, sizeof(line), file)) {
+    if (header) {
+      header = false;
+      continue;
     }
-    p->admin = phy_admin_state(port);
+    char port_field[32];
+    char established[32];
+    char speed[32];
+    if (get_field_copy(line, 1, port_field, sizeof(port_field)) != 0 ||
+        get_field_copy(line, 2, established, sizeof(established)) != 0 ||
+        get_field_copy(line, 3, speed, sizeof(speed)) != 0)
+      continue;
+    char *end = NULL;
+    errno = 0;
+    unsigned long parsed = strtoul(port_field, &end, 10);
+    if (errno || !end || *end || parsed < 1 || parsed > PORTSTATS_MAX_PORTS)
+      continue;
+    unsigned int port = (unsigned int)parsed;
+    struct port_counters *counter = &snapshot->ports[port - 1];
+    if (!counter->present) {
+      counter->present = 1;
+      counter->port = (int)port;
+      snapshot->count++;
+    }
+    counter->oper = atoi(established) != 0 ? PORT_LINK_UP : PORT_LINK_DOWN;
+    counter->speed_mbps = atoi(speed);
+    counter->admin = phy_admin_state(port);
     if (hardware.poe_available) {
-      float w = port_power(&pd690xx, (int)port);
-      if (w >= 0) { p->poe_present = 1; p->poe_power_watts = (double)w; }
-    }
-  }
-  fclose(f);
-}
-
-static void collect_health(struct device_health *h) {
-  memset(h, 0, sizeof(*h));
-  /* uptime */
-  FILE *u = fopen("/proc/uptime", "r");
-  if (u) { double up = 0; if (fscanf(u, "%lf", &up) == 1) h->uptime_seconds = (long)up; fclose(u); }
-  /* thermal zones */
-  const char *tp = getenv("CONFIGD_THERMAL_PATH");
-  if (!tp || !*tp) tp = "/sys/class/thermal";
-  DIR *d = opendir(tp);
-  if (d) {
-    struct dirent *e;
-    while ((e = readdir(d)) && h->temp_count < METRICS_MAX_TEMPS) {
-      if (strncmp(e->d_name, "thermal_zone", 12) != 0) continue;
-      char path[256];
-      if (snprintf(path, sizeof(path), "%s/%s/temp", tp, e->d_name) >= (int)sizeof(path)) continue;
-      FILE *tf = fopen(path, "r");
-      if (!tf) continue;
-      long milli = 0;
-      if (fscanf(tf, "%ld", &milli) == 1) {
-        h->temps_celsius[h->temp_count] = (double)milli / 1000.0;
-        snprintf(h->temp_labels[h->temp_count], sizeof(h->temp_labels[0]), "%.31s", e->d_name);
-        h->temp_count++;
+      float watts = port_power(&pd690xx, (int)port);
+      if (watts >= 0) {
+        counter->poe_present = 1;
+        counter->poe_power_watts = watts;
       }
-      fclose(tf);
     }
-    closedir(d);
   }
-  if (hardware.poe_available) {
-    h->poe_available = 1;
-    /* aggregate PoE: sum per-port draw (budget left as 0 if unavailable) */
-    /* per-port draw summed in telemetry_tick after enrichment */
-  }
+  fclose(file);
 }
 
-static void detect_discontinuity(struct portstats_snapshot *snap) {
-  long tick = snap->generated_unix;  /* simple uptime-like tick */
-  int reset = 0;
-  if (!g_have_prev) {
-    reset = 1;  /* conservative: see spec §5.5 caveat */
-  } else {
-    if (snap->timestamp < g_prev.timestamp) reset = 1;
+static void collect_health(struct device_health *health) {
+  memset(health, 0, sizeof(*health));
+  FILE *uptime = fopen("/proc/uptime", "r");
+  if (uptime) {
+    double seconds = 0;
+    if (fscanf(uptime, "%lf", &seconds) == 1)
+      health->uptime_seconds = (long)seconds;
+    fclose(uptime);
+  }
+
+  const char *thermal_path = getenv("CONFIGD_THERMAL_PATH");
+  if (!thermal_path || !*thermal_path) thermal_path = "/sys/class/thermal";
+  DIR *directory = opendir(thermal_path);
+  if (directory) {
+    struct dirent *entry;
+    while ((entry = readdir(directory)) &&
+           health->temp_count < METRICS_MAX_TEMPS) {
+      if (strncmp(entry->d_name, "thermal_zone", 12) != 0) continue;
+      char path[256];
+      if (snprintf(path, sizeof(path), "%s/%s/temp", thermal_path,
+                   entry->d_name) >= (int)sizeof(path)) continue;
+      FILE *temperature = fopen(path, "r");
+      if (!temperature) continue;
+      long milli = 0;
+      if (fscanf(temperature, "%ld", &milli) == 1) {
+        int index = health->temp_count++;
+        health->temps_celsius[index] = (double)milli / 1000.0;
+        snprintf(health->temp_labels[index], sizeof(health->temp_labels[index]),
+                 "%.31s", entry->d_name);
+      }
+      fclose(temperature);
+    }
+    closedir(directory);
+  }
+  if (hardware.poe_available) health->poe_available = 1;
+}
+
+static void detect_discontinuity(struct portstats_snapshot *snapshot) {
+  long tick = snapshot->generated_unix;
+  int reset = !g_have_prev;
+  if (g_have_prev) {
+    if (snapshot->timestamp < g_prev.timestamp) reset = 1;
     for (int i = 0; !reset && i < PORTSTATS_MAX_PORTS; i++) {
-      if (snap->ports[i].present && g_prev.ports[i].present &&
-          (snap->ports[i].rx_octets < g_prev.ports[i].rx_octets ||
-           snap->ports[i].tx_octets < g_prev.ports[i].tx_octets))
+      if (snapshot->ports[i].present && g_prev.ports[i].present &&
+          (snapshot->ports[i].rx_octets < g_prev.ports[i].rx_octets ||
+           snapshot->ports[i].tx_octets < g_prev.ports[i].tx_octets))
         reset = 1;
     }
   }
-  if (reset) snap->discontinuity_ticks = tick;
-  else snap->discontinuity_ticks = g_prev.discontinuity_ticks;
+  snapshot->discontinuity_ticks = reset ? tick : g_prev.discontinuity_ticks;
+}
+
+static int refresh_snapshot(bool require_valid, char *error, size_t error_size) {
+  struct portstats_snapshot snapshot;
+  if (portstats_read(&snapshot) != 0 || !snapshot.valid || snapshot.count <= 0) {
+    g_snap.valid = 0;
+    if (require_valid && error && error_size)
+      snprintf(error, error_size,
+               "switch port counter source is unavailable or returned no ports");
+    return -EIO;
+  }
+  telemetry_enrich_port_status(&snapshot);
+  collect_health(&g_health);
+  if (g_health.poe_available) {
+    for (int i = 0; i < PORTSTATS_MAX_PORTS; i++)
+      if (snapshot.ports[i].present && snapshot.ports[i].poe_present)
+        g_health.poe_power_watts += snapshot.ports[i].poe_power_watts;
+  }
+  detect_discontinuity(&snapshot);
+  snapshot.ttl_seconds = telemetry_interval_seconds() * 3;
+  g_prev = snapshot;
+  g_have_prev = 1;
+  g_snap = snapshot;
+  if (portstats_write_file(&g_snap) != 0) {
+    if (require_valid && error && error_size)
+      snprintf(error, error_size, "unable to publish the SNMP port snapshot");
+    return -EIO;
+  }
+  return 0;
+}
+
+int telemetry_apply(struct json_object *config, const char *bind_addr,
+                    struct apply_result *result) {
+  struct json_object *telemetry = member(config, "telemetry");
+  struct json_object *prometheus = member(telemetry, "prometheus");
+  struct json_object *snmp = member(telemetry, "snmp");
+  bool prometheus_enabled = bool_member(prometheus, "enabled", false);
+  bool prometheus_management_only =
+    bool_member(prometheus, "management_only", true);
+  int prometheus_port = int_member(prometheus, "port",
+                                   TELEMETRY_PROM_DEFAULT_PORT);
+  bool snmp_enabled = bool_member(snmp, "enabled", false);
+
+  if (dry_run) {
+    if (prometheus_enabled || metrics_server_running()) apply_result_applied(result);
+    if (snmp_enabled) apply_result_applied(result);
+    return 0;
+  }
+
+  if (prometheus_enabled) {
+    char error[160] = {0};
+    const char *device = prometheus_management_only ? management_interface() : NULL;
+    if (metrics_server_start_bound(NULL, device, prometheus_port,
+                                   error, sizeof(error)) != 0) {
+      apply_result_fail(result, "Prometheus listener: %s",
+                        error[0] ? error : "unable to bind");
+      return -EIO;
+    }
+    apply_result_applied(result);
+  } else if (metrics_server_running()) {
+    metrics_server_stop();
+    apply_result_applied(result);
+  }
+
+  char service_error[160] = {0};
+  if (snmp_enabled) {
+    char snapshot_error[160] = {0};
+    if (refresh_snapshot(true, snapshot_error, sizeof(snapshot_error)) != 0) {
+      apply_result_fail(result, "SNMP: %s", snapshot_error);
+      return -EIO;
+    }
+    int env_rc = telemetry_write_snmpd_env(config, bind_addr);
+    if (env_rc != 0) {
+      apply_result_fail(result, "SNMP: unable to write service environment: %s",
+                        strerror(-env_rc));
+      return -EIO;
+    }
+    if (service_action("snmp", "restart", service_error,
+                       sizeof(service_error)) != 0) {
+      apply_result_fail(result, "SNMP: %s",
+                        service_error[0] ? service_error : "service restart failed");
+      return -EIO;
+    }
+    apply_result_applied(result);
+  } else {
+    if (service_action("snmp", "stop", service_error,
+                       sizeof(service_error)) != 0) {
+      apply_result_fail(result, "SNMP: %s",
+                        service_error[0] ? service_error : "service stop failed");
+      return -EIO;
+    }
+    const char *path = getenv("CONFIGD_SNMPD_ENV");
+    if (!path || !*path) path = "/run/postmerkos/snmpd.env";
+    if (unlink(path) != 0 && errno != ENOENT) {
+      apply_result_fail(result, "SNMP: unable to remove stale environment: %s",
+                        strerror(errno));
+      return -EIO;
+    }
+  }
+  return 0;
 }
 
 void telemetry_tick(void) {
-  struct portstats_snapshot snap;
-  if (portstats_read(&snap) != 0) {
-    /* read/decode failed: keep last good snapshot for SNMP, mark invalid for /metrics */
-    g_snap.valid = 0;
-    metrics_server_service(&g_snap, &g_health);
-    return;
-  }
-  enrich_port_status(&snap);
-  collect_health(&g_health);
-  /* aggregate PoE = sum of per-port draw */
-  if (g_health.poe_available) {
-    double total = 0;
-    for (int i = 0; i < PORTSTATS_MAX_PORTS; i++)
-      if (snap.ports[i].present && snap.ports[i].poe_present)
-        total += snap.ports[i].poe_power_watts;
-    g_health.poe_power_watts = total;
-  }
-  detect_discontinuity(&snap);
-  snap.ttl_seconds = telemetry_interval_seconds() * 3;
+  (void)refresh_snapshot(false, NULL, 0);
+}
 
-  g_prev = snap;
-  g_have_prev = 1;
-  g_snap = snap;
+void telemetry_service_io(void) {
+  metrics_server_service(&g_snap, &g_health);
+}
 
-  portstats_write_file(&g_snap);                 /* SNMP feed (Plan B consumes) */
-  metrics_server_service(&g_snap, &g_health);    /* serve any pending scrape */
+void telemetry_shutdown(void) {
+  metrics_server_stop();
 }

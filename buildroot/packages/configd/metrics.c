@@ -139,10 +139,28 @@ int metrics_render(char *buf, size_t n,
 }
 
 #define METRICS_BODY_MAX (256 * 1024)
-#define METRICS_REQLINE_MAX 2048
+#define METRICS_REQUEST_MAX 4096
+#define METRICS_CLIENT_MAX 8
+#define METRICS_ACCEPT_BUDGET 4
+#define METRICS_WRITE_BUDGET (16 * 1024)
 #define METRICS_CONN_TIMEOUT_MS 2000
 
+struct metrics_client {
+  int fd;
+  char request[METRICS_REQUEST_MAX];
+  size_t request_len;
+  char *response;
+  size_t response_len;
+  size_t response_off;
+  long deadline_ms;
+};
+
 static int g_listen_fd = -1;
+static int g_port;
+static char g_bind_addr[64];
+static char g_bind_device[64];
+static struct metrics_client g_clients[METRICS_CLIENT_MAX];
+static int g_initialized;
 
 static long now_monotonic_ms(void) {
   struct timespec ts;
@@ -150,119 +168,193 @@ static long now_monotonic_ms(void) {
   return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+static void initialize_clients(void) {
+  if (g_initialized) return;
+  for (size_t i = 0; i < METRICS_CLIENT_MAX; i++) g_clients[i].fd = -1;
+  g_initialized = 1;
+}
+
+static void client_reset(struct metrics_client *client) {
+  if (client->fd >= 0) close(client->fd);
+  free(client->response);
+  memset(client, 0, sizeof(*client));
+  client->fd = -1;
+}
+
 int metrics_server_fd(void) { return g_listen_fd; }
 int metrics_server_running(void) { return g_listen_fd >= 0; }
 
-int metrics_server_start(const char *bind_addr, int port) {
-  if (g_listen_fd >= 0) metrics_server_stop();
+bool metrics_server_matches(const char *bind_addr, const char *bind_device, int port) {
+  return g_listen_fd >= 0 && g_port == port &&
+         !strcmp(g_bind_addr, bind_addr ? bind_addr : "") &&
+         !strcmp(g_bind_device, bind_device ? bind_device : "");
+}
 
+static int create_listener(const char *bind_addr, const char *bind_device,
+                           int port, char *error, size_t error_size) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) return -1;
+  if (fd < 0) goto failed;
   int one = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons((uint16_t)port);
-  if (!bind_addr || !*bind_addr) addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  else if (inet_pton(AF_INET, bind_addr, &addr.sin_addr) != 1) { close(fd); return -1; }
-
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) { close(fd); return -1; }
-  if (listen(fd, 8) != 0) { close(fd); return -1; }
-
+  (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#ifdef SO_BINDTODEVICE
+  if (bind_device && *bind_device &&
+      setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, bind_device,
+                 strlen(bind_device) + 1) != 0) goto close_failed;
+#else
+  if (bind_device && *bind_device) { errno = ENOTSUP; goto close_failed; }
+#endif
+  struct sockaddr_in address;
+  memset(&address, 0, sizeof(address));
+  address.sin_family = AF_INET;
+  address.sin_port = htons((uint16_t)port);
+  if (!bind_addr || !*bind_addr) address.sin_addr.s_addr = htonl(INADDR_ANY);
+  else if (inet_pton(AF_INET, bind_addr, &address.sin_addr) != 1) { errno = EINVAL; goto close_failed; }
+  if (bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0 ||
+      listen(fd, METRICS_CLIENT_MAX) != 0) goto close_failed;
   int flags = fcntl(fd, F_GETFL, 0);
-  if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) { close(fd); return -1; }
-
-  g_listen_fd = fd;
-  return 0;
+  if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) goto close_failed;
+  return fd;
+close_failed: {
+    int saved = errno; close(fd); errno = saved;
+  }
+failed:
+  if (error && error_size) snprintf(error, error_size, "%s", strerror(errno));
+  return -errno;
 }
 
 void metrics_server_stop(void) {
-  if (g_listen_fd >= 0) { close(g_listen_fd); g_listen_fd = -1; }
+  initialize_clients();
+  if (g_listen_fd >= 0) close(g_listen_fd);
+  g_listen_fd = -1; g_port = 0; g_bind_addr[0] = '\0'; g_bind_device[0] = '\0';
+  for (size_t i = 0; i < METRICS_CLIENT_MAX; i++) client_reset(&g_clients[i]);
 }
 
-/* Read the request line (up to CRLF) with a bounded timeout. Returns 0 on
- * success with line NUL-terminated, -1 on error/timeout. */
-static int read_request_line(int cfd, char *line, size_t cap) {
-  size_t used = 0;
-  long deadline_ms = now_monotonic_ms() + METRICS_CONN_TIMEOUT_MS;
-  while (used + 1 < cap) {
-    long remaining = deadline_ms - now_monotonic_ms();
-    if (remaining <= 0) return -1;
-    struct pollfd pfd = { cfd, POLLIN, 0 };
-    int pr = poll(&pfd, 1, (int)remaining);
-    if (pr <= 0) return -1;
-    char c;
-    ssize_t r = recv(cfd, &c, 1, 0);
-    if (r <= 0) return -1;
-    if (c == '\n') { line[used] = '\0'; return 0; }
-    if (c != '\r') line[used++] = c;
+int metrics_server_start_bound(const char *bind_addr, const char *bind_device,
+                               int port, char *error, size_t error_size) {
+  initialize_clients();
+  if (metrics_server_matches(bind_addr, bind_device, port)) return 0;
+  char old_addr[64], old_device[64]; int old_port = g_port;
+  bool had_listener = g_listen_fd >= 0;
+  snprintf(old_addr, sizeof(old_addr), "%s", g_bind_addr);
+  snprintf(old_device, sizeof(old_device), "%s", g_bind_device);
+  if (had_listener && old_port == port) metrics_server_stop();
+  int candidate = create_listener(bind_addr, bind_device, port, error, error_size);
+  if (candidate < 0) {
+    if (had_listener && old_port == port) {
+      int restored = create_listener(old_addr, old_device, old_port, NULL, 0);
+      if (restored >= 0) {
+        g_listen_fd = restored; g_port = old_port;
+        snprintf(g_bind_addr, sizeof(g_bind_addr), "%s", old_addr);
+        snprintf(g_bind_device, sizeof(g_bind_device), "%s", old_device);
+      }
+    }
+    return candidate;
   }
-  return -1;
+  if (g_listen_fd >= 0) metrics_server_stop();
+  g_listen_fd = candidate; g_port = port;
+  snprintf(g_bind_addr, sizeof(g_bind_addr), "%s", bind_addr ? bind_addr : "");
+  snprintf(g_bind_device, sizeof(g_bind_device), "%s", bind_device ? bind_device : "");
+  return 0;
 }
 
-static void write_all(int cfd, const char *data, size_t len) {
-  size_t off = 0;
-  while (off < len) {
-    ssize_t w = send(cfd, data + off, len - off, MSG_NOSIGNAL);
-    if (w <= 0) { if (errno == EINTR) continue; break; }
-    off += (size_t)w;
+int metrics_server_start(const char *bind_addr, int port) {
+  return metrics_server_start_bound(bind_addr, NULL, port, NULL, 0);
+}
+
+static struct metrics_client *free_slot(void) {
+  for (size_t i = 0; i < METRICS_CLIENT_MAX; i++) if (g_clients[i].fd < 0) return &g_clients[i];
+  return NULL;
+}
+
+static void accept_clients(void) {
+  for (int count = 0; g_listen_fd >= 0 && count < METRICS_ACCEPT_BUDGET; count++) {
+    int fd = accept(g_listen_fd, NULL, NULL);
+    if (fd < 0) { if (errno == EINTR) { count--; continue; } break; }
+    struct metrics_client *client = free_slot();
+    if (!client) { close(fd); continue; }
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) { close(fd); continue; }
+    client->fd = fd; client->deadline_ms = now_monotonic_ms() + METRICS_CONN_TIMEOUT_MS;
   }
 }
 
-/* Close gracefully so the kernel sends FIN, not RST. We only read the request
- * line, so the client's remaining request headers sit unread in the RX queue;
- * close() with unread data would emit a RST and truncate the response the
- * client is still reading. Half-close our write side, then drain the input
- * with a bounded linger before closing. */
-static void lingering_close(int cfd) {
-  shutdown(cfd, SHUT_WR);
-  long deadline = now_monotonic_ms() + 1000;  /* cap linger at ~1s */
-  for (;;) {
-    long remaining = deadline - now_monotonic_ms();
-    if (remaining <= 0) break;
-    struct pollfd pfd = { cfd, POLLIN, 0 };
-    if (poll(&pfd, 1, (int)remaining) <= 0) break;
-    char buf[512];
-    if (recv(cfd, buf, sizeof(buf), 0) <= 0) break;  /* 0 = client closed */
+static bool headers_complete(const char *request) {
+  return strstr(request, "\r\n\r\n") || strstr(request, "\n\n");
+}
+
+static int prepare_response(struct metrics_client *client,
+                            const struct portstats_snapshot *snap,
+                            const struct device_health *health) {
+  const char *status = "404 Not Found", *content_type = "text/plain";
+  char *body = NULL; int body_len = 0;
+  if (!strncmp(client->request, "GET /metrics ", 13) || !strcmp(client->request, "GET /metrics")) {
+    body = malloc(METRICS_BODY_MAX); if (!body) return -ENOMEM;
+    body_len = metrics_render(body, METRICS_BODY_MAX, snap, health);
+    if (body_len < 0) {
+      free(body);
+      body = strdup("metrics response exceeded the configured limit\n");
+      if (!body) return -ENOMEM;
+      body_len = (int)strlen(body);
+      status = "500 Internal Server Error";
+    } else status = "200 OK";
+    content_type = "text/plain; version=0.0.4";
+  } else {
+    body = strdup("not found\n");
+    if (!body) return -ENOMEM;
+    body_len = (int)strlen(body);
   }
-  close(cfd);
+  char header[320];
+  int header_len = snprintf(header, sizeof(header),
+    "HTTP/1.0 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+    status, content_type, body_len);
+  if (header_len < 0 || (size_t)header_len >= sizeof(header)) { free(body); return -EOVERFLOW; }
+  client->response = malloc((size_t)header_len + (size_t)body_len);
+  if (!client->response) { free(body); return -ENOMEM; }
+  memcpy(client->response, header, (size_t)header_len);
+  memcpy(client->response + header_len, body, (size_t)body_len);
+  client->response_len = (size_t)header_len + (size_t)body_len;
+  free(body); return 0;
+}
+
+static void service_client(struct metrics_client *client,
+                           const struct portstats_snapshot *snap,
+                           const struct device_health *health) {
+  if (client->fd < 0) return;
+  if (now_monotonic_ms() >= client->deadline_ms) { client_reset(client); return; }
+  if (!client->response) {
+    for (;;) {
+      if (client->request_len + 1 >= sizeof(client->request)) { client_reset(client); return; }
+      ssize_t got = recv(client->fd, client->request + client->request_len,
+                         sizeof(client->request) - client->request_len - 1, 0);
+      if (got > 0) {
+        client->request_len += (size_t)got; client->request[client->request_len] = '\0';
+        if (headers_complete(client->request)) break;
+        continue;
+      }
+      if (got == 0) { client_reset(client); return; }
+      if (errno == EINTR) continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+      client_reset(client); return;
+    }
+    char *line_end = strpbrk(client->request, "\r\n"); if (line_end) *line_end = '\0';
+    if (prepare_response(client, snap, health) != 0) { client_reset(client); return; }
+  }
+  size_t remaining = client->response_len - client->response_off;
+  size_t budget = remaining > METRICS_WRITE_BUDGET ? METRICS_WRITE_BUDGET : remaining;
+  ssize_t wrote = send(client->fd, client->response + client->response_off, budget, MSG_NOSIGNAL);
+  if (wrote > 0) {
+    client->response_off += (size_t)wrote;
+    if (client->response_off == client->response_len) { (void)shutdown(client->fd, SHUT_WR); client_reset(client); }
+    return;
+  }
+  if (wrote < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) return;
+  client_reset(client);
 }
 
 void metrics_server_service(const struct portstats_snapshot *snap,
                             const struct device_health *health) {
+  initialize_clients();
   if (g_listen_fd < 0) return;
-  /* Drain pending connections (one render reused across all this cycle). */
-  for (;;) {
-    int cfd = accept(g_listen_fd, NULL, NULL);
-    if (cfd < 0) break;  /* EAGAIN/EWOULDBLOCK: no more pending */
-
-    char line[METRICS_REQLINE_MAX];
-    if (read_request_line(cfd, line, sizeof(line)) == 0 &&
-        strncmp(line, "GET /metrics", 12) == 0 &&
-        (line[12] == ' ' || line[12] == '\0')) {
-      /* Safe because this server runs single-threaded in the main loop (no reentrancy). */
-      static char body[METRICS_BODY_MAX];
-      int blen = metrics_render(body, sizeof(body), snap, health);
-      if (blen >= 0) {
-        char head[256];
-        int hn = snprintf(head, sizeof(head),
-            "HTTP/1.0 200 OK\r\n"
-            "Content-Type: text/plain; version=0.0.4\r\n"
-            "Content-Length: %d\r\n"
-            "Connection: close\r\n\r\n", blen);
-        write_all(cfd, head, (size_t)hn);
-        write_all(cfd, body, (size_t)blen);
-      } else {
-        const char *e = "HTTP/1.0 500 Internal Server Error\r\n"
-                        "Connection: close\r\n\r\n";
-        write_all(cfd, e, strlen(e));
-      }
-    } else {
-      const char *nf = "HTTP/1.0 404 Not Found\r\nConnection: close\r\n\r\n";
-      write_all(cfd, nf, strlen(nf));
-    }
-    lingering_close(cfd);
-  }
+  accept_clients();
+  for (size_t i = 0; i < METRICS_CLIENT_MAX; i++) service_client(&g_clients[i], snap, health);
 }
