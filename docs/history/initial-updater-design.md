@@ -314,7 +314,7 @@ The shell scripts pass POSIX-shell syntax checks, and the RAM flasher builds
 cleanly as a static executable with `-Wall -Wextra -Werror`. The publisher and
 strict sidecar parser were also exercised against generated test artifacts.
 The updater has **has been successfully tested on the physical MS42P NOR device
-through TFTP + hardware serial**, so the serial-attached validation sequence 
+through TFTP + hardware serial**, so the serial-attached validation sequence
 below only remains as a reference for validating future updates.
 
 ## Hardware validation sequence

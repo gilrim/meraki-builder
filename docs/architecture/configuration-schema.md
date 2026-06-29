@@ -1,12 +1,65 @@
 # Configuration and persistent state
 
-Persistent policy files are initialized from compact read-only defaults. Desired switch configuration is stored at `/etc/switch.json` on the JFFS2-backed overlay; the remaining policy files are under `/config/postmerkos`:
+Persistent state is initialized from compact read-only defaults and stored on the JFFS2-backed writable layer.
 
-- `/etc/switch.json` — ports, VLAN, STP, LACP, multicast, and management network
-- `services.json` — SSH, web, chrony, and optional-service policy
-- `security.json` — serial authentication, reset input, and related security policy
-- `time.json` — UTC offset, recurring DST rules, and NTP servers
-- `firmware-repositories.json` — repository/channel definitions
-- `update-history/` — bounded update records and logs
+## Main switch configuration
 
-Configd applies typed path updates, validates complete replacements, and emits structured results. Passwords and private keys are not part of configuration backup JSON.
+`/etc/switch.json` is the validated desired-state document for:
+
+- `ports` — administrative state, description, PHY, flow control, EEE, storm control, VLAN, STP, and capability-dependent PoE;
+- `stp`, `lacp`, and `multicast` — global switching policy;
+- `network` — DHCP/fallback or static management IPv4 and MTU;
+- `ssh` — authorized public-key metadata used to render the active key file;
+- `telemetry` — SNMP and Prometheus policy.
+
+Telemetry defaults to disabled:
+
+```json
+{
+  "telemetry": {
+    "snmp": {
+      "enabled": false,
+      "community": "",
+      "location": "",
+      "contact": "",
+      "management_only": true
+    },
+    "prometheus": {
+      "enabled": false,
+      "port": 9100,
+      "management_only": true
+    }
+  }
+}
+```
+
+## Policy files under `/config/postmerkos`
+
+- `services.json` — SSH, web, chrony, and optional-service enable/autostart policy.
+- `security.json` — serial authentication, default-password notice, compatibility acknowledgement, reset-button policy, and LED policy.
+- `time.json` — selected timezone identifier, standard UTC offset, recurring DST rules, NTP enablement, and NTP servers.
+- `firmware-repositories.json` — firmware repository/channel definitions.
+- `update-history/` — bounded update records and logs.
+
+Example time policy:
+
+```json
+{
+  "timezone": "America/Moncton",
+  "standard_offset_minutes": -240,
+  "dst": {
+    "enabled": true,
+    "offset_minutes": -180,
+    "start": {"month": 3, "week": 2, "weekday": 0, "hour": 2, "minute": 0},
+    "end": {"month": 11, "week": 1, "weekday": 0, "hour": 2, "minute": 0}
+  },
+  "ntp_enabled": true,
+  "servers": ["pool.ntp.org"]
+}
+```
+
+The timezone identifier is descriptive/preset metadata; runtime conversion uses the compact offset and recurring-DST fields and does not require full tzdata.
+
+## Persistence and backup boundaries
+
+Configd validates complete documents, applies required runtime operations, writes mode-0600 temporary files, flushes them, and atomically renames them. Startup can restore a valid backup when the primary file is invalid. Passwords, shadow hashes, private SSH keys, session tokens, and transient firmware upload objects are not part of configuration backup JSON.

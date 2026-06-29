@@ -1,3 +1,5 @@
+> **Historical record:** This document describes a completed incident, migration, or release snapshot. It is not the current operating guide. Follow the active documentation linked from [`docs/README.md`](../README.md).
+
 # Jaguar1 recovery JEDEC `ffffff` correction
 
 `GENERAL_CTRL.IF_MASTER_SPI_ENA` was successfully enabled, but the recovery

@@ -102,7 +102,7 @@ and waits forever. Power cycle the switch to cancel without writing flash.
 
 - `--skip-baud-negotiation` keeps PMOSREC at 115200 baud while retaining v3
   framing and integrity checks.
-- `--diagnostic-baud-scan` enables the legacy broad divisor scan and midpoint
+- `--diagnostic-baud-scan` enables the broad diagnostic divisor scan and midpoint
   refinement for engineering diagnostics; it is intentionally not the default.
 - `--diagnostic-window-scan` tests paced windows 1, 2, 4, 8 and 16 in ascending
   order. The host drains its TTY output queue and inserts a 3 ms wire-idle guard
@@ -124,9 +124,7 @@ start of its binary payload in the same kernel buffer, so raw-read echoing is no
 safe: random payload bytes can include XOFF or terminal escape sequences that
 make a healthy transfer appear stalled.
 
-When using an older client that has already stopped rendering while its log keeps
-growing, press `Ctrl+Q` once to release terminal flow control without aborting the
-flash. The corrected client does not require this workaround.
+The client suppresses binary transport bytes, including XOFF and terminal escape values, so protocol traffic cannot freeze or corrupt the operator terminal while flashing continues.
 
 ## Hardware preflight
 

@@ -92,7 +92,7 @@ cc -std=gnu11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE 
   "$PKG/json_util.c" "$PKG/config_file.c" "$PKG/config_apply.c" \
   "$PKG/hardware.c" "$PKG/network.c" "$PKG/result.c" "$PKG/validation.c" \
   "$PKG/console_cli.c" "$PKG/release.c" "$PKG/roles.c" "$PKG/local_socket.c" \
-  "$PKG/socket_io.c" "$PKG/service_ops.c" "$PKG/time_ops.c" "$PKG/port_clone.c" \
+  "$PKG/socket_io.c" "$PKG/service_ops.c" "$PKG/time_ops.c" "$PKG/system_info.c" "$PKG/port_clone.c" \
   "$PKG/compatibility.c" "$PKG/auth.c" "$PKG/ssh_keys.c" "$PKG/session.c" "$PKG/portstats.c" "$PKG/metrics.c" "$PKG/telemetry.c" \
   "$PKG/websocket_disabled.c" \
   "$PKG/../pd690xx/libpd690xx.c" "$PKG/../postmerkos/libpostmerkos.c" \
@@ -110,6 +110,19 @@ grep -q '"message":"Network bootstrap complete"' "$BOOT_TMP/result.json"
 [ ! -s "$BOOT_TMP/err" ]
 rm -rf "$BOOT_TMP"
 printf '%s\n' 'configd condensed bootstrap output test passed'
+
+
+SYSTEM_INFO_OUT=${TMPDIR:-/tmp}/configd-test-system-info
+cc -std=gnu11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+  -I"$PKG" $(pkg-config --cflags json-c) -o "$SYSTEM_INFO_OUT" \
+  "$HERE/test_system_info.c" "$PKG/system_info.c" $(pkg-config --libs json-c)
+"$SYSTEM_INFO_OUT"
+
+TIME_OUT=${TMPDIR:-/tmp}/configd-test-time-ops
+cc -std=gnu11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+  -I"$PKG" $(pkg-config --cflags json-c) -o "$TIME_OUT" \
+  "$HERE/test_time_ops.c" "$PKG/time_ops.c" "$PKG/service_ops.c" $(pkg-config --libs json-c)
+"$TIME_OUT"
 
 OUT=${TMPDIR:-/tmp}/configd-test-portstats
 cc -std=gnu11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \

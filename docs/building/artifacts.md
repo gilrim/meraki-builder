@@ -64,6 +64,9 @@ the complete manifest can therefore never make the firmware image build fail.
 
 ## Validation targets
 
+See the complete [validation and release-gate reference](validation.md).
+
+
 ```sh
 make test-image
 make test-fwupdate

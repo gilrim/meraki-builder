@@ -1,3 +1,5 @@
+> **Historical record:** This document describes a completed incident, migration, or release snapshot. It is not the current operating guide. Follow the active documentation linked from [`docs/README.md`](../README.md).
+
 # Authoritative upstream-main builder correction
 
 The failure was caused by meraki-builder resolving `LOADER_REF=latest` to the

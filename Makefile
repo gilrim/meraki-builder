@@ -132,7 +132,7 @@ test-hardware:
 	@./buildroot/packages/postmerkos-hardware/tests/test-host.sh
 
 test-docs:
-	@./scripts/tests/test-doc-links.py
+	@python3 ./scripts/check-docs.py .
 
 test-ui-contract:
 	@./scripts/tests/test-ui-configd-contract.py "$${UI_DIR:-../postmerkos-ui}"

@@ -1,23 +1,35 @@
 # Configd
 
-Configd is the always-running privileged management core. It owns persistent configuration, exact-model capability discovery, Click/PoE application, management-network changes, accounts and roles, service policy, firmware staging, the local Unix socket, and the optional WebSocket API.
+Configd is the always-running privileged management core. It owns persistent desired switch state, exact-model capability discovery, Click and PoE application, management networking, telemetry, accounts and roles, SSH keys, service and time policy, system inventory, firmware staging, the local Unix socket, and the optional WebSocket API.
 
 ## Transaction contract
 
-Configuration changes are validated and staged before persistence. Required Click, PoE, network, or service operations must succeed before the new desired state is committed. On failure, configd attempts runtime rollback, preserves the previous primary configuration, and refreshes the known-good backup only from a validated committed configuration. Results distinguish applied, warning, pending, unsupported, failed, and runtime-degraded operations.
+A configuration delta is deep-merged into a copy of the current configuration, validated as a complete document, and applied to required runtime subsystems before persistence. Click, PoE, network, and telemetry failures reject the transaction. Configd attempts to restore the previous runtime state and leaves the previous primary/backup files authoritative. Only a validated, successfully applied state is saved atomically and promoted to the known-good backup.
 
-External edits are treated the same way: configd validates and applies them before accepting them. A rejected edit restores the previous runtime state, active file, and known-good backup rather than silently leaving desired and observed state divergent.
+Complete replacements and external edits use the same validation/apply/rollback contract. Results distinguish applied operations, warnings, pending work, unsupported requests, hard failures, and runtime degradation.
 
-Service status reports desired policy, observed process state, and whether they are synchronized. Known models use immutable `/run/postmerkos/boardinfo`; stale port-count files cannot override an exact profile.
+## Interfaces
 
-The console communicates through `/run/postmerkos/configd.sock`. One-shot CLI commands remain available for recovery and automation. Web builds add libwebsockets and uhttpd without changing the configuration core.
+- `/run/postmerkos/configd.sock` — bounded newline-framed JSON for the console and `postmerkosctl`, authenticated with `SO_PEERCRED`.
+- TCP 4001 / `configd-ws` — optional authenticated WebSocket transport in web builds.
+- One-shot CLI operations — recovery and automation paths that call the same core handlers where applicable.
 
-See the package [README](../../buildroot/packages/configd/README.md) and [protocol](../../buildroot/packages/configd/docs/PROTOCOL.md).
+WebSocket startup performs transport negotiation, protocol `hello`, account authentication, and role/capability resolution. Privileged requests revalidate token expiry, account existence, and current role. Account, password, and role changes revoke affected sessions.
 
-## Runtime health and supervision
+See the package [README](../../buildroot/packages/configd/README.md), [protocol reference](../../buildroot/packages/configd/docs/PROTOCOL.md), and [security architecture](security-and-sessions.md).
 
-`S15configd` starts configd through a bounded supervisor. Readiness requires the local Unix socket plus an actual WebSocket upgrade, `configd-ws` subprotocol selection, and protocol-2 `hello` response. Unexpected exits are recorded in `/run/postmerkos/configd.exit`, detailed daemon output remains in `/run/postmerkos/configd.log`, and WebSocket connection events remain in `/run/postmerkos/websocket.log`. The supervisor retries only a bounded number of times to avoid a silent or unbounded crash loop.
+## Event-loop safety
 
-Use `postmerkosctl management-health` to test the process, local socket/session path, WebSocket upgrade, subprotocol, and `hello` exchange.
+Long-running firmware candidate validation runs as an asynchronous child job. Prometheus clients are nonblocking, bounded, and incrementally serviced. Authentication throttling does not sleep in the event loop. These boundaries keep local management, WebSocket requests, network polling, and status broadcasts responsive.
 
-Boot-time network initialization uses `configd --network-bootstrap --boot-output`. Serial receives concise `postmerkOS network: PASS|WARN|FAIL ...` records, while the complete JSON result is retained at `/run/postmerkos/network-bootstrap.json`.
+## Status collection
+
+Status is observed, best-effort state. It includes ports, management networking, compatibility, services, time, telemetry health, temperatures, hardware controls, and the read-only [System Information](../user-guide/system-information.md) inventory. Missing sensors, procfs fields, filesystems, or Click handlers produce omissions/errors without suppressing unrelated status.
+
+Known models use immutable `/run/postmerkos/boardinfo`; editable files and stale port-count data cannot override an exact profile.
+
+## Runtime supervision
+
+`S15configd` starts configd through a bounded supervisor. Readiness requires the Unix socket, a valid root local-session request, an actual WebSocket upgrade in web images, `configd-ws` selection, and a protocol-2 `hello` response. Exit details are recorded in `/run/postmerkos/configd.exit`, daemon output in `/run/postmerkos/configd.log`, and WebSocket events in `/run/postmerkos/websocket.log`.
+
+Use `postmerkosctl management-health` for the complete readiness probe. Boot network initialization emits concise serial PASS/WARN/FAIL lines and retains the full result at `/run/postmerkos/network-bootstrap.json`.

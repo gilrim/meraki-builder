@@ -10,6 +10,16 @@ Per-port configuration includes administrative state, name, PHY speed, flow cont
 
 Required Click/PoE programming occurs before configuration is persisted. A missing mandatory handler rejects the transaction and triggers rollback rather than saving an unapplied desired state.
 
+## MS42P uplink status interpretation
+
+MS42P ports 49 through 52 are the four SFP/SFP+ cages. Runtime testing confirms insertion/removal detection on every cage and confirms their front-panel-to-Click numbering.
+
+Use the reported `up` field as the link decision. A 10 Gb/s cage can remain `down` while retaining `10000/full` as its configured or most recently selected mode. A nonzero speed therefore does not by itself mean that optical link is established.
+
+The firmware has observed 1 Gb/s and 10 Gb/s Click link states on these cages, but that evidence does not certify a particular transceiver model. Exact module identity, peer, RxLOS/TxFault/TxDisable, PCS lock, and front-panel SFP LED behavior were not captured together. Treat an insertion-time EEPROM I2C error as a diagnostic event; one hardware run recovered on its own shortly afterward, but recurring errors require module, cage, and peer-specific testing.
+
+Detailed test evidence and remaining research boundaries are kept in [MS42P port-map and SFP runtime evidence](../research/ms42p-port-map-and-sfp-evidence.md).
+
 ## PoE
 
 Power and standard are independent:

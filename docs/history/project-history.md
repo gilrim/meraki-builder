@@ -14,3 +14,8 @@ SoC-specific payloads. Host and target validate exact model compatibility,
 loader identity, image layout, payload records, flash geometry, and JEDEC IDs
 before a nonce-gated complete-NOR write. Verify and dry-run are distinct
 non-destructive operations.
+
+
+## Current management-platform consolidation (June 2026)
+
+The management plane was consolidated around transactional configd operations, live session revocation, strict SSH-key parsing, asynchronous firmware validation, bounded nonblocking telemetry, exact-model reset/LED policy, expanded system inventory, common timezone presets, manual local clock control, responsive twelve-port front-panel banks, and mobile-specific web interaction. Current operating behavior is documented in the active user and architecture guides; incident-specific details remain in this history section.

@@ -1,4 +1,5 @@
 {
+  "timezone": "Etc/UTC",
   "standard_offset_minutes": 0,
   "dst": {
     "enabled": false,

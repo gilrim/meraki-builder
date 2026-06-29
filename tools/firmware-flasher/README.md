@@ -7,7 +7,7 @@ Linux updater or meraki-redboot pre-kernel UART recovery.
 
 Manifest-aware mode requires the image, image SHA-256, JSON release manifest,
 and manifest SHA-256. `--checksum-only` uses the current Linux updater with an
-image and SHA-256 sidecar. `--legacy` targets older direct `fw_update_tftp`
+image and SHA-256 sidecar. `--legacy` targets direct `fw_update_tftp` compatibility
 installations and cannot perform a complete-NOR update.
 
 ## Linux updater mode
@@ -63,17 +63,9 @@ NOR behavior without transferring a firmware image. Detailed behavior is in
 ./tools/firmware-flasher/firmware-flasher.sh --self-test
 ```
 
-## Silent exit after selecting flash scope
+## Control-flow diagnostics
 
-A previous revision could return directly to the shell after selecting either
-`system` or `full`. The flasher runs with `set -e`, and several optional helper
-functions used a bare `return` after a failed guard expression. In modern mode,
-`prepare_version_hint` consequently returned status 1 even though skipping the
-checksum-only version prompt was expected.
-
-All optional no-op guards now return status 0 explicitly. An ERR trap also prints
-the failing command, status, and source line for any future unexpected `set -e`
-termination. The regression test is:
+Optional helper guards return success when their optional work is not required, so selecting `system` or `full` scope continues into validation rather than triggering shell `set -e`. An ERR trap prints the failing command, status, and source line for unexpected termination. Run:
 
 ```sh
 ./tests/test_flasher_control_flow.sh

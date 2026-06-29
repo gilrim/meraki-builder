@@ -20,6 +20,20 @@ HISTORICAL_CHANGE_NARRATIVE = re.compile(
 
 def check(root: pathlib.Path) -> list[str]:
     errors: list[str] = []
+    root_markdown = {p.name for p in root.glob("*.md")}
+    allowed_root = {"README.md", "DOCUMENTATION-RULES.md"}
+    unexpected = sorted(root_markdown - allowed_root)
+    for name in unexpected:
+        errors.append(f"{name}: root Markdown is reserved for onboarding and documentation rules; move it under docs/")
+    readme = root / "README.md"
+    if readme.exists():
+        root_text = readme.read_text(encoding="utf-8", errors="replace")
+        for required in ("docs/README.md", "DOCUMENTATION-RULES.md"):
+            if required not in root_text:
+                errors.append(f"README.md: missing required onboarding link to {required}")
+        banned_headings = re.compile(r"^##\s+(?:Architecture|Protocol|Firmware upload|Chassis indication|Root cause|Validation results|Release notes)\b", re.MULTILINE | re.IGNORECASE)
+        for match in banned_headings.finditer(root_text):
+            errors.append(f"README.md: detailed section belongs in docs/: {match.group(0)}")
     ignored = {"node_modules", "build", ".work", "artifacts", ".git"}
     for doc in sorted(root.rglob("*.md")):
         if set(doc.relative_to(root).parts) & ignored:
@@ -41,6 +55,8 @@ def check(root: pathlib.Path) -> list[str]:
             if not resolved.exists():
                 errors.append(f"{doc.relative_to(root)}: broken link: {raw}")
         rel_parts = set(doc.relative_to(root).parts)
+        if doc.name == "DOCUMENTATION-RULES.md":
+            continue
         if not (rel_parts & HISTORY_PARTS):
             for match in HISTORICAL_CHANGE_NARRATIVE.finditer(text):
                 line = text.count("\n", 0, match.start()) + 1

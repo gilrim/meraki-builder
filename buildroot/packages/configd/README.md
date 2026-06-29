@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Configd is the always-running privileged management core for postmerkOS. It owns desired switch state, validates changes, applies Click and PoE configuration, observes management networking, enforces roles, coordinates firmware operations, and serves the console and optional web UI.
+Configd is the always-running privileged management core for postmerkOS. It owns desired switch state, validates changes, applies Click and PoE configuration, observes management networking, enforces roles, coordinates telemetry and asynchronous firmware operations, collects read-only system inventory, and serves the console and optional web UI.
 
 ## Runtime responsibilities
 
@@ -19,7 +19,7 @@ Desired configuration is persistent state; status is observed state and may omit
 
 ## Interfaces
 
-The local socket is used by `postmerkosctl` and the role-aware console. Peer identity is resolved once from `SO_PEERCRED`; UID 0 is always administrator, and passwd/group data is copied into owned buffers rather than retained from libc static lookup storage. Web builds additionally compile the WebSocket, authentication, terminal, and firmware-upload frontend. Both paths use the same operation handlers and capability checks.
+The local socket is used by `postmerkosctl` and the role-aware console. Peer identity is resolved once from `SO_PEERCRED`; UID 0 is always administrator, and passwd/group data is copied into owned buffers rather than retained from libc static lookup storage. Web builds additionally compile the WebSocket, authentication, terminal, and firmware-upload frontend. Both paths use the same operation handlers and capability checks. Privileged WebSocket requests revalidate the token, account, expiry, and current role so account deletion, password changes, and role changes take effect on live connections.
 
 Runtime feature discovery is available with:
 
@@ -83,7 +83,7 @@ make -C buildroot/packages/configd ENABLE_WEBSOCKET=0
 make -C buildroot/packages/configd test-host
 ```
 
-The host suite includes repeated root/admin/operator/viewer lookups to catch account-storage corruption and role instability.
+The host suite covers repeated role lookups, token/session revocation, strict SSH-key decoding and transactional rendering, system inventory, local-time conversion, telemetry startup/rollback, nonblocking metrics clients, and management-plane contracts.
 
 Module responsibilities are documented under [docs/modules](docs/modules/README.md). The Click graph is documented in [the repository architecture guide](../../../docs/architecture/click-system.md).
 

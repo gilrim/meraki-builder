@@ -290,10 +290,15 @@ static void handle_client(int fd) {
     if(!role_has_capability(role,"services.manage")) send_error(fd,403,"time configuration requires administrator access");
     else {char error[256]={0};if(time_policy_save(data,error,sizeof(error))!=0)send_error(fd,400,error[0]?error:"time policy rejected");else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Time policy saved"));send_json(fd,"ack",ack);json_object_put(ack);}}
   } else if (!strcmp(type, "time.set_clock")) {
-    struct json_object *data=request_data(request), *epoch=NULL;
+    struct json_object *data=request_data(request), *epoch=NULL, *local=NULL;
     if(!role_has_capability(role,"services.manage")) send_error(fd,403,"setting the clock requires administrator access");
-    else if(!data || !json_object_object_get_ex(data,"epoch",&epoch) || !json_object_is_type(epoch,json_type_int)) send_error(fd,400,"epoch is required");
-    else {char error[256]={0};if(time_set_epoch((time_t)json_object_get_int64(epoch),error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("System clock updated"));send_json(fd,"ack",ack);json_object_put(ack);}}
+    else if(!data) send_error(fd,400,"local or epoch is required");
+    else {char error[256]={0};int rc=-EINVAL;
+      if(json_object_object_get_ex(data,"local",&local) && json_object_is_type(local,json_type_string)) rc=time_set_local(json_object_get_string(local),error,sizeof(error));
+      else if(json_object_object_get_ex(data,"epoch",&epoch) && json_object_is_type(epoch,json_type_int)) rc=time_set_epoch((time_t)json_object_get_int64(epoch),error,sizeof(error));
+      else {send_error(fd,400,"local or epoch is required");goto time_clock_done;}
+      if(rc!=0)send_error(fd,400,error[0]?error:"system clock update failed");else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("System clock updated"));send_json(fd,"ack",ack);json_object_put(ack);}
+      time_clock_done: ;}
   } else if (!strcmp(type, "time.sync")) {
     if(!role_has_capability(role,"services.manage")) send_error(fd,403,"time synchronization requires administrator access");
     else {char error[256]={0};if(time_force_sync(error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Time synchronization requested"));send_json(fd,"ack",ack);json_object_put(ack);}}

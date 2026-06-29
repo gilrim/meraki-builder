@@ -1,68 +1,43 @@
 # Firmware updates
 
-Fwupdate verifies checksum, release metadata, exact-model compatibility, flash
-geometry, version direction, overlay policy, and requested flash scope before
-any destructive work.
+Fwupdate verifies checksum, release metadata, exact-model compatibility, flash geometry, version direction, overlay policy, requested flash scope, and required acknowledgements before destructive work.
 
 ## Compatibility states
 
-- `validated`: normal update path for this release artifact.
-- `confirmed`: accepted normal path based on recorded target confirmation.
-- `untested`: requires the explicit `ACCEPT-UNTESTED` acknowledgement.
-- `known-incompatible`: blocked and cannot be acknowledged.
-- missing or unsupported metadata: blocked by the normal path.
+- `validated` — normal path for an exact model validated with the release artifact.
+- `confirmed` — normal path based on recorded target confirmation.
+- `untested` — requires the exact `ACCEPT-UNTESTED` acknowledgement.
+- `known-incompatible` — blocked and cannot be overridden.
+- missing or unsupported metadata — blocked by the normal path.
 
-Installing the same or an older version requires force. Force does not override
-a `known-incompatible` model or invalid geometry.
+Installing the same or an older version requires force. Force never overrides known incompatibility, invalid geometry, corrupt metadata, or a missing full-flash acknowledgement.
 
 ## Sources
 
-Local files, TFTP, HTTP/HTTPS, SFTP, browser upload, and Linux UART all feed the
-same updater engine. Browser upload preserves the original artifact filename and
-matching JSON manifest. Stale upload-cache entries are cleaned without deleting
-an object already owned by a running update.
+Local files, TFTP, HTTP/HTTPS, SFTP, browser upload, and Linux UART feed the same updater engine. Browser upload preserves the original filename and matching JSON sidecar manifest. Linux UART uses acknowledged Base64 frames with sequence numbers and CRC-32, then verifies byte count and whole-object SHA-256 before publishing the candidate in RAM.
 
-For a networkless update while Linux is running, select **Firmware Update →
-Receive and install an image over UART**, run:
+## Asynchronous browser validation
 
-```sh
-postmerkos-console firmware uart
-```
+Completing a browser upload starts a server-side validation job and returns status without blocking configd’s event loop. The candidate moves through receiving, validating, ready, or failed states. The UI polls `firmware_upload_status` and can recover the job after reconnect or page reload. Cancellation and session revocation terminate owned staging jobs and clean their temporary objects.
 
-or use:
+Validation alone never writes flash.
 
-```sh
-./tools/firmware-flasher/firmware-flasher.sh --control serial --transport uart
-```
-
-Linux UART uses acknowledged Base64 frames with sequence numbers and CRC-32,
-then verifies exact byte count and whole-object SHA-256. The image and manifest
-are reconstructed in RAM and then passed to `fw_update`, so UART does not weaken
-model, metadata, version, overlay, or full-flash checks.
-
-## Lifecycle
+## Installation lifecycle
 
 ```text
-idle → receiving → verifying → ready → waiting-for-client-acknowledgement
+idle → receiving → validating → ready → waiting-for-client-acknowledgement
      → starting → erasing → writing → verifying-flash
      → persisting-result → rebooting → complete/failed
 ```
 
-Verification never begins a write. Live status and logs are under
-`/run/fwupdate`; bounded history is under
-`/config/postmerkos/update-history`. Interrupted operations are finalized as
-interrupted or indeterminate, not as success.
+Live status and logs are under `/run/fwupdate`; bounded persistent history is under `/config/postmerkos/update-history`. Interrupted operations are finalized as interrupted or indeterminate, never as success.
 
-The rootfs is single-bank. Power loss during erase or program can require
-external recovery even when configuration preservation was selected.
+The root filesystem is single-bank. Power loss during erase or program can require external recovery even when configuration preservation is selected.
 
 ## Chassis indication
 
-On an exact model with hardware-verified dual status handlers, the chassis LED alternates green and orange after the upgrade is accepted and preparation/write progress is active and accelerates toward completion. A failure or rollback uses a repeating triple-orange pulse. Successful flash verification leaves the LED solid green until reboot. Verified port LEDs are used only when no verified chassis indicator is available. The pattern is advisory; serial output and `/run/fwupdate/status.json` remain authoritative.
+On MS42P, accepted installation alternates green/orange and accelerates with progress, failure/rollback uses triple-orange pulses, and verified success remains solid green until reboot. Checksum, compatibility, and verify-only checks do not acquire the indicator. See [Reset button and chassis status LED](reset-button-and-status-led.md).
 
 ## Pre-kernel recovery
 
-When Linux cannot run but the UART-capable loader still starts, use the
-[pre-kernel recovery procedure](../installation/recovery.md#pre-kernel-uart-recovery).
-Its verify and dry-run modes are non-destructive; flash mode rewrites the entire
-16 MiB device and requires separate host and target confirmations.
+When Linux cannot run but the UART-capable loader starts, use the [pre-kernel recovery procedure](../installation/recovery.md#pre-kernel-uart-recovery). Verify and dry-run operations are non-destructive. Flash mode rewrites the complete 16 MiB NOR and requires independent host and target authorization.

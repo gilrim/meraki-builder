@@ -1,3 +1,5 @@
+> **Historical record:** This document describes a completed incident, migration, or release snapshot. It is not the current operating guide. Follow the active documentation linked from [`docs/README.md`](../README.md).
+
 # WebSocket and management-path fix report
 
 Date: 2026-06-20

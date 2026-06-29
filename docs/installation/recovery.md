@@ -29,9 +29,7 @@ cannot run. Requirements:
   --serial-device /dev/ttyUSB0
 ```
 
-The flasher triggers `PMOSBOOT MENU-PROBE`, uses menu option 1 by default to upload the corrected family recovery stage.
-Menu option 2 is used only after a loader with the byte-zero entry correction is
-installed. Local verification includes the loader source capability, model
+The flasher triggers `PMOSBOOT MENU-PROBE` and uses menu option 1 by default to upload the manifest-matched family recovery stage. Menu option 2 is selected only when the installed loader advertises the required `flat-binary-byte-zero-v1` entry contract and embedded-stage digest. Local verification includes the loader source capability, model
 family, embedded recovery digest, image SHA-256, SPIM alignment and CRC, and
 flash geometry before serial transfer.
 

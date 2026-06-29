@@ -1,3 +1,26 @@
+> **Historical record:** This document describes a completed incident, migration, or release snapshot. It is not the current operating guide. Follow the active documentation linked from [`docs/README.md`](../README.md).
+
+# Responsive management UI, system inventory, and local clock control
+
+## meraki-builder
+
+- Expand configd status with bounded, best-effort system inventory: immutable board identity, serial/product/base-MAC data, kernel and CPU details, uptime/load/process counts, memory usage, mounted filesystem capacity, overlay/config/tmp free space, and MTD partition layout.
+- Keep status collection resilient: an unavailable procfs field, board-data key, filesystem, or flash table does not prevent the rest of the status payload from being returned.
+- Extend the shared time operation so both the local management socket and authenticated WebSocket clients can set either an epoch value or an exact local time in `HH:MM:SS - DD:MM:YYYY` form.
+- Persist a selected common timezone identifier alongside the existing compact UTC-offset and recurring-DST policy without adding a runtime tzdata dependency.
+- Validate calendar boundaries, reject nonexistent spring-forward wall times, require the `services.manage` capability for browser clock changes, and retain a dry-run mode for host tests.
+- Add host, sanitizer, static-analysis, UI/backend contract, and development-mock coverage for the new system and time operations.
+
+## postmerkos-ui
+
+- Expand System Information into bounded identity, software, processor/kernel, runtime, temperature, service-health, memory, storage, MTD, hardware-control, and compatibility sections.
+- Normalize configuration tabs around the Accounts-style card stack and impose task-appropriate maximum widths instead of stretching every dialog to the viewport.
+- Add a grouped common-timezone selector and exact manual local-time control while retaining advanced offset/DST editing.
+- Render the graphical front panel as independently wrapping twelve-port banks, keep all SFP ports together, and switch each bank to a two-column layout on narrow screens.
+- Remove the sticky All Ports header seam and provide mobile-specific dialog, navigation, form, table, terminal, filter, and action layouts.
+
+---
+
 # MS42P verified reset button and chassis upgrade indication
 
 ## meraki-builder

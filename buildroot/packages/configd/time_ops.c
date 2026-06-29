@@ -2,6 +2,7 @@
 #include "time_ops.h"
 #include "service_ops.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <json-c/json.h>
@@ -18,6 +19,10 @@
 
 #define TIME_POLICY_PATH "/config/postmerkos/time.json"
 #define TIME_POLICY_DEFAULT "/usr/share/postmerkos/defaults/time.json"
+
+static const char *env_or_default(const char *name, const char *fallback) {
+  const char *value=getenv(name); return value&&*value?value:fallback;
+}
 
 static void set_error(char *error, size_t size, const char *message) {
   if (error && size) snprintf(error, size, "%s", message ? message : "error");
@@ -94,8 +99,8 @@ static int active_offset(struct json_object *policy, time_t now, bool *dst_activ
 }
 
 struct json_object *time_policy_load(void) {
-  struct json_object *p=json_object_from_file(TIME_POLICY_PATH);
-  if(!p) p=json_object_from_file(TIME_POLICY_DEFAULT);
+  struct json_object *p=json_object_from_file(env_or_default("CONFIGD_TIME_POLICY",TIME_POLICY_PATH));
+  if(!p) p=json_object_from_file(env_or_default("CONFIGD_TIME_POLICY_DEFAULT",TIME_POLICY_DEFAULT));
   return p ? p : json_tokener_parse("{\"standard_offset_minutes\":0,\"dst\":{\"enabled\":false,\"offset_minutes\":60},\"ntp_enabled\":true,\"servers\":[\"pool.ntp.org\"]}");
 }
 
@@ -105,8 +110,17 @@ static int validate_rule(struct json_object *rule) {
   int h=integer(rule,"hour",-1), min=integer(rule,"minute",0);
   return m>=1&&m<=12&&w>=1&&w<=5&&d>=0&&d<=6&&h>=0&&h<=23&&min>=0&&min<=59?0:-EINVAL;
 }
+static int valid_timezone_name(const char *value) {
+  if (!value || !*value || strlen(value) > 96) return 0;
+  for (const unsigned char *p = (const unsigned char *)value; *p; ++p)
+    if (!(isalnum(*p) || *p == '/' || *p == '_' || *p == '-' || *p == '+' || *p == '.'))
+      return 0;
+  return 1;
+}
 static int validate_policy(struct json_object *p,char *error,size_t n) {
   if(!p || !json_object_is_type(p,json_type_object)){set_error(error,n,"time policy must be an object");return -EINVAL;}
+  struct json_object *timezone=member(p,"timezone");
+  if(timezone && (!json_object_is_type(timezone,json_type_string) || !valid_timezone_name(json_object_get_string(timezone)))){set_error(error,n,"timezone must be a valid identifier");return -EINVAL;}
   int off=integer(p,"standard_offset_minutes",9999);
   if(off < -720 || off > 840){set_error(error,n,"UTC offset must be between -720 and 840 minutes");return -EINVAL;}
   struct json_object *servers=member(p,"servers");
@@ -121,7 +135,7 @@ static int validate_policy(struct json_object *p,char *error,size_t n) {
 }
 
 static int render_chrony(struct json_object *p) {
-  FILE *f=fopen("/etc/chrony.conf","w"); if(!f)return -errno;
+  FILE *f=fopen(env_or_default("CONFIGD_CHRONY_CONF","/etc/chrony.conf"),"w"); if(!f)return -errno;
   struct json_object *servers=member(p,"servers");
   for(size_t i=0;i<json_object_array_length(servers);i++) {
     const char *s=json_object_get_string(json_object_array_get_idx(servers,i));
@@ -138,7 +152,7 @@ int time_policy_apply(char *error,size_t error_size) {
 }
 int time_policy_save(struct json_object *p,char *error,size_t n) {
   int rc=validate_policy(p,error,n); if(rc)return rc;
-  rc=atomic_write(TIME_POLICY_PATH,p); if(rc){set_error(error,n,strerror(-rc));return rc;}
+  rc=atomic_write(env_or_default("CONFIGD_TIME_POLICY",TIME_POLICY_PATH),p); if(rc){set_error(error,n,strerror(-rc));return rc;}
   return time_policy_apply(error,n);
 }
 struct json_object *time_status_json(void) {
@@ -155,10 +169,55 @@ struct json_object *time_status_json(void) {
 }
 int time_set_epoch(time_t epoch,char *error,size_t n) {
   if(epoch < 946684800){set_error(error,n,"date must be after 2000-01-01");return -EINVAL;}
+  if(getenv("CONFIGD_CLOCK_SET_DRY_RUN")) return 0;
   struct timespec ts={.tv_sec=epoch,.tv_nsec=0};
   if(clock_settime(CLOCK_REALTIME,&ts)!=0){set_error(error,n,strerror(errno));return -errno;}
   return 0;
 }
+
+int time_set_local(const char *value,char *error,size_t n) {
+  if(!value){set_error(error,n,"local time is required");return -EINVAL;}
+  int hour=0,minute=0,second=0,day=0,month=0,year=0;
+  char trailing='\0';
+  if(sscanf(value," %2d:%2d:%2d - %2d:%2d:%4d %c",&hour,&minute,&second,&day,&month,&year,&trailing)!=6){
+    set_error(error,n,"use HH:MM:SS - DD:MM:YYYY");return -EINVAL;
+  }
+  if(year<2000 || year>2099 || month<1 || month>12 || day<1 ||
+     day>days_in_month(year,month) || hour<0 || hour>23 || minute<0 ||
+     minute>59 || second<0 || second>59){
+    set_error(error,n,"local date or time is outside the supported range");return -EINVAL;
+  }
+  struct tm local={0}; local.tm_year=year-1900; local.tm_mon=month-1;
+  local.tm_mday=day; local.tm_hour=hour; local.tm_min=minute; local.tm_sec=second;
+  time_t wall=timegm(&local);
+  struct json_object *policy=time_policy_load();
+  if(!policy){set_error(error,n,"time policy unavailable");return -ENOENT;}
+  int offsets[2]={integer(policy,"standard_offset_minutes",0),0};
+  size_t offset_count=1;
+  struct json_object *dst=member(policy,"dst");
+  if(dst && boolean(dst,"enabled",false)){
+    int daylight=integer(dst,"offset_minutes",offsets[0]+60);
+    if(daylight!=offsets[0]) offsets[offset_count++]=daylight;
+  }
+  int rc=-EINVAL;
+  for(size_t i=0;i<offset_count;i++){
+    time_t candidate=wall-(time_t)offsets[i]*60;
+    bool active=false;
+    int actual=active_offset(policy,candidate,&active);
+    (void)active;
+    if(actual!=offsets[i]) continue;
+    struct tm roundtrip; time_t shifted=candidate+(time_t)actual*60;
+    gmtime_r(&shifted,&roundtrip);
+    if(roundtrip.tm_year!=local.tm_year || roundtrip.tm_mon!=local.tm_mon ||
+       roundtrip.tm_mday!=local.tm_mday || roundtrip.tm_hour!=local.tm_hour ||
+       roundtrip.tm_min!=local.tm_min || roundtrip.tm_sec!=local.tm_sec) continue;
+    rc=time_set_epoch(candidate,error,n); break;
+  }
+  json_object_put(policy);
+  if(rc==-EINVAL) set_error(error,n,"local time does not exist under the configured daylight-saving rule");
+  return rc;
+}
+
 int time_force_sync(char *error,size_t n) {
   pid_t child=fork(); if(child<0){set_error(error,n,strerror(errno));return -errno;}
   if(child==0){execlp("chronyc","chronyc","makestep",(char*)NULL);_exit(127);}

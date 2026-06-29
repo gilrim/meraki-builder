@@ -94,6 +94,48 @@ A successful response is an `ack`. Configd then broadcasts the complete configur
 
 Every operation also checks the session capability. Hiding a control in the console or browser is not the security boundary.
 
+### `time_set_clock`
+
+Sets the system clock through the same validated time operation used by the local management socket. The request requires `services.manage` and accepts exactly one of an epoch value or a local wall-clock string:
+
+```json
+{"id":"6","type":"time_set_clock","data":{"local":"14:05:30 - 29:06:2026"}}
+```
+
+```json
+{"id":"6","type":"time_set_clock","data":{"epoch":1782741930}}
+```
+
+Local values use `HH:MM:SS - DD:MM:YYYY`, are interpreted through the saved standard/DST policy, and reject invalid calendar values and nonexistent spring-forward times. A successful request returns an `ack` and broadcasts refreshed status.
+
+
+## Operation catalogue
+
+| Request | Purpose | Required capability |
+|---|---|---|
+| `get_status` | Read live status and system inventory | `status.read` |
+| `get_config` | Read desired switch configuration | `config.read` |
+| `config` | Apply a validated partial configuration delta | capability selected from changed paths |
+| `replace_config` | Validate/apply a complete restored configuration | `config.restore` |
+| `ports_clone` | Dry-run or apply selected port categories to targets | `switching.write` |
+| `compatibility_report` | Read exact-model compatibility/evidence | `status.read` |
+| `compatibility_ack` | Record an allowed compatibility acknowledgement | administrator operation |
+| `user_list`, `user_create`, `user_delete`, `user_role` | Manage Linux accounts and roles | `users.manage` |
+| `password_change` | Change an allowed account password and revoke sessions | `users.manage` or self-service rules enforced by server |
+| `ssh_key_list`, `ssh_key_add`, `ssh_key_remove` | Manage validated public keys transactionally | `users.manage` |
+| `services_get` | Read service policy and observed state | `status.read` |
+| `services_set`, `services_action` | Configure or operate managed services | `services.manage` |
+| `time_get` | Read time/NTP/DST status and policy | `status.read` |
+| `time_set`, `time_sync`, `time_set_clock` | Configure policy, request synchronization, or set the clock | `services.manage` |
+| `terminal_start`, `terminal_exec` | Start/use the bounded command session | `terminal.exec` |
+| `firmware_status` | Read updater state/history | `firmware.history.read` |
+| `firmware_upload_start`, binary upload, `firmware_upload_finish`, `firmware_upload_status`, `firmware_upload_cancel` | Stage and asynchronously validate a browser candidate | `firmware.update` |
+| `firmware_begin_flash` | Authorize installation of a ready candidate | `firmware.update` |
+| `firmware_repo_get`, `firmware_repo_check` | Read/check configured repositories | `firmware.history.read` |
+| `firmware_repo_set` | Change repository policy | `firmware.update` |
+
+`hello`, `ping`, `auth`, `auth_token`, and `logout` are transport/session operations. The server remains authoritative for path-specific capability selection and may reject a request more strictly than this summary.
+
 ## Responses
 
 ### Acknowledgement

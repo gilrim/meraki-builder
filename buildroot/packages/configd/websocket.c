@@ -1514,6 +1514,17 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     struct json_object *data=request_data_object(message);char error[256]={0};if(time_policy_save(data,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
     struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Time policy saved"));queue_response(wsi,session,"ack",ack,request_id);json_object_put(ack);return 0;
   }
+  if (!strcmp(type, "time_set_clock")) {
+    if (!require_capability(wsi, session, request_id, "services.manage")) return 0;
+    struct json_object *data=request_data_object(message),*epoch=NULL,*local=NULL;char error[256]={0};int rc=-EINVAL;
+    if(data && json_object_object_get_ex(data,"local",&local) && json_object_is_type(local,json_type_string))
+      rc=time_set_local(json_object_get_string(local),error,sizeof(error));
+    else if(data && json_object_object_get_ex(data,"epoch",&epoch) && json_object_is_type(epoch,json_type_int))
+      rc=time_set_epoch((time_t)json_object_get_int64(epoch),error,sizeof(error));
+    else {queue_bad_request(wsi,session,request_id,"local or epoch is required");return 0;}
+    if(rc!=0){queue_bad_request(wsi,session,request_id,error[0]?error:"system clock update failed");return 0;}
+    struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("System clock updated"));queue_response(wsi,session,"ack",ack,request_id);json_object_put(ack);refresh_status_cache(true);return 0;
+  }
   if (!strcmp(type, "time_sync")) {
     if (!require_capability(wsi, session, request_id, "services.manage")) return 0;
     char error[256]={0};if(time_force_sync(error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}

@@ -1,3 +1,33 @@
+# 2026-06-29 OpenVTSS v0.8 evidence synchronization
+
+- Added the hardware-proven representative MS42P copper bank boundaries and all four SFP logical/chip-local mappings to current architecture and compatibility documentation.
+- Added operational guidance for interpreting retained 10 Gb/s mode while link is down and for treating module observations separately from compatibility certification.
+- Isolated run identity, trace coverage, `symbol+8` probe registration, module ambiguity, and remaining PCS/LED/PoE research gaps under `docs/research/`.
+
+# 2026-06-29 documentation and current-release consolidation
+
+- Made the documentation database the authoritative current-behavior source.
+- Reduced the root README to onboarding, safety, quick-start, and documentation links.
+- Moved release snapshots, root-cause reports, corrections, and migration notes under `docs/history/`.
+- Added repository-wide documentation rules and automated root/history hygiene checks.
+- Added complete current guides for system inventory, telemetry, reset/LED behavior, sessions/SSH keys, validation, responsive UI, and local time control.
+
+# 2026-06-29 responsive UI, system inventory, and clock control
+
+- Added resilient identity, firmware, CPU/kernel, runtime, memory, filesystem, MTD, service, temperature, hardware-control, and compatibility inventory.
+- Added bounded card layouts, twelve-port/SFP wrapping, narrow two-column banks, sticky-header seam correction, and mobile-specific interaction layouts.
+- Added common timezone presets and validated manual local clock input through the shared configd operation.
+
+# 2026-06-28 reset button and status indication
+
+- Added exact-model MS42P active-low reset-button handling with release-to-arm, debounce, cancellable hold, fail-closed policy, and firmware/reset lock arbitration.
+- Added verified GPIO22/GPIO23 chassis indication for firmware progress, error/rollback, success, and reset countdown.
+
+# 2026-06-27 management-plane merge repair
+
+- Integrated telemetry into configuration transactions, primed SNMP snapshots, bounded Prometheus clients, and management-interface-only binding.
+- Added live session revalidation/revocation, strict transactional SSH-key handling, and asynchronous recoverable firmware validation.
+
 # 2026-06-20 UART reboot baud handoff
 
 - Treat `PMOSREC REBOOT NOW` as the deterministic transition from negotiated

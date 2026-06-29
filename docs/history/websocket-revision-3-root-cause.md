@@ -1,3 +1,5 @@
+> **Historical record:** This document describes a completed incident, migration, or release snapshot. It is not the current operating guide. Follow the active documentation linked from [`docs/README.md`](../README.md).
+
 # WebSocket build failure: revision 3 root cause
 
 The reported `Web image contains a WebSocket-disabled configd binary` error was

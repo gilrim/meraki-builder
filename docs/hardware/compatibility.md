@@ -14,6 +14,8 @@ Compatibility is release-specific and exact-model based. The release manifest re
 
 One platform-agnostic image carries the complete common, Luton26, Jaguar1, and Jaguar Dual kernel-object matrix plus every additional donor `.ko`. Early boot derives `/run/postmerkos/boardinfo` from the board EEPROM and loads only the matching family. Unknown identity or an unsupported exact model fails closed for model-specific hardware actions.
 
+For MS42P, runtime evidence confirms the 24-copper-port split across each Jaguar1 ASIC at representative bank boundaries and confirms the logical/chip-local mapping of all four SFP cages. Individual untested copper positions remain supported by the recovered board table rather than exact per-port runtime exercise. SFP module-model compatibility, PCS/optical-control corroboration, and SFP LED behavior remain unvalidated. See [MS42P port-map and SFP runtime evidence](../research/ms42p-port-map-and-sfp-evidence.md).
+
 Untested artifacts require explicit acknowledgement. Known-incompatible artifacts are rejected. Keep direct SPI recovery available while validating a new exact model, and report boot, management, forwarding, PoE, LED, and update results separately.
 
 MX80 remains a separate PowerPC build target. MX84 assets remain incomplete and are not part of the VCore-III image.

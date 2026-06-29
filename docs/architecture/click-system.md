@@ -189,6 +189,21 @@ sed -n '1,10p' /click/switch_port_table/dump_pports
 
 Do not assume that a field index from one donor version is portable to another.
 
+### MS42P numbering boundary
+
+Hardware runtime evidence confirms that front ports 1 through 24 belong to chip 0 copper ports 0 through 23 and front ports 25 through 48 belong to chip 1 copper ports 0 through 23 at representative bank boundaries. The four uplinks map as follows:
+
+| Front port | Click logical index | ASIC | ASIC port |
+|---:|---:|---:|---:|
+| 49 | 48 | 0 | 29 |
+| 50 | 49 | 0 | 30 |
+| 51 | 50 | 1 | 29 |
+| 52 | 51 | 1 | 30 |
+
+For 10 Gb/s uplinks, `dump_pports` can retain `mbps=10000` and full-duplex mode after `up` returns to zero. Parsers and status clients must use `up` as the link-established field and treat speed/duplex as mode information when the port is down.
+
+The exact boundary test and its unresolved module/PCS/LED questions are documented in [MS42P port-map and SFP runtime evidence](../research/ms42p-port-map-and-sfp-evidence.md).
+
 ### PHY changes
 
 ```sh

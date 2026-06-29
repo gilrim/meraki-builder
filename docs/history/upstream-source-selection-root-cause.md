@@ -1,3 +1,5 @@
+> **Historical record:** This document describes a completed incident, migration, or release snapshot. It is not the current operating guide. Follow the active documentation linked from [`docs/README.md`](../README.md).
+
 # Root cause
 
 `LOADER_REF` defaulted to `latest`, but the builder defined `latest` as the
