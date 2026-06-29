@@ -1,0 +1,44 @@
+name: Host validation
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - gh-pages
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install host-test dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          build-essential pkg-config libjson-c-dev libcrypt-dev
+          libwebsockets-dev python3
+      - name: Compile production configd variants
+        run: |
+          make -C buildroot/packages/configd clean
+          make -C buildroot/packages/configd CFLAGS='-O2 -Wall -Wextra -Werror'
+          make -C buildroot/packages/configd clean
+          make -C buildroot/packages/configd ENABLE_WEBSOCKET=0 CFLAGS='-O2 -Wall -Wextra -Werror'
+      - name: Compile and test configd
+        run: make test-configd
+      - name: Test firmware tooling
+        run: make test-fwupdate
+      - name: Validate image and loader contracts
+        run: make test-image test-loader-contract
+      - name: Validate modules, hardware policy, console, and docs
+        run: |
+          make test-modules test-hardware test-docs
+          ./buildroot/packages/postmerkos-console/tests/test-host.sh
+      - name: Check script syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            first=$(head -n 1 "$file" || true)
+            case "$first" in
+              *bash*) bash -n "$file" ;;
+              *'/sh'*) sh -n "$file" ;;
+            esac
+          done < <(git ls-files -z '*.sh')
+          python3 -m compileall -q scripts tools

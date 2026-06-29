@@ -1,3 +1,25 @@
+# MS42P verified reset button and chassis upgrade indication
+
+## meraki-builder
+
+- Promote the OpenVTSS hardware evidence for MS42P primary GPIO13 active-low reset input and GPIO22/GPIO23 chassis status output into capability schema v3.
+- Read reset state from the verified Jaguar1 `DEVCPU_GCB.GPIO_IN` physical register through a read-only mapping instead of assuming Linux GPIO numbering.
+- Build and start `postmerkos-buttond` only for an exact, hardware-verified destructive profile; add debounce, release-to-arm, continuous-hold, live status, firmware-lock interlock, and cancellable reset countdown behavior.
+- Fail closed when the persistent reset policy is missing, malformed, incomplete, or names any action other than explicit `factory-reset`.
+- Make factory reset share the firmware lock so reset and upgrade erase operations cannot overlap.
+- Clean up reset indication and publish an error if the button daemon cannot hand off to the factory-reset executable.
+- Correct the Click status handlers to plain `0`/`1` writes, enforce owner-gated state changes, capture/restore normal state, and prefer the chassis indicator over port LEDs.
+- Serialize LED ownership changes with stale-lock recovery so concurrent reset and firmware callbacks preserve the configured priority and cannot leave competing animators.
+- Add accelerating green/orange firmware progress, triple-orange failure/rollback, solid-green verified completion, and orange reset-countdown patterns in both userspace and the RAM-resident flasher.
+- Add host regression coverage for immutable identity gating, direct-MMIO active-low decoding, held-at-boot protection, release-to-arm, hold completion, LED protocol, and reset handoff.
+
+## postmerkos-ui
+
+- Show reset-button state, GPIO/polarity, destructive safety status, hold duration, and current LED owner in System Information.
+- Document the exact chassis LED behavior shown after the management interface disconnects for flashing.
+
+---
+
 # Revision 3: deterministic configd rebuild and pipefail-safe validation
 
 ## meraki-builder

@@ -11,7 +11,8 @@ DEV_INPUT=${POSTMERKOS_DEV_INPUT:-/dev/input}
 RUNTIME_JSON=$RUNDIR/hardware-controls.json
 RUNTIME_ENV=$RUNDIR/led-capabilities.env
 mkdir -p "$RUNDIR"
-model() { sed -n 's/^MODEL=//p' "$BOARDINFO" 2>/dev/null | sed -n '1p'; }
+board_value() { sed -n "s/^$1=//p" "$BOARDINFO" 2>/dev/null | sed -n '1p'; }
+model() { board_value MODEL; }
 bool() { [ "${1:-0}" = 1 ] && echo true || echo false; }
 json_string() { printf '%s' "${1:-}" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 load_profile() {
@@ -21,54 +22,115 @@ load_profile() {
         . "$PROFILE_DIR/$local_model.conf"
     fi
 }
+prepare_sysfs_input() {
+    gpio=$1
+    gpio_root=$SYS_ROOT/class/gpio
+    gpio_dir=$gpio_root/gpio$gpio
+    [ -d "$gpio_dir" ] || {
+        [ -w "$gpio_root/export" ] || return 1
+        printf '%s\n' "$gpio" > "$gpio_root/export" 2>/dev/null || true
+        attempts=0
+        while [ ! -d "$gpio_dir" ] && [ "$attempts" -lt 20 ]; do
+            sleep 0.05
+            attempts=$((attempts + 1))
+        done
+    }
+    [ -d "$gpio_dir" ] || return 1
+    if [ -w "$gpio_dir/direction" ]; then
+        printf 'in\n' > "$gpio_dir/direction" 2>/dev/null || return 1
+    fi
+    if [ -w "$gpio_dir/edge" ]; then
+        printf 'both\n' > "$gpio_dir/edge" 2>/dev/null || true
+    fi
+    [ -r "$gpio_dir/value" ] || return 1
+    RESET_RUNTIME_PATH=$gpio_dir/value
+    return 0
+}
 refresh() {
     load_profile
     local_model=$(model); local_model=${local_model:-unknown}
-    exact=0; [ "$local_model" != unknown ] && [ -r "$PROFILE_DIR/$local_model.conf" ] && exact=1
+    identity_exact=$(board_value IDENTITY_EXACT); identity_exact=${identity_exact:-0}
+    exact=0
+    [ "$identity_exact" = 1 ] && [ "$local_model" != unknown ] && \
+      [ -r "$PROFILE_DIR/$local_model.conf" ] && exact=1
+
     green_readable=0; green_writable=0; orange_readable=0; orange_writable=0
     [ -n "${STATUS_LED_GREEN_PATH:-}" ] && [ -r "$STATUS_LED_GREEN_PATH" ] && green_readable=1
     [ -n "${STATUS_LED_GREEN_PATH:-}" ] && [ -w "$STATUS_LED_GREEN_PATH" ] && green_writable=1
     [ -n "${STATUS_LED_ORANGE_PATH:-}" ] && [ -r "$STATUS_LED_ORANGE_PATH" ] && orange_readable=1
     [ -n "${STATUS_LED_ORANGE_PATH:-}" ] && [ -w "$STATUS_LED_ORANGE_PATH" ] && orange_writable=1
+    status_verified=0
     status_available=0
-    [ "$exact" = 1 ] && [ "${STATUS_LED_BACKEND:-}" = click-dual-state ] && \
+    [ "$exact" = 1 ] && [ "${STATUS_LED_VERIFIED:-0}" = 1 ] && status_verified=1
+    [ "$status_verified" = 1 ] && [ "${STATUS_LED_BACKEND:-}" = click-dual-state ] && \
       [ "$green_writable" = 1 ] && [ "$orange_writable" = 1 ] && status_available=1
+
+    port_verified=0
     port_available=0
-    [ "$exact" = 1 ] && [ "${PORT_LED_BACKEND:-}" = click-poe-led-state ] && \
+    [ "$exact" = 1 ] && [ "${PORT_LED_VERIFIED:-0}" = 1 ] && port_verified=1
+    [ "$port_verified" = 1 ] && [ "${PORT_LED_BACKEND:-}" = click-poe-led-state ] && \
       [ -w "${PORT_LED_HANDLER:-/nonexistent}" ] && port_available=1
+
     panel_available=0
     [ "$exact" = 1 ] && [ -r "${PANEL_LED_PATH:-/nonexistent}" ] && \
       [ -w "${PANEL_LED_PATH:-/nonexistent}" ] && panel_available=1
+
     reset_available=0
-    case "${RESET_BACKEND:-unidentified}" in
-      sysfs|click) [ -n "${RESET_PATH:-}" ] && [ -r "$RESET_PATH" ] && reset_available=1 ;;
-      evdev) [ -n "${RESET_DEVICE:-}" ] && [ -r "$RESET_DEVICE" ] && reset_available=1 ;;
-    esac
+    reset_verified=0
+    reset_destructive=0
+    RESET_RUNTIME_PATH=${RESET_PATH:-}
+    if [ "$exact" = 1 ] && [ "${RESET_VERIFIED:-0}" = 1 ]; then
+        case "${RESET_BACKEND:-unidentified}" in
+          jaguar1-mmio)
+            [ -r "${RESET_DEVICE:-/dev/mem}" ] && \
+              [ "${RESET_ADDRESS:-0}" != 0 ] && [ "${RESET_MASK:-0}" != 0 ] && reset_available=1
+            ;;
+          sysfs-gpio)
+            [ -n "${RESET_GPIO:-}" ] && prepare_sysfs_input "$RESET_GPIO" && reset_available=1
+            ;;
+          sysfs|click)
+            [ -n "$RESET_RUNTIME_PATH" ] && [ -r "$RESET_RUNTIME_PATH" ] && reset_available=1
+            ;;
+          evdev)
+            [ -n "${RESET_DEVICE:-}" ] && [ -r "$RESET_DEVICE" ] && reset_available=1
+            ;;
+        esac
+        [ "$reset_available" = 1 ] && reset_verified=1
+        [ "$reset_verified" = 1 ] && [ "${RESET_DESTRUCTIVE_ENABLED:-0}" = 1 ] && reset_destructive=1
+    fi
+
     cat >"$RUNTIME_JSON" <<JSON
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "model": "$(json_string "$local_model")",
   "profile_exact": $(bool "$exact"),
   "profile_confidence": "$(json_string "${PROFILE_CONFIDENCE:-unknown}")",
   "reset_button": {
     "backend": "$(json_string "${RESET_BACKEND:-unidentified}")",
-    "path": "$(json_string "${RESET_PATH:-}")",
+    "gpio": ${RESET_GPIO:--1},
+    "path": "$(json_string "$RESET_RUNTIME_PATH")",
     "device": "$(json_string "${RESET_DEVICE:-}")",
-    "code": ${RESET_CODE:-0}, "active": ${RESET_ACTIVE:-0},
+    "address": $(( ${RESET_ADDRESS:-0} )),
+    "mask": $(( ${RESET_MASK:-0} )),
+    "code": ${RESET_CODE:-0},
+    "active": ${RESET_ACTIVE:-0},
+    "active_low": $(bool "${RESET_ACTIVE_LOW:-0}"),
     "available": $(bool "$reset_available"),
+    "verified": $(bool "$reset_verified"),
     "confidence": "$(json_string "${RESET_CONFIDENCE:-unknown}")",
-    "destructive_enabled": false
+    "destructive_enabled": $(bool "$reset_destructive")
   },
   "leds": {
     "status": {
       "backend": "$(json_string "${STATUS_LED_BACKEND:-unidentified}")",
       "available": $(bool "$status_available"),
-      "verified": $(bool "${STATUS_LED_VERIFIED:-0}"),
+      "verified": $(bool "$status_verified"),
       "confidence": "$(json_string "${STATUS_LED_CONFIDENCE:-unknown}")",
       "normal_owner": "$(json_string "${STATUS_LED_NORMAL_OWNER:-vc_click}")",
       "restore": "$(json_string "${STATUS_LED_RESTORE:-captured-pair}")",
-      "green": {"path":"$(json_string "${STATUS_LED_GREEN_PATH:-}")","protocol":"$(json_string "${STATUS_LED_PROTOCOL:-named-state}")","readable":$(bool "$green_readable"),"writable":$(bool "$green_writable")},
-      "orange": {"path":"$(json_string "${STATUS_LED_ORANGE_PATH:-}")","protocol":"$(json_string "${STATUS_LED_PROTOCOL:-named-state}")","readable":$(bool "$orange_readable"),"writable":$(bool "$orange_writable")}
+      "protocol": "$(json_string "${STATUS_LED_PROTOCOL:-plain-bool}")",
+      "green": {"gpio":${STATUS_LED_GREEN_GPIO:--1},"path":"$(json_string "${STATUS_LED_GREEN_PATH:-}")","readable":$(bool "$green_readable"),"writable":$(bool "$green_writable")},
+      "orange": {"gpio":${STATUS_LED_ORANGE_GPIO:--1},"path":"$(json_string "${STATUS_LED_ORANGE_PATH:-}")","readable":$(bool "$orange_readable"),"writable":$(bool "$orange_writable")}
     },
     "panel": {
       "backend":"$(json_string "${PANEL_LED_BACKEND:-unidentified}")",
@@ -82,7 +144,7 @@ refresh() {
       "backend":"$(json_string "${PORT_LED_BACKEND:-unidentified}")",
       "path":"$(json_string "${PORT_LED_HANDLER:-}")",
       "available":$(bool "$port_available"),
-      "verified":$(bool "${PORT_LED_VERIFIED:-0}"),
+      "verified":$(bool "$port_verified"),
       "confidence":"$(json_string "${PORT_LED_CONFIDENCE:-unknown}")",
       "protocol":"PORT %u, STATE %u"
     }
@@ -90,19 +152,28 @@ refresh() {
 }
 JSON
     cat >"$RUNTIME_ENV" <<ENV
-HARDWARE_CAPABILITY_SCHEMA='2'
+HARDWARE_CAPABILITY_SCHEMA='3'
 PORT_LED_BACKEND='${PORT_LED_BACKEND:-unidentified}'
 PORT_LED_HANDLER='${PORT_LED_HANDLER:-}'
 PORT_LED_AVAILABLE='$port_available'
-PORT_LED_VERIFIED='${PORT_LED_VERIFIED:-0}'
+PORT_LED_VERIFIED='$port_verified'
 STATUS_LED_BACKEND='${STATUS_LED_BACKEND:-unidentified}'
 STATUS_LED_GREEN_PATH='${STATUS_LED_GREEN_PATH:-}'
 STATUS_LED_ORANGE_PATH='${STATUS_LED_ORANGE_PATH:-}'
-STATUS_LED_PROTOCOL='${STATUS_LED_PROTOCOL:-named-state}'
+STATUS_LED_PROTOCOL='${STATUS_LED_PROTOCOL:-plain-bool}'
 STATUS_LED_AVAILABLE='$status_available'
-STATUS_LED_VERIFIED='${STATUS_LED_VERIFIED:-0}'
+STATUS_LED_VERIFIED='$status_verified'
 PANEL_LED_AUTOMATIC='0'
-RESET_DESTRUCTIVE_ENABLED='0'
+RESET_BACKEND='${RESET_BACKEND:-unidentified}'
+RESET_GPIO='${RESET_GPIO:-}'
+RESET_PATH='$RESET_RUNTIME_PATH'
+RESET_DEVICE='${RESET_DEVICE:-}'
+RESET_ADDRESS='$(( ${RESET_ADDRESS:-0} ))'
+RESET_MASK='$(( ${RESET_MASK:-0} ))'
+RESET_ACTIVE='${RESET_ACTIVE:-0}'
+RESET_AVAILABLE='$reset_available'
+RESET_VERIFIED='$reset_verified'
+RESET_DESTRUCTIVE_ENABLED='$reset_destructive'
 ENV
     chmod 0444 "$RUNTIME_JSON" "$RUNTIME_ENV" 2>/dev/null || true
 }
@@ -113,7 +184,6 @@ inventory_reset() {
     if [ -r "$SYS_ROOT/kernel/debug/gpio" ]; then cat "$SYS_ROOT/kernel/debug/gpio"; else find "$SYS_ROOT/class/gpio" -maxdepth 2 -name value -print 2>/dev/null || true; fi
     echo; echo 'Click reset/button candidates:'
     find "$CLICK_ROOT" -maxdepth 4 \( -iname '*reset*' -o -iname '*button*' -o -iname '*gpio*' \) -print 2>/dev/null || echo '  none'
-    echo 'Discovery is read-only; destructive reset is disabled.'
 }
 inventory_leds() {
     echo 'LED class devices:'

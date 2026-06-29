@@ -11,17 +11,56 @@ if [ "$YES" -ne 1 ]; then
     read -r answer
     [ "$answer" = FACTORY-RESET ] || exit 1
 fi
+
+LED_ACQUIRED=0
+# A button-initiated reset arrives with the reset LED already owned by
+# postmerkos-buttond. Adopt that ownership so every failure path can clean it up.
+if command -v postmerkos-ledctl >/dev/null 2>&1 && [ "$(postmerkos-ledctl status 2>/dev/null || true)" = reset ]; then
+    LED_ACQUIRED=1
+fi
+cleanup_reset() {
+    rc=$?
+    trap - EXIT HUP INT TERM
+    release_lock
+    if [ "$LED_ACQUIRED" = 1 ] && command -v postmerkos-ledctl >/dev/null 2>&1; then
+        if [ "$rc" -ne 0 ]; then
+            postmerkos-ledctl error >/dev/null 2>&1 || true
+            sleep 3
+        fi
+        # Do not leave a reset animator or stale ownership behind when reset
+        # aborts (for example, if an updater won the lock race).
+        postmerkos-ledctl release reset >/dev/null 2>&1 || true
+    fi
+    exit "$rc"
+}
+trap cleanup_reset EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# The common lock closes the race between the button daemon's interlock check
+# and a firmware updater starting at the same instant.
+acquire_lock
+killall postmerkos-buttond >/dev/null 2>&1 || true
+if command -v postmerkos-ledctl >/dev/null 2>&1; then
+    postmerkos-ledctl acquire reset >/dev/null 2>&1 && LED_ACQUIRED=1 || true
+    [ "$LED_ACQUIRED" = 1 ] && postmerkos-ledctl reset-progress 5 >/dev/null 2>&1 || true
+fi
 status_write resetting prepare 5 'Factory reset accepted; persistent JFFS2 settings will be erased'
-command -v postmerkos-ledctl >/dev/null 2>&1 && postmerkos-ledctl acquire reset || true
 sync
-for proc in configd uhttpd chronyd dropbear syslogd klogd crond dhcpclient; do killall "$proc" >/dev/null 2>&1 || true; done
+for proc in configd uhttpd chronyd dropbear syslogd klogd crond dhcpclient; do
+    killall "$proc" >/dev/null 2>&1 || true
+done
 sleep 1
 umount /root >/dev/null 2>&1 || true
 umount /etc >/dev/null 2>&1 || true
 umount /overlay >/dev/null 2>&1 || true
+[ "$LED_ACQUIRED" = 1 ] && postmerkos-ledctl reset-progress 50 >/dev/null 2>&1 || true
 status_write resetting erase 50 'Erasing persistent JFFS2 configuration partition'
 flash_erase "/dev/$OVERLAY_MTD" 0 0 >/dev/null || fw_die 'JFFS2 erase failed'
+[ "$LED_ACQUIRED" = 1 ] && postmerkos-ledctl reset-progress 100 >/dev/null 2>&1 || true
 status_write success reboot 100 'Persistent settings erased; rebooting into factory defaults'
-command -v postmerkos-ledctl >/dev/null 2>&1 && postmerkos-ledctl all-off || true
+command -v postmerkos-ledctl >/dev/null 2>&1 && postmerkos-ledctl success >/dev/null 2>&1 || true
 sync
+trap - EXIT HUP INT TERM
 reboot -f >/dev/null 2>&1 || echo b > /proc/sysrq-trigger

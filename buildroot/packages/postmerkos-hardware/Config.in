@@ -3,7 +3,9 @@ config BR2_PACKAGE_POSTMERKOS_HARDWARE
 	default y
 	select BR2_PACKAGE_CONFIGD
 	select BR2_PACKAGE_FWUPDATE
+	select BR2_PACKAGE_JSON_C
 	help
-	  Capability-v2 hardware discovery, LED ownership and one-shot PoE
-	  boot-prune policy. Reset discovery is read-only until a model-specific
-	  input is hardware verified; destructive reset remains disabled.
+	  Capability-v3 chassis hardware support, including exact-model GPIO
+	  discovery, verified reset-button hold handling, status-LED ownership,
+	  firmware/reset indication, and one-shot PoE boot-prune policy.
+	  Destructive reset is enabled only for hardware-verified profiles.

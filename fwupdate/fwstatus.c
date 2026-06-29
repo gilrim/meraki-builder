@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -29,13 +30,19 @@ int main(int argc, char **argv) {
     if (access("/usr/sbin/postmerkos-ledctl", X_OK) == 0) {
         pid_t child = fork();
         if (child == 0) {
-            if (!strcmp(state, "error"))
+            if (!strcmp(state, "error") || !strcmp(state, "rollback"))
                 execl("/usr/sbin/postmerkos-ledctl", "postmerkos-ledctl", "error", (char *)NULL);
             else if (!strcmp(state, "success"))
                 execl("/usr/sbin/postmerkos-ledctl", "postmerkos-ledctl", "success", (char *)NULL);
+            else if (!strcmp(state, "resetting"))
+                execl("/usr/sbin/postmerkos-ledctl", "postmerkos-ledctl", "reset-progress", progress, (char *)NULL);
             else
-                execl("/usr/sbin/postmerkos-ledctl", "postmerkos-ledctl", "progress", progress, (char *)NULL);
+                execl("/usr/sbin/postmerkos-ledctl", "postmerkos-ledctl", "firmware-progress", progress, (char *)NULL);
             _exit(127);
+        }
+        if (child > 0) {
+            int child_status = 0;
+            while (waitpid(child, &child_status, 0) < 0 && errno == EINTR) {}
         }
     }
     int console = open("/dev/console", O_WRONLY | O_NOCTTY);

@@ -46,3 +46,7 @@ explicitly selected.
 The complete 8 MiB SquashFS partition remains usable. In-image metadata is
 added only when the filesystem naturally leaves at least 4 KiB unused;
 otherwise the checksum-bound sidecar manifest is authoritative.
+
+## Status LED contract
+
+`fw_update` acquires the hardware LED owner before userspace quiesce and passes verified handler paths plus an explicit handler protocol to the static RAM-resident `fwflash`. Dual Click power-LED handlers use plain booleans. Firmware progress alternates green/orange at an increasing rate, rollback and fatal states use triple-orange pulses, and successful verification leaves green asserted until reboot. The chassis indicator is preferred; verified port LEDs are fallback-only. Factory reset uses the same flash lock and an orange countdown pattern.

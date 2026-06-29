@@ -21,6 +21,11 @@ fwmanifest model image.manifest.json MS42P
 fwmanifest compare 2026.06.18-2 2026.06.18-10
 ```
 
+
+## UART transport
+
+`fwserialrx` and `fw_update_uart` implement the RAM-backed `PMOSUART/1` transport for networkless updates. Firmware and an optional release manifest are sent as bounded Base64 frames carrying sequence numbers and CRC-32. Every accepted frame is acknowledged; duplicate retransmission of the most recently accepted frame is safe. Whole-object byte count and SHA-256 are verified before the object is published under `/run/fwupdate/uploads` and passed to normal `fw_update` validation. UART never bypasses model, manifest, version, geometry, overlay, or full-flash acknowledgement policy.
+
 ## Flash scopes
 
 The default `system` scope changes only SquashFS and the selected JFFS2 policy.
@@ -41,3 +46,7 @@ explicitly selected.
 The complete 8 MiB SquashFS partition remains usable. In-image metadata is
 added only when the filesystem naturally leaves at least 4 KiB unused;
 otherwise the checksum-bound sidecar manifest is authoritative.
+
+## Status LED contract
+
+`fw_update` acquires the hardware LED owner before userspace quiesce and passes verified handler paths plus an explicit handler protocol to the static RAM-resident `fwflash`. Dual Click power-LED handlers use plain booleans. Firmware progress alternates green/orange at an increasing rate, rollback and fatal states use triple-orange pulses, and successful verification leaves green asserted until reboot. The chassis indicator is preferred; verified port LEDs are fallback-only. Factory reset uses the same flash lock and an orange countdown pattern.

@@ -26,4 +26,10 @@ assert "lws_get_peer_simple" in source, "rate limiting must include the peer add
 assert 'auth_record_failure_key("global"' in source, "random usernames must not bypass throttling"
 assert "firmware_job_poll();" in source, "async validation jobs must be reaped by the service loop"
 
+
+status_source = (Path(__file__).resolve().parents[1] / "status.c").read_text(encoding="utf-8")
+assert '"/run/postmerkos/hardware-controls.json"' in status_source
+assert '"status_led"' in status_source, "status API must expose verified chassis LED capability"
+assert '"reset_button"' in status_source, "status API must expose physical reset state"
+
 print("management-plane structural contracts passed")

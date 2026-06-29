@@ -22,15 +22,17 @@ Apply a valid port/network/service change and confirm desired and observed state
 
 Confirm serial/SSH console lifecycle, role repeatability, noninteractive `postmerkosctl`, WebSocket protocol version 2, dynamic WS/WSS selection, authentication before subscriptions, and bounded unauthenticated/authenticated idle behavior.
 
-## Reset discovery
+## Reset-button validation
 
 ```sh
 postmerkos-hwprobe reset-button
-postmerkos-hwprobe reset-button --watch 30
 cat /run/postmerkos/hardware-controls.json
+cat /run/postmerkos/button-status.json
 ```
 
-Discovery is read-only. Record input/GPIO/Click changes while pressing the button. Destructive reset remains disabled for every shipped profile; do not perform an erase test until a separately reviewed implementation exists.
+MS42P is the only shipped profile with destructive handling enabled. Confirm exact immutable identity, `jaguar1-mmio`, GPIO13, address `0x60010074`, mask `0x00002000`, active-low polarity, and hardware-verified confidence. Verify that a button held at boot remains in `waiting-release`, a short hold cancels, the configured continuous hold triggers factory reset, and `/run/fwupdate.lock` changes state to `inhibited`. Perform the actual erase test only with a current SPI backup and recovery method.
+
+For every other model, discovery remains read-only and `destructive_enabled` must be false. Use `postmerkos-hwprobe reset-button --watch 30` to collect candidate evidence without granting authority.
 
 ## LED validation
 
@@ -40,7 +42,7 @@ postmerkos-ledctl capabilities
 postmerkos-ledctl test-status
 ```
 
-Only run `test-status` when the exact-model capability reports both `power_led_green` and `power_led_orange` writable. The protocol is `STATE n`; normal state is captured and restored. `led_mode` is manual-validation only. `poe_led_state` is an LED indication handler, not PoE power control, and is registered only for MS220-8/MS220-8P.
+Only run `test-status` when the exact-model capability reports both `power_led_green` and `power_led_orange` writable. These handlers accept plain `0`/`1`; normal state is captured and restored. On MS42P verify GPIO22 green, GPIO23 orange-dominant, firmware green/orange acceleration, rollback/error triple-orange pulses, solid-green completion, and orange reset countdown. `led_mode` is manual-validation only. `poe_led_state` is an LED indication handler, not PoE power control, and is registered only for MS220-8/MS220-8P.
 
 ## UART updater
 
@@ -54,4 +56,4 @@ Test an interrupted frame, retransmission, CRC rejection, complete image plus op
 
 ## Destructive hardware matrix
 
-Record results separately for boot, Click forwarding, all copper/uplink ports, VLAN/STP/LACP, PD690xx PoE/af/at, status LEDs, read-only reset discovery, firmware system update, full flash, power loss during each erase/write region, and post-boot finalization. Host tests do not prove these behaviors.
+Record results separately for boot, Click forwarding, all copper/uplink ports, VLAN/STP/LACP, PD690xx PoE/af/at, status LEDs, reset-button safety/hold behavior, firmware system update, full flash, power loss during each erase/write region, and post-boot finalization. Host tests do not prove these behaviors.

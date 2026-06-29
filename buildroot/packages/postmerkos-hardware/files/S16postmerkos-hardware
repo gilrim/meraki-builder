@@ -1,16 +1,45 @@
 #!/bin/sh
 LOG=/run/postmerkos/hardware.log
+BUTTON_LOG=/run/postmerkos/buttond.log
+BUTTON_PID=/run/postmerkos/buttond.pid
+start_buttond() {
+    [ -x /usr/sbin/postmerkos-buttond ] || return 0
+    grep -q '"destructive_enabled":[[:space:]]*true' /run/postmerkos/hardware-controls.json 2>/dev/null || return 0
+    if [ -s "$BUTTON_PID" ]; then
+        pid=$(cat "$BUTTON_PID" 2>/dev/null || true)
+        [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+        rm -f "$BUTTON_PID"
+    fi
+    /usr/sbin/postmerkos-buttond >>"$BUTTON_LOG" 2>&1 &
+    echo $! >"$BUTTON_PID"
+}
+stop_buttond() {
+    if [ -s "$BUTTON_PID" ]; then
+        pid=$(cat "$BUTTON_PID" 2>/dev/null || true)
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+        rm -f "$BUTTON_PID"
+    fi
+    killall postmerkos-buttond >/dev/null 2>&1 || true
+}
 case "${1:-start}" in
   start)
     mkdir -p /run/postmerkos
     /usr/sbin/postmerkos-hwprobe refresh >>"$LOG" 2>&1 || true
+    start_buttond
     /usr/sbin/postmerkos-poe-prune >/run/postmerkos/poe-prune.log 2>&1 &
     ;;
   stop)
+    stop_buttond
     killall postmerkos-poe-prune >/dev/null 2>&1 || true
     /usr/sbin/postmerkos-ledctl release >/dev/null 2>&1 || true
     ;;
   restart) "$0" stop; sleep 1; "$0" start ;;
-  status) [ -r /run/postmerkos/hardware-controls.json ] ;;
+  status)
+    [ -r /run/postmerkos/hardware-controls.json ] || exit 1
+    if grep -q '"destructive_enabled":[[:space:]]*true' /run/postmerkos/hardware-controls.json 2>/dev/null; then
+        [ -s "$BUTTON_PID" ] || exit 1
+        kill -0 "$(cat "$BUTTON_PID")" 2>/dev/null || exit 1
+    fi
+    ;;
   *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
 esac

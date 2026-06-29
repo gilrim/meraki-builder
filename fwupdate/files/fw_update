@@ -431,15 +431,15 @@ if command -v postmerkos-ledctl >/dev/null 2>&1; then
     if [ "$LED_ACQUIRED" = 1 ] && [ -r /run/postmerkos/led-capabilities.env ]; then
         . /run/postmerkos/led-capabilities.env
     fi
-    if [ "${LED_ACQUIRED:-0}" = 1 ] && [ "${PORT_LED_AVAILABLE:-0}" = 1 ] && [ "${PORT_LED_VERIFIED:-0}" = 1 ]; then
-        LED_HANDLER=${PORT_LED_HANDLER:-/click/sw0_ctrl/poe_led_state}
-        LED_PORTS=$(postmerkosctl status 2>/dev/null | sed -n 's/.*"copper_ports"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | sed -n '1p')
-    elif [ "${STATUS_LED_AVAILABLE:-0}" = 1 ] && [ "${STATUS_LED_VERIFIED:-0}" = 1 ]; then
+    if [ "${LED_ACQUIRED:-0}" = 1 ] && [ "${STATUS_LED_AVAILABLE:-0}" = 1 ] && [ "${STATUS_LED_VERIFIED:-0}" = 1 ]; then
         STATUS_LED_GREEN_PATH=${STATUS_LED_GREEN_PATH:-}
         STATUS_LED_ORANGE_PATH=${STATUS_LED_ORANGE_PATH:-}
-        STATUS_LED_PROTOCOL=${STATUS_LED_PROTOCOL:-named-state}
+        STATUS_LED_PROTOCOL=${STATUS_LED_PROTOCOL:-plain-bool}
         STATUS_LED_PATH=${STATUS_LED_GREEN_PATH:-${STATUS_LED_PATH:-}}
         STATUS_LED_ACTIVE=${STATUS_LED_ACTIVE:-1}
+    elif [ "${LED_ACQUIRED:-0}" = 1 ] && [ "${PORT_LED_AVAILABLE:-0}" = 1 ] && [ "${PORT_LED_VERIFIED:-0}" = 1 ]; then
+        LED_HANDLER=${PORT_LED_HANDLER:-/click/sw0_ctrl/poe_led_state}
+        LED_PORTS=$(postmerkosctl status 2>/dev/null | sed -n 's/.*"copper_ports"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | sed -n '1p')
     fi
 fi
 status_write starting acknowledged 34 "Starting firmware update; management services will stop shortly"
@@ -551,12 +551,13 @@ if [ "$FULL_FLASH" -eq 1 ]; then
         --kernel-mtd "/dev/$KERNEL_MTD" \
         --kernel-backup "$KERNEL_BACKUP"
 fi
-if [ -n "$LED_HANDLER" ] && [ "${LED_PORTS:-0}" -gt 0 ] 2>/dev/null; then
-    set -- "$@" --led-handler "$LED_HANDLER" --led-ports "$LED_PORTS"
-elif [ -n "$STATUS_LED_GREEN_PATH" ] && [ -n "$STATUS_LED_ORANGE_PATH" ]; then
+if [ -n "$STATUS_LED_GREEN_PATH" ] && [ -n "$STATUS_LED_ORANGE_PATH" ]; then
     set -- "$@" --status-led-backend click-dual-state \
         --status-led-green "$STATUS_LED_GREEN_PATH" \
-        --status-led-orange "$STATUS_LED_ORANGE_PATH"
+        --status-led-orange "$STATUS_LED_ORANGE_PATH" \
+        --status-led-protocol "${STATUS_LED_PROTOCOL:-plain-bool}"
+elif [ -n "$LED_HANDLER" ] && [ "${LED_PORTS:-0}" -gt 0 ] 2>/dev/null; then
+    set -- "$@" --led-handler "$LED_HANDLER" --led-ports "$LED_PORTS"
 elif [ -n "$STATUS_LED_PATH" ]; then
     set -- "$@" --status-led "$STATUS_LED_PATH" --status-led-active "$STATUS_LED_ACTIVE"
 fi

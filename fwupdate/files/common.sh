@@ -372,10 +372,10 @@ led_detect() {
     if [ -r /run/postmerkos/led-capabilities.env ]; then
         . /run/postmerkos/led-capabilities.env
     fi
-    if [ "${PORT_LED_AVAILABLE:-0}" = 1 ] && [ "${PORT_LED_VERIFIED:-0}" = 1 ]; then
+    if [ "${STATUS_LED_AVAILABLE:-0}" = 1 ] && [ "${STATUS_LED_VERIFIED:-0}" = 1 ]; then
+        FWUPDATE_LED_MODE=chassis-status-led
+    elif [ "${PORT_LED_AVAILABLE:-0}" = 1 ] && [ "${PORT_LED_VERIFIED:-0}" = 1 ]; then
         FWUPDATE_LED_MODE=binary-poe-ports
-    elif [ "${STATUS_LED_AVAILABLE:-0}" = 1 ] && [ "${STATUS_LED_VERIFIED:-0}" = 1 ]; then
-        FWUPDATE_LED_MODE=binary-status-led
     else
         FWUPDATE_LED_MODE=unavailable
     fi

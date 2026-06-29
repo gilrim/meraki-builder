@@ -51,7 +51,7 @@ begins destructive writing.
 
 The updater writes machine-readable status and logs under `/run/fwupdate`,
 direct serial progress, capability-aware LED state, and a bounded persistent
-record under `/config/postmerkos/update-history`. Post-boot finalization compares
+record under `/config/postmerkos/update-history`. The updater prefers an exact-model verified chassis indicator: alternating green/orange for progress, triple orange for failure or rollback, and solid green after successful flash verification. Port LEDs are a fallback only. Post-boot finalization compares
 the installed release identity with the pending record and reports success,
 interruption, failure, or an indeterminate result rather than silently assuming
 success.

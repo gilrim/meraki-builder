@@ -206,6 +206,27 @@ struct json_object *get_status(void) {
                          json_object_new_boolean(access(default_marker, F_OK) == 0));
   json_object_object_add(root, "security", security);
   struct json_object *hardware_policy = json_object_new_object();
+  struct json_object *hardware_controls = json_object_from_file(
+      "/run/postmerkos/hardware-controls.json");
+  if (hardware_controls &&
+      json_object_is_type(hardware_controls, json_type_object)) {
+    struct json_object *leds = NULL;
+    struct json_object *status_led = NULL;
+    if (json_object_object_get_ex(hardware_controls, "leds", &leds) &&
+        json_object_is_type(leds, json_type_object) &&
+        json_object_object_get_ex(leds, "status", &status_led) &&
+        json_object_is_type(status_led, json_type_object))
+      json_object_object_add(hardware_policy, "status_led",
+                             json_object_get(status_led));
+    struct json_object *profile_exact = NULL;
+    if (json_object_object_get_ex(hardware_controls, "profile_exact",
+                                  &profile_exact))
+      json_object_object_add(hardware_policy, "profile_exact",
+                             json_object_get(profile_exact));
+    json_object_put(hardware_controls);
+  } else if (hardware_controls) {
+    json_object_put(hardware_controls);
+  }
   struct json_object *button_status = json_object_from_file(
       "/run/postmerkos/button-status.json");
   if (button_status && json_object_is_type(button_status, json_type_object)) {
@@ -216,7 +237,7 @@ struct json_object *get_status(void) {
         (!strcmp(json_object_get_string(state), "unidentified") ||
          !strcmp(json_object_get_string(state), "unavailable")))
       add_error(errors, "reset-button",
-                "physical reset-button input has not been mapped; run postmerkos-hwprobe reset-button --watch");
+                "verified physical reset-button input is unavailable; inspect /run/postmerkos/hardware.log and /run/postmerkos/buttond.log");
   } else if (button_status) {
     json_object_put(button_status);
   }

@@ -48,7 +48,11 @@ static unsigned int led_ports = 0;
 static const char *status_led_path = NULL;
 static const char *status_led_green = NULL;
 static const char *status_led_orange = NULL;
-static bool status_led_named_state = false;
+enum status_led_protocol {
+    STATUS_LED_PLAIN_BOOL = 0,
+    STATUS_LED_NAMED_STATE = 1
+};
+static enum status_led_protocol status_led_protocol = STATUS_LED_PLAIN_BOOL;
 static int status_led_active = 1;
 static pid_t status_led_animator = -1;
 static FILE *log_file;
@@ -83,23 +87,34 @@ static void write_led_path(const char *path, int active) {
     if (!path || !*path) return;
     FILE *led = fopen(path, "w");
     if (!led) return;
-    if (status_led_named_state) fprintf(led, "STATE %d\n", active ? 1 : 0);
-    else fprintf(led, "%d\n", active ? status_led_active : !status_led_active);
+    int value = active ? status_led_active : !status_led_active;
+    if (status_led_protocol == STATUS_LED_NAMED_STATE)
+        fprintf(led, "STATE %d\n", value);
+    else
+        fprintf(led, "%d\n", value);
     fclose(led);
 }
 
-static void write_status_led(int active) {
+static void write_status_colour(bool green, bool orange) {
     if (status_led_green && status_led_orange) {
+        /* GPIO23 is orange-dominant, so always clear it before selecting green. */
         write_led_path(status_led_orange, 0);
-        write_led_path(status_led_green, active);
-    } else write_led_path(status_led_path, active);
+        write_led_path(status_led_green, green ? 1 : 0);
+        if (orange) {
+            write_led_path(status_led_green, 0);
+            write_led_path(status_led_orange, 1);
+        }
+    } else {
+        write_led_path(status_led_path, green || orange ? 1 : 0);
+    }
+}
+
+static void write_status_led(int active) {
+    write_status_colour(active != 0, false);
 }
 
 static void write_error_led(int active) {
-    if (status_led_green && status_led_orange) {
-        write_led_path(status_led_green, 0);
-        write_led_path(status_led_orange, active);
-    } else write_status_led(active);
+    write_status_colour(false, active != 0);
 }
 
 static void read_animation_state(int *progress, bool *error) {
@@ -118,7 +133,8 @@ static void read_animation_state(int *progress, bool *error) {
         if (value > 100) value = 100;
         *progress = (int)value;
     }
-    *error = strstr(buffer, "\"state\":\"error\"") != NULL;
+    *error = strstr(buffer, "\"state\":\"error\"") != NULL ||
+             strstr(buffer, "\"state\":\"rollback\"") != NULL;
 }
 
 static void animate_status_led(void) {
@@ -134,12 +150,18 @@ static void animate_status_led(void) {
             sleep_milliseconds(1000);
             continue;
         }
-        unsigned int cycle = 2000U - (1200U * (unsigned int)progress / 100U);
-        unsigned int on = 500U - (200U * (unsigned int)progress / 100U);
-        write_status_led(1);
-        sleep_milliseconds(on);
-        write_status_led(0);
-        sleep_milliseconds(cycle - on);
+        /* Alternate the two verified chassis colors.  The cycle accelerates
+         * as flash progress approaches completion, while preserving a short
+         * all-off boundary so the transition is visually unambiguous. */
+        unsigned int half_cycle = 650U - (400U * (unsigned int)progress / 100U);
+        write_status_colour(true, false);
+        sleep_milliseconds(half_cycle);
+        write_status_colour(false, false);
+        sleep_milliseconds(75);
+        write_status_colour(false, true);
+        sleep_milliseconds(half_cycle);
+        write_status_colour(false, false);
+        sleep_milliseconds(75);
     }
 }
 
@@ -621,7 +643,9 @@ static void usage(FILE *f) {
         "  --status-file FILE --log-file FILE\n"
         "  --source TEXT --firmware NAME --target-version VERSION\n"
         "  --led-handler PATH --led-ports COUNT\n"
-        "  --status-led PATH [--status-led-active 0|1] --no-reboot\n");
+        "  --status-led PATH [--status-led-active 0|1]\n"
+        "  --status-led-green PATH --status-led-orange PATH\n"
+        "  --status-led-protocol plain-bool|named-state --no-reboot\n");
 }
 
 int main(int argc, char **argv) {
@@ -672,7 +696,18 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--led-ports") && ++i < argc) led_ports = (unsigned int)strtoul(argv[i], NULL, 10);
         else if (!strcmp(argv[i], "--status-led") && ++i < argc) status_led_path = argv[i];
         else if (!strcmp(argv[i], "--status-led-backend") && ++i < argc) {
-            status_led_named_state = !strcmp(argv[i], "click-dual-state");
+            /* Retained for command-line compatibility; protocol is explicit. */
+            (void)argv[i];
+        }
+        else if (!strcmp(argv[i], "--status-led-protocol") && ++i < argc) {
+            if (!strcmp(argv[i], "plain-bool"))
+                status_led_protocol = STATUS_LED_PLAIN_BOOL;
+            else if (!strcmp(argv[i], "named-state"))
+                status_led_protocol = STATUS_LED_NAMED_STATE;
+            else {
+                fprintf(stderr, "fwflash: unsupported status LED protocol: %s\n", argv[i]);
+                return 2;
+            }
         }
         else if (!strcmp(argv[i], "--status-led-green") && ++i < argc) status_led_green = argv[i];
         else if (!strcmp(argv[i], "--status-led-orange") && ++i < argc) status_led_orange = argv[i];

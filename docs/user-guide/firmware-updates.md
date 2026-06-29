@@ -56,6 +56,10 @@ interrupted or indeterminate, not as success.
 The rootfs is single-bank. Power loss during erase or program can require
 external recovery even when configuration preservation was selected.
 
+## Chassis indication
+
+On an exact model with hardware-verified dual status handlers, the chassis LED alternates green and orange after the upgrade is accepted and preparation/write progress is active and accelerates toward completion. A failure or rollback uses a repeating triple-orange pulse. Successful flash verification leaves the LED solid green until reboot. Verified port LEDs are used only when no verified chassis indicator is available. The pattern is advisory; serial output and `/run/fwupdate/status.json` remain authoritative.
+
 ## Pre-kernel recovery
 
 When Linux cannot run but the UART-capable loader still starts, use the
