@@ -9,14 +9,20 @@ cat > "$TMP/host/sbin/mkfs.jffs2" <<'MOCK'
 #!/bin/sh
 set -eu
 pad= output=
+root=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --pad=*) pad=${1#--pad=} ;;
     -o) output=$2; shift ;;
+    -r) root=$2; shift ;;
   esac
   shift
 done
-[ -n "$pad" ] && [ -n "$output" ]
+[ -n "$pad" ] && [ -n "$output" ] && [ -n "$root" ]
+[ "$(stat -c %a "$root/.upper/etc")" = 755 ]
+[ "$(stat -c %a "$root/.upper/root")" = 700 ]
+[ "$(stat -c %a "$root/.work/etc")" = 700 ]
+[ "$(stat -c %a "$root/.work/root")" = 700 ]
 truncate -s "$pad" "$output"
 MOCK
 cat > "$TMP/bin/readelf" <<'MOCK'

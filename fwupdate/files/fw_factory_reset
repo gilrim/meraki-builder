@@ -1,11 +1,16 @@
 #!/bin/sh
 set -eu
 . /usr/lib/fwupdate/common.sh
+
 YES=0
 [ "${1:-}" = --yes ] && YES=1
 [ "$(id -u)" -eq 0 ] || fw_die 'factory reset must run as root'
 check_board
 check_mtd_layout
+for command in mkfs.jffs2 dd cp umount mountpoint fuser killall; do
+    need_cmd "$command"
+done
+
 if [ "$YES" -ne 1 ]; then
     printf 'Type FACTORY-RESET to erase persistent settings and reboot: '
     read -r answer
@@ -13,23 +18,36 @@ if [ "$YES" -ne 1 ]; then
 fi
 
 LED_ACQUIRED=0
+QUIESCED=0
+WORK="/run/fwupdate/factory-reset.$$"
+OVERLAY_TREE="$WORK/overlay-root"
+OVERLAY_IMAGE="$WORK/factory-defaults.jffs2"
+OVERLAY_BACKUP="$WORK/overlay.backup"
+FLASH_HELPER="$WORK/fwflash"
+
 # A button-initiated reset arrives with the reset LED already owned by
-# postmerkos-buttond. Adopt that ownership so every failure path can clean it up.
-if command -v postmerkos-ledctl >/dev/null 2>&1 && [ "$(postmerkos-ledctl status 2>/dev/null || true)" = reset ]; then
+# postmerkos-buttond. Adopt that ownership so every pre-handoff failure path
+# can clean it up.
+if command -v postmerkos-ledctl >/dev/null 2>&1 &&
+   [ "$(postmerkos-ledctl status 2>/dev/null || true)" = reset ]; then
     LED_ACQUIRED=1
 fi
+
 cleanup_reset() {
     rc=$?
     trap - EXIT HUP INT TERM
     release_lock
+    rm -rf "$WORK" 2>/dev/null || true
     if [ "$LED_ACQUIRED" = 1 ] && command -v postmerkos-ledctl >/dev/null 2>&1; then
         if [ "$rc" -ne 0 ]; then
             postmerkos-ledctl error >/dev/null 2>&1 || true
             sleep 3
         fi
-        # Do not leave a reset animator or stale ownership behind when reset
-        # aborts (for example, if an updater won the lock race).
         postmerkos-ledctl release reset >/dev/null 2>&1 || true
+    fi
+    if [ "$rc" -ne 0 ] && [ "$QUIESCED" = 1 ]; then
+        sync
+        reboot -f >/dev/null 2>&1 || echo b > /proc/sysrq-trigger
     fi
     exit "$rc"
 }
@@ -41,26 +59,137 @@ trap 'exit 143' TERM
 # The common lock closes the race between the button daemon's interlock check
 # and a firmware updater starting at the same instant.
 acquire_lock
-killall postmerkos-buttond >/dev/null 2>&1 || true
+mkdir -p "$WORK"
+chmod 0700 "$WORK"
+# The caller may have launched the reset from /root or another overlay-backed
+# directory. Move into tmpfs before any fuser/umount operation so the reset
+# process cannot make its own target mount busy or terminate itself.
+cd "$WORK"
+
 if command -v postmerkos-ledctl >/dev/null 2>&1; then
     postmerkos-ledctl acquire reset >/dev/null 2>&1 && LED_ACQUIRED=1 || true
-    [ "$LED_ACQUIRED" = 1 ] && postmerkos-ledctl reset-progress 5 >/dev/null 2>&1 || true
+    [ "$LED_ACQUIRED" = 1 ] &&
+        postmerkos-ledctl reset-progress 5 >/dev/null 2>&1 || true
 fi
-status_write resetting prepare 5 'Factory reset accepted; persistent JFFS2 settings will be erased'
-sync
-for proc in configd uhttpd chronyd dropbear syslogd klogd crond dhcpclient; do
+
+status_write resetting prepare 5 \
+    'Factory reset accepted; preparing a bootable factory-default overlay'
+overlay_tree_prepare "$OVERLAY_TREE"
+build_clean_overlay_image "$OVERLAY_TREE" "$OVERLAY_IMAGE"
+cp /usr/libexec/fwupdate/fwflash "$FLASH_HELPER" ||
+    fw_die 'failed to stage the RAM-resident flashing helper'
+chmod 0700 "$FLASH_HELPER"
+
+# Stop the sampler only after the factory image and static helper are safely
+# resident in tmpfs. Keep the reset animator alive while all other userspace is
+# quiesced, then hand the verified LED paths to the static flasher.
+killall postmerkos-buttond >/dev/null 2>&1 || true
+[ "$LED_ACQUIRED" = 1 ] &&
+    postmerkos-ledctl reset-progress 100 >/dev/null 2>&1 || true
+STATUS_LED_GREEN_PATH=
+STATUS_LED_ORANGE_PATH=
+STATUS_LED_PROTOCOL=plain-bool
+STATUS_LED_ACTIVE=1
+if [ -r /run/postmerkos/led-capabilities.env ]; then
+    . /run/postmerkos/led-capabilities.env
+fi
+LED_ANIMATOR_PID=$(cat /run/postmerkos/led-animator.pid 2>/dev/null || true)
+case "$LED_ANIMATOR_PID" in *[!0-9]*|'') LED_ANIMATOR_PID= ;; esac
+if [ -n "$LED_ANIMATOR_PID" ] && [ -r "/proc/$LED_ANIMATOR_PID/cmdline" ]; then
+    animator_command=$(tr '\000' ' ' <"/proc/$LED_ANIMATOR_PID/cmdline" 2>/dev/null || true)
+    case "$animator_command" in *postmerkos-ledctl*'_animate'*) : ;; *) LED_ANIMATOR_PID= ;; esac
+else
+    LED_ANIMATOR_PID=
+fi
+
+status_write resetting handoff 25 \
+    'Factory-default image prepared; stopping management services'
+trap '' HUP
+for proc in configd uhttpd chronyd chrony syslogd klogd crond ntpd dhcpclient; do
     killall "$proc" >/dev/null 2>&1 || true
 done
+# Stop SSH last. The reset script ignores SIGHUP and continues from tmpfs.
+killall dropbear >/dev/null 2>&1 || true
 sleep 1
-umount /root >/dev/null 2>&1 || true
-umount /etc >/dev/null 2>&1 || true
-umount /overlay >/dev/null 2>&1 || true
-[ "$LED_ACQUIRED" = 1 ] && postmerkos-ledctl reset-progress 50 >/dev/null 2>&1 || true
-status_write resetting erase 50 'Erasing persistent JFFS2 configuration partition'
-flash_erase "/dev/$OVERLAY_MTD" 0 0 >/dev/null || fw_die 'JFFS2 erase failed'
-[ "$LED_ACQUIRED" = 1 ] && postmerkos-ledctl reset-progress 100 >/dev/null 2>&1 || true
-status_write success reboot 100 'Persistent settings erased; rebooting into factory defaults'
-command -v postmerkos-ledctl >/dev/null 2>&1 && postmerkos-ledctl success >/dev/null 2>&1 || true
+
+# The configd supervisor and other background helpers can otherwise respawn
+# writers while /etc and /overlay are being detached. Quiesce every remaining
+# userspace process except PID 1, this RAM-resident reset process, and the one
+# reset LED animator that remains visible through backup.
+is_led_animation_process() {
+    candidate=$1
+    [ -n "$LED_ANIMATOR_PID" ] || return 1
+    while [ -n "$candidate" ] && [ "$candidate" -gt 1 ] 2>/dev/null; do
+        [ "$candidate" = "$LED_ANIMATOR_PID" ] && return 0
+        candidate=$(awk '/^PPid:/ { print $2; exit }' "/proc/$candidate/status" 2>/dev/null || true)
+    done
+    return 1
+}
+quiesce_remaining_userspace() {
+    signal=$1
+    for procdir in /proc/[0-9]*; do
+        pid=${procdir#/proc/}
+        case "$pid" in 1|$$) continue ;; esac
+        # Preserve the reset animator and its current sleep child. The child is
+        # identified by ancestry on each pass, so newly spawned delay helpers
+        # cannot be mistaken for unrelated writers.
+        is_led_animation_process "$pid" && continue
+        kill "-$signal" "$pid" >/dev/null 2>&1 || true
+    done
+}
+quiesce_remaining_userspace TERM
+sleep 1
+quiesce_remaining_userspace KILL
+
+unmount_one() {
+    target=$1
+    mountpoint -q "$target" 2>/dev/null || return 0
+    fuser -km "$target" >/dev/null 2>&1 || true
+    umount "$target" >/dev/null 2>&1 || fw_die "could not unmount $target"
+}
+unmount_one /root
+unmount_one /etc
+unmount_one /overlay
+QUIESCED=1
 sync
+
+status_write resetting backup 30 \
+    'Backing up the unmounted persistent settings partition'
+if ! dd if="/dev/$OVERLAY_MTD" of="$OVERLAY_BACKUP" bs=1M count=5 2>/dev/null ||
+   [ "$(file_size "$OVERLAY_BACKUP" 2>/dev/null || echo 0)" -ne "$FWUPDATE_OVERLAY_SIZE" ]; then
+    fw_die 'could not back up the JFFS2 configuration partition'
+fi
+sync
+
+status_write resetting flash 35 \
+    'Writing and verifying the seeded factory-default JFFS2 image'
+
+# The helper erases, writes, reads back, and verifies the complete partition.
+# On any failure it restores and verifies the raw backup before rebooting.
+# Transfer LED ownership from the shell animator to the static helper only at
+# the final handoff so the indicator never disappears during backup.
+if [ "$LED_ACQUIRED" = 1 ] && command -v postmerkos-ledctl >/dev/null 2>&1; then
+    postmerkos-ledctl release reset >/dev/null 2>&1 || true
+    LED_ACQUIRED=0
+fi
+set -- "$FLASH_HELPER" \
+    --factory-reset \
+    --overlay-image "$OVERLAY_IMAGE" \
+    --overlay-mtd "/dev/$OVERLAY_MTD" \
+    --overlay-backup "$OVERLAY_BACKUP" \
+    --status-file "$FWUPDATE_STATUS_FILE" \
+    --log-file /run/fwupdate/factory-reset-flash.log \
+    --source physical-reset \
+    --firmware factory-defaults \
+    --target-version "${FWUPDATE_CURRENT_VERSION:-current}"
+if [ "${STATUS_LED_AVAILABLE:-0}" = 1 ] && [ "${STATUS_LED_VERIFIED:-0}" = 1 ] &&
+   [ -n "$STATUS_LED_GREEN_PATH" ] && [ -n "$STATUS_LED_ORANGE_PATH" ]; then
+    set -- "$@" \
+        --status-led-backend click-dual-state \
+        --status-led-green "$STATUS_LED_GREEN_PATH" \
+        --status-led-orange "$STATUS_LED_ORANGE_PATH" \
+        --status-led-protocol "${STATUS_LED_PROTOCOL:-plain-bool}" \
+        --status-led-active "${STATUS_LED_ACTIVE:-1}"
+fi
 trap - EXIT HUP INT TERM
-reboot -f >/dev/null 2>&1 || echo b > /proc/sysrq-trigger
+exec "$@"

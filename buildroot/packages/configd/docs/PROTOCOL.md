@@ -74,6 +74,14 @@ A successful response includes username, UID, role, and capabilities. The comple
 
 Returns current best-effort device state. Missing sensors or Click handlers appear in `data.errors`; the rest of the status remains available.
 
+### `reset_button_status`
+
+```json
+{"id":"3b","type":"reset_button_status"}
+```
+
+Returns the lightweight live physical-reset object and current LED owner. The browser may poll this method at 500 ms without rebuilding the complete system inventory. Fields include debounced `pressed`, `armed`, `countdown_active`, `progress`, `led_indication_active`, and `last_event`.
+
 ### `get_config`
 
 ```json
@@ -114,6 +122,7 @@ Local values use `HH:MM:SS - DD:MM:YYYY`, are interpreted through the saved stan
 | Request | Purpose | Required capability |
 |---|---|---|
 | `get_status` | Read live status and system inventory | `status.read` |
+| `reset_button_status` | Read lightweight debounced reset-button/LED state | `status.read` |
 | `get_config` | Read desired switch configuration | `config.read` |
 | `config` | Apply a validated partial configuration delta | capability selected from changed paths |
 | `replace_config` | Validate/apply a complete restored configuration | `config.restore` |

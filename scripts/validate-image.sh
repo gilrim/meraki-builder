@@ -30,6 +30,7 @@ unsquashfs -quiet -d "$VERIFY_DIR" "$ARTIFACTS_DIR/rootfs.squashfs"
 
 required=(
   etc/fstab
+  etc/init.d/S01postmerkos-overlay
   etc/init.d/S08kmods
   etc/init.d/S09clickinit
   etc/init.d/S10clickconfig
@@ -43,6 +44,7 @@ required=(
   bin/fw_update_tftp
   bin/fw_update_sftp
   bin/fw_update_status
+  bin/fw_factory_reset
   usr/lib/fwupdate/common.sh
   usr/libexec/fwupdate/fwflash
   etc/fwupdate/sources.conf
@@ -94,6 +96,13 @@ fi
 
 file "$VERIFY_DIR/usr/libexec/fwupdate/fwflash" | grep -i 'statically linked' >/dev/null || \
   die "Firmware updater helper is not statically linked"
+
+grep -Fq 'build_clean_overlay_image' "$VERIFY_DIR/bin/fw_factory_reset" || \
+  die "Factory reset does not build a seeded JFFS2 image"
+! grep -Fq 'flash_erase' "$VERIFY_DIR/bin/fw_factory_reset" || \
+  die "Factory reset still performs an unsafe raw JFFS2 erase"
+grep -Fq 'temporary recovery overlay' "$VERIFY_DIR/etc/init.d/S01postmerkos-overlay" || \
+  die "Early overlay recovery contract is missing"
 
 rootfs_has_command() {
   local command="$1" dir

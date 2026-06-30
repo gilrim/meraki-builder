@@ -56,6 +56,10 @@ rootfs_percent="$(awk -v used="$rootfs_size" -v max="$ROOTFS_REGION" 'BEGIN { pr
 rm -rf "$WORK"
 mkdir -p "$WORK/jffs2-root/.upper/etc" "$WORK/jffs2-root/.work/etc" \
     "$WORK/jffs2-root/.upper/root" "$WORK/jffs2-root/.work/root"
+chmod 0700 "$WORK/jffs2-root/.upper" "$WORK/jffs2-root/.work" \
+    "$WORK/jffs2-root/.work/etc" "$WORK/jffs2-root/.upper/root" \
+    "$WORK/jffs2-root/.work/root"
+chmod 0755 "$WORK/jffs2-root/.upper/etc"
 
 # The selected meraki-redboot source release owns the payload format. Its packer
 # pads the compressed kernel to 32 bytes and calculates IEEE CRC-32 over the

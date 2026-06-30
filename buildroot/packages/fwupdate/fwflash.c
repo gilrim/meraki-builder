@@ -57,6 +57,8 @@ static int status_led_active = 1;
 static pid_t status_led_animator = -1;
 static FILE *log_file;
 static bool reboot_after = true;
+static bool overlay_only_operation = false;
+static bool factory_reset_operation = false;
 
 static void json_escape(FILE *f, const char *s) {
     const unsigned char *p = (const unsigned char *)(s ? s : "");
@@ -150,18 +152,35 @@ static void animate_status_led(void) {
             sleep_milliseconds(1000);
             continue;
         }
-        /* Alternate the two verified chassis colors.  The cycle accelerates
-         * as flash progress approaches completion, while preserving a short
-         * all-off boundary so the transition is visually unambiguous. */
-        unsigned int half_cycle = 650U - (400U * (unsigned int)progress / 100U);
-        write_status_colour(true, false);
-        sleep_milliseconds(half_cycle);
-        write_status_colour(false, false);
-        sleep_milliseconds(75);
-        write_status_colour(false, true);
-        sleep_milliseconds(half_cycle);
-        write_status_colour(false, false);
-        sleep_milliseconds(75);
+        if (factory_reset_operation) {
+            /* Continue the same unmistakable orange reset indication after
+             * normal userspace has been quiesced. The cadence accelerates
+             * from about 2 Hz to about 8 Hz with verified flash progress. */
+            unsigned int cycle = 500U - (380U * (unsigned int)progress / 100U);
+            if (cycle < 120U) cycle = 120U;
+            unsigned int on = cycle / 2U;
+            if (on < 60U) on = 60U;
+            unsigned int off = cycle - on;
+            if (off < 60U) off = 60U;
+            write_status_colour(false, true);
+            sleep_milliseconds(on);
+            write_status_colour(false, false);
+            sleep_milliseconds(off);
+        } else {
+            /* Alternate the two verified chassis colors.  The cycle
+             * accelerates as flash progress approaches completion, while
+             * preserving a short all-off boundary for clear transitions. */
+            unsigned int half_cycle = 650U -
+                (400U * (unsigned int)progress / 100U);
+            write_status_colour(true, false);
+            sleep_milliseconds(half_cycle);
+            write_status_colour(false, false);
+            sleep_milliseconds(75);
+            write_status_colour(false, true);
+            sleep_milliseconds(half_cycle);
+            write_status_colour(false, false);
+            sleep_milliseconds(75);
+        }
     }
 }
 
@@ -618,13 +637,20 @@ static void rollback_and_reboot(const struct image_job *loader,
 
     if (loader_ok && kernel_ok && root_ok && overlay_ok) {
         write_status("rollback", "reboot", 100,
-                     "Upgrade failed; all changed partitions were restored and verified. Rebooting.");
+                     factory_reset_operation
+                         ? "Factory reset failed; the previous persistent settings were restored and verified. Rebooting."
+                         : "Upgrade failed; all changed partitions were restored and verified. Rebooting.");
     } else {
         char msg[640];
-        snprintf(msg, sizeof(msg),
-                 "Upgrade and rollback were not fully successful (bootloader=%s, kernel=%s, rootfs=%s, overlay=%s). Hardware recovery may be required; rebooting.",
-                 loader_ok ? "ok" : "failed", kernel_ok ? "ok" : "failed",
-                 root_ok ? "ok" : "failed", overlay_ok ? "ok" : "failed");
+        if (factory_reset_operation)
+            snprintf(msg, sizeof(msg),
+                     "Factory reset and restoration were not fully successful (overlay=%s). Hardware recovery may be required; rebooting.",
+                     overlay_ok ? "ok" : "failed");
+        else
+            snprintf(msg, sizeof(msg),
+                     "Upgrade and rollback were not fully successful (bootloader=%s, kernel=%s, rootfs=%s, overlay=%s). Hardware recovery may be required; rebooting.",
+                     loader_ok ? "ok" : "failed", kernel_ok ? "ok" : "failed",
+                     root_ok ? "ok" : "failed", overlay_ok ? "ok" : "failed");
         write_status("error", "recovery_required", 100, msg);
         show_error_pattern();
     }
@@ -636,6 +662,8 @@ static void rollback_and_reboot(const struct image_job *loader,
 static void usage(FILE *f) {
     fprintf(f,
         "usage: fwflash --rootfs-image FILE --rootfs-mtd DEV [options]\n"
+        "       fwflash --overlay-only --overlay-image FILE --overlay-mtd DEV --overlay-backup FILE [options]\n"
+        "  --factory-reset (implies --overlay-only)\n"
         "  --rootfs-backup FILE\n"
         "  --overlay-image FILE --overlay-mtd DEV --overlay-backup FILE\n"
         "  --kernel-image FILE --kernel-mtd DEV --kernel-backup FILE\n"
@@ -714,31 +742,52 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--status-led-active") && ++i < argc) {
             status_led_active = atoi(argv[i]) ? 1 : 0;
         }
+        else if (!strcmp(argv[i], "--overlay-only")) overlay_only_operation = true;
+        else if (!strcmp(argv[i], "--factory-reset")) {
+            factory_reset_operation = true;
+            overlay_only_operation = true;
+        }
         else if (!strcmp(argv[i], "--no-reboot")) reboot_after = false;
         else if (!strcmp(argv[i], "--help")) { usage(stdout); return 0; }
         else { usage(stderr); return 2; }
     }
-    if (!root.image || !root.device || !root.rollback) {
-        usage(stderr);
+    bool have_root = root.image || root.device || root.rollback;
+    bool have_overlay = overlay.image || overlay.device || overlay.rollback;
+    if (have_root && (!root.image || !root.device || !root.rollback)) {
+        fprintf(stderr, "fwflash: rootfs image, device and backup must be supplied together\n");
         return 2;
     }
-    if ((overlay.image && (!overlay.device || !overlay.rollback)) ||
-        (!overlay.image && (overlay.device || overlay.rollback))) {
+    if (have_overlay && (!overlay.image || !overlay.device || !overlay.rollback)) {
         fprintf(stderr, "fwflash: overlay image, device and backup must be supplied together\n");
         return 2;
     }
     bool have_loader = loader.image || loader.device || loader.rollback;
     bool have_kernel = kernel.image || kernel.device || kernel.rollback;
-    if (have_loader != have_kernel ||
-        (have_loader && (!loader.image || !loader.device || !loader.rollback ||
-                         !kernel.image || !kernel.device || !kernel.rollback ||
-                         !overlay.image))) {
-        fprintf(stderr, "fwflash: full flash requires loader, kernel, rootfs, and overlay image/device/backup sets\n");
-        return 2;
+    if (overlay_only_operation) {
+        if (!have_overlay || have_root || have_loader || have_kernel) {
+            fprintf(stderr, "fwflash: overlay-only operation requires exactly one complete overlay image/device/backup set\n");
+            return 2;
+        }
+    } else {
+        if (!have_root) {
+            usage(stderr);
+            return 2;
+        }
+        if (have_loader != have_kernel ||
+            (have_loader && (!loader.image || !loader.device || !loader.rollback ||
+                             !kernel.image || !kernel.device || !kernel.rollback ||
+                             !have_overlay))) {
+            fprintf(stderr, "fwflash: full flash requires loader, kernel, rootfs, and overlay image/device/backup sets\n");
+            return 2;
+        }
     }
-    bool full_flash = have_loader && have_kernel;
-    status_flash_scope = full_flash ? "full" : "system";
-    if (full_flash) {
+    bool full_flash = !overlay_only_operation && have_loader && have_kernel;
+    status_flash_scope = factory_reset_operation ? "factory-reset"
+                       : overlay_only_operation ? "overlay"
+                       : full_flash ? "full" : "system";
+    if (overlay_only_operation) {
+        overlay.progress_start = 5; overlay.progress_end = 95;
+    } else if (full_flash) {
         overlay.progress_start = 5; overlay.progress_end = 25;
         root.progress_start = 28; root.progress_end = 65;
     }
@@ -756,7 +805,7 @@ int main(int argc, char **argv) {
                       jobs[i]->label, jobs[j]->label);
         }
     }
-    preflight_job(&root);
+    if (root.image) preflight_job(&root);
     if (overlay.image) preflight_job(&overlay);
     if (full_flash) { preflight_job(&kernel); preflight_job(&loader); }
     ensure_overlays_unmounted();
@@ -775,6 +824,19 @@ int main(int argc, char **argv) {
                                 &root, false, &overlay, true, reason);
         }
         overlay_changed = true;
+    }
+
+    if (overlay_only_operation) {
+        write_status("success", reboot_after ? "reboot" : "complete", 100,
+                     factory_reset_operation
+                         ? (reboot_after ? "Factory-default overlay verified; rebooting"
+                                         : "Factory-default overlay verified")
+                         : (reboot_after ? "Overlay verified; rebooting"
+                                         : "Overlay verified"));
+        stop_status_led_animator(true);
+        if (!reboot_after) return 0;
+        reboot_system();
+        fatal("reboot", "reboot failed: %s", strerror(errno));
     }
 
     memset(why, 0, sizeof(why));

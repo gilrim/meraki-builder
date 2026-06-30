@@ -187,6 +187,40 @@ static void add_clients(struct json_object *root, struct json_object *errors) {
   fclose(file);
 }
 
+struct json_object *reset_button_status_json(void) {
+  struct json_object *root = json_object_new_object();
+  const char *status_path = getenv("POSTMERKOS_BUTTON_STATUS");
+  if (!status_path || !*status_path)
+    status_path = "/run/postmerkos/button-status.json";
+  struct json_object *button = json_object_from_file(status_path);
+  if (!button || !json_object_is_type(button, json_type_object)) {
+    if (button) json_object_put(button);
+    button = json_object_new_object();
+    json_object_object_add(button, "state", json_object_new_string("unavailable"));
+    json_object_object_add(button, "available", json_object_new_boolean(false));
+    json_object_object_add(button, "pressed", json_object_new_boolean(false));
+    json_object_object_add(button, "armed", json_object_new_boolean(false));
+    json_object_object_add(button, "countdown_active", json_object_new_boolean(false));
+    json_object_object_add(button, "led_indication_active", json_object_new_boolean(false));
+    json_object_object_add(button, "detail",
+                           json_object_new_string("button status has not been published"));
+  }
+  json_object_object_add(root, "reset_button", button);
+
+  const char *owner_path = getenv("POSTMERKOS_LED_OWNER");
+  if (!owner_path || !*owner_path) owner_path = "/run/postmerkos/led-owner";
+  char owner[64] = "normal";
+  FILE *led_owner = fopen(owner_path, "r");
+  if (led_owner) {
+    if (fgets(owner, sizeof(owner), led_owner))
+      owner[strcspn(owner, "\r\n")] = '\0';
+    fclose(led_owner);
+  }
+  if (!owner[0]) snprintf(owner, sizeof(owner), "normal");
+  json_object_object_add(root, "led_owner", json_object_new_string(owner));
+  return root;
+}
+
 struct json_object *get_status(void) {
   struct json_object *root = json_object_new_object();
   struct json_object *errors = json_object_new_array();
@@ -206,6 +240,15 @@ struct json_object *get_status(void) {
     default_marker = "/config/postmerkos/default-password-active";
   json_object_object_add(security, "default_password_active",
                          json_object_new_boolean(access(default_marker, F_OK) == 0));
+  const char *overlay_recovery = getenv("POSTMERKOS_OVERLAY_RECOVERY_MARKER");
+  if (!overlay_recovery || !*overlay_recovery)
+    overlay_recovery = "/run/postmerkos/overlay-recovery-mode";
+  bool recovery_mode = access(overlay_recovery, F_OK) == 0;
+  json_object_object_add(security, "persistent_overlay_recovery_mode",
+                         json_object_new_boolean(recovery_mode));
+  if (recovery_mode)
+    add_error(errors, "persistent-overlay",
+              "persistent JFFS2 is unavailable; the switch is using a temporary recovery overlay and changes will not survive reboot");
   json_object_object_add(root, "security", security);
   struct json_object *hardware_policy = json_object_new_object();
   struct json_object *hardware_controls = json_object_from_file(
@@ -229,10 +272,12 @@ struct json_object *get_status(void) {
   } else if (hardware_controls) {
     json_object_put(hardware_controls);
   }
-  struct json_object *button_status = json_object_from_file(
-      "/run/postmerkos/button-status.json");
-  if (button_status && json_object_is_type(button_status, json_type_object)) {
-    json_object_object_add(hardware_policy, "reset_button", button_status);
+  struct json_object *reset_live = reset_button_status_json();
+  struct json_object *button_status = NULL;
+  struct json_object *led_owner = NULL;
+  if (json_object_object_get_ex(reset_live, "reset_button", &button_status)) {
+    json_object_object_add(hardware_policy, "reset_button",
+                           json_object_get(button_status));
     struct json_object *state = NULL;
     if (json_object_object_get_ex(button_status, "state", &state) &&
         json_object_is_type(state, json_type_string) &&
@@ -240,19 +285,10 @@ struct json_object *get_status(void) {
          !strcmp(json_object_get_string(state), "unavailable")))
       add_error(errors, "reset-button",
                 "verified physical reset-button input is unavailable; inspect /run/postmerkos/hardware.log and /run/postmerkos/buttond.log");
-  } else if (button_status) {
-    json_object_put(button_status);
   }
-  FILE *led_owner = fopen("/run/postmerkos/led-owner", "r");
-  if (led_owner) {
-    char owner[64] = {0};
-    if (fgets(owner, sizeof(owner), led_owner)) {
-      owner[strcspn(owner, "\r\n")] = '\0';
-      json_object_object_add(hardware_policy, "led_owner",
-                             json_object_new_string(owner));
-    }
-    fclose(led_owner);
-  }
+  if (json_object_object_get_ex(reset_live, "led_owner", &led_owner))
+    json_object_object_add(hardware_policy, "led_owner", json_object_get(led_owner));
+  json_object_put(reset_live);
   json_object_object_add(root, "hardware_policy", hardware_policy);
   add_temperatures(root, errors);
   add_port_status(root, errors);

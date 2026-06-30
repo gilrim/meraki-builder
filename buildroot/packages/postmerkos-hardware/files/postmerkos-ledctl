@@ -16,7 +16,15 @@ RESTORE_GREEN=$RUNDIR/status-led-green.restore
 RESTORE_ORANGE=$RUNDIR/status-led-orange.restore
 mkdir -p "$RUNDIR"
 refresh_caps() {
-    "$HWPROBE" refresh >/dev/null 2>&1 || true
+    # S16postmerkos-hardware probes the exact board once after Click is ready.
+    # Re-running the full probe for every LED command can take long enough to
+    # stall physical-button sampling, so use that atomic cache on the hot path.
+    # Missing caches still self-heal, and diagnostics may explicitly force a
+    # refresh with POSTMERKOS_LED_FORCE_REFRESH=1.
+    if { [ ! -r "$CAP_ENV" ] || [ "${POSTMERKOS_LED_FORCE_REFRESH:-0}" = 1 ]; } &&
+       [ "${POSTMERKOS_LED_SKIP_REFRESH:-0}" != 1 ]; then
+        "$HWPROBE" refresh >/dev/null 2>&1 || true
+    fi
     PORT_LED_AVAILABLE=0 PORT_LED_VERIFIED=0 PORT_LED_HANDLER=
     STATUS_LED_AVAILABLE=0 STATUS_LED_VERIFIED=0 STATUS_LED_GREEN_PATH= STATUS_LED_ORANGE_PATH= STATUS_LED_PROTOCOL=plain-bool
     [ -r "$CAP_ENV" ] && . "$CAP_ENV"
@@ -77,6 +85,9 @@ release_control_lock() {
 acquire_control_lock() {
     attempts=0
     missing_pid_attempts=0
+    max_attempts=${POSTMERKOS_LED_LOCK_ATTEMPTS:-300}
+    case "$max_attempts" in ''|*[!0-9]*) max_attempts=300;; esac
+    [ "$max_attempts" -gt 0 ] 2>/dev/null || max_attempts=1
     while ! mkdir "$CONTROL_LOCK" 2>/dev/null; do
       lock_pid=$(cat "$CONTROL_LOCK/pid" 2>/dev/null || true)
       if [ -z "$lock_pid" ]; then
@@ -96,7 +107,7 @@ acquire_control_lock() {
         missing_pid_attempts=0
       fi
       attempts=$((attempts + 1))
-      [ "$attempts" -lt 300 ] || return 1
+      [ "$attempts" -lt "$max_attempts" ] || return 1
       sleep 0.01
     done
     printf '%s\n' "$$" >"$CONTROL_LOCK/pid"
@@ -163,8 +174,14 @@ animate() {
           set_colour green 1 || exit 0; sleep_ms "$pulse"; set_colour off 0 || exit 0; sleep_ms 100
           set_colour orange 1 || exit 0; sleep_ms "$pulse"; set_colour off 0 || exit 0; sleep_ms 100 ;;
         reset)
-          cycle=$((1800 - 1100*pct/100)); on=$((350 - 100*pct/100))
-          set_colour orange 1 || exit 0; sleep_ms "$on"; set_colour off 0 || exit 0; sleep_ms $((cycle-on)) ;;
+          # The physical-reset countdown must be unmistakable from the normal
+          # chassis heartbeat. Start at 2 Hz and accelerate to roughly 8 Hz as
+          # the destructive threshold approaches, using an even duty cycle so
+          # the orange indication remains visible throughout the hold.
+          cycle=$((500 - 380*pct/100)); [ "$cycle" -lt 120 ] && cycle=120
+          on=$((cycle / 2)); [ "$on" -lt 60 ] && on=60
+          off=$((cycle - on)); [ "$off" -lt 60 ] && off=60
+          set_colour orange 1 || exit 0; sleep_ms "$on"; set_colour off 0 || exit 0; sleep_ms "$off" ;;
         error)
           i=0; while [ "$i" -lt 3 ]; do set_colour orange 1 || exit 0; sleep_ms 250; set_colour off 0; sleep_ms 150; i=$((i+1)); done; sleep_ms 1000 ;;
         *) exit 0;;

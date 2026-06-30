@@ -1536,6 +1536,13 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     if(port_clone_apply(data,&result,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
     queue_response(wsi,session,"ports_cloned",result,request_id);json_object_put(result);refresh_status_cache(true);struct json_object *updated=load_config_file();if(updated){refresh_config_cache(updated,true);json_object_put(updated);}return 0;
   }
+  if (!strcmp(type, "reset_button_status")) {
+    if (!require_capability(wsi, session, request_id, "status.read")) return 0;
+    struct json_object *status = reset_button_status_json();
+    queue_response(wsi, session, "reset_button_status", status, request_id);
+    json_object_put(status);
+    return 0;
+  }
   if (!strcmp(type, "get_status")) {
     if (!require_capability(wsi, session, request_id, "status.read")) return 0;
     struct json_object *status = get_status();

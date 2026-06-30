@@ -1,0 +1,126 @@
+#!/bin/sh
+# Guarantee that /etc and /root have writable overlayfs upper/work directories
+# before any service attempts to create passwords, SSH keys, or configuration.
+# A blank/damaged JFFS2 partition falls back to a temporary recovery overlay so
+# the management plane remains reachable instead of soft-bricking the switch.
+
+PATH=${POSTMERKOS_PATH:-/sbin:/bin:/usr/sbin:/usr/bin}
+RUNDIR=${POSTMERKOS_RUN_DIR:-/run/postmerkos}
+OVERLAY=${POSTMERKOS_OVERLAY_MOUNT:-/overlay}
+ETC_TARGET=${POSTMERKOS_ETC_TARGET:-/etc}
+ROOT_TARGET=${POSTMERKOS_ROOT_TARGET:-/root}
+MARKER=${POSTMERKOS_OVERLAY_RECOVERY_MARKER:-$RUNDIR/overlay-recovery-mode}
+LOG=${POSTMERKOS_OVERLAY_LOG:-$RUNDIR/overlay.log}
+PROC_MOUNTS=${POSTMERKOS_PROC_MOUNTS:-/proc/mounts}
+mkdir -p "$RUNDIR"
+
+# BusyBox mount -a runs before rcS. In a partially damaged overlay, /etc may
+# already be mounted from the persistent upper. Re-execute this script from
+# tmpfs so its own open script file cannot keep /etc busy during recovery.
+if [ "${POSTMERKOS_OVERLAY_STAGED:-0}" != 1 ]; then
+    staged_self="$RUNDIR/overlay-init.sh"
+    if cp "$0" "$staged_self" 2>/dev/null; then
+        chmod 0700 "$staged_self" 2>/dev/null || true
+        export POSTMERKOS_OVERLAY_STAGED=1
+        exec /bin/sh "$staged_self" "$@"
+    fi
+fi
+
+log() {
+    printf '%s\n' "$*" >>"$LOG" 2>/dev/null || true
+    printf 'postmerkOS overlay: %s\n' "$*" >/dev/console 2>/dev/null || true
+}
+
+mounted() {
+    target=$1
+    awk -v target="$target" '$2 == target { found=1 } END { exit found ? 0 : 1 }' "$PROC_MOUNTS" 2>/dev/null
+}
+
+mounted_type() {
+    target=$1 type=$2
+    awk -v target="$target" -v type="$type" '$2 == target && $3 == type { found=1 } END { exit found ? 0 : 1 }' "$PROC_MOUNTS" 2>/dev/null
+}
+
+writable_dir() {
+    target=$1
+    probe="$target/.postmerkos-write-test.$$"
+    : >"$probe" 2>/dev/null || return 1
+    rm -f "$probe" 2>/dev/null || true
+}
+
+seed_layout() {
+    mkdir -p "$OVERLAY/.upper/etc" "$OVERLAY/.work/etc" \
+             "$OVERLAY/.upper/root" "$OVERLAY/.work/root" || return 1
+    chmod 0700 "$OVERLAY/.upper" "$OVERLAY/.work" \
+        "$OVERLAY/.work/etc" "$OVERLAY/.upper/root" \
+        "$OVERLAY/.work/root" 2>/dev/null || true
+    chmod 0755 "$OVERLAY/.upper/etc" 2>/dev/null || true
+}
+
+recovery_tmpfs() {
+    reason=$1
+    # BusyBox mount -a runs before rcS. If it managed to mount one of the
+    # overlayfs children before the persistent JFFS2 failure became visible,
+    # detach those children first so /overlay can be replaced safely.
+    for target in "$ROOT_TARGET" "$ETC_TARGET"; do
+        if mounted_type "$target" overlay; then
+            umount "$target" >/dev/null 2>&1 || return 1
+        fi
+    done
+    if mounted "$OVERLAY"; then
+        umount "$OVERLAY" >/dev/null 2>&1 || return 1
+    fi
+    mount -t tmpfs -o mode=0755,nosuid,nodev,size=16m postmerkos-recovery "$OVERLAY" || return 1
+    printf '{"active":true,"reason":"%s","persistence":false}\n' "$reason" >"$MARKER"
+    log "persistent JFFS2 unavailable ($reason); using temporary recovery overlay"
+}
+
+mount_overlay_target() {
+    target=$1 upper=$2 work=$3
+    mounted_type "$target" overlay && return 0
+    mount "$target" >/dev/null 2>&1 && mounted_type "$target" overlay && return 0
+    mount -t overlay overlay \
+        -o "lowerdir=$target,upperdir=$upper,workdir=$work" "$target" >/dev/null 2>&1
+}
+
+start_overlay() {
+    rm -f "$MARKER"
+    mkdir -p "$OVERLAY"
+    if ! mounted "$OVERLAY"; then
+        if ! mount "$OVERLAY" >/dev/null 2>&1; then
+            recovery_tmpfs mount-failed || return 1
+        fi
+    fi
+    if ! writable_dir "$OVERLAY"; then
+        recovery_tmpfs not-writable || return 1
+    fi
+    if ! seed_layout; then
+        recovery_tmpfs layout-create-failed || return 1
+        seed_layout || return 1
+    fi
+    if ! mount_overlay_target "$ETC_TARGET" "$OVERLAY/.upper/etc" "$OVERLAY/.work/etc"; then
+        log "unable to mount writable overlay on $ETC_TARGET"
+        return 1
+    fi
+    if ! mount_overlay_target "$ROOT_TARGET" "$OVERLAY/.upper/root" "$OVERLAY/.work/root"; then
+        log "unable to mount writable overlay on $ROOT_TARGET"
+        return 1
+    fi
+    writable_dir "$ETC_TARGET" || { log "$ETC_TARGET remains read-only"; return 1; }
+    writable_dir "$ROOT_TARGET" || { log "$ROOT_TARGET remains read-only"; return 1; }
+    if [ -f "$MARKER" ]; then
+        log "management recovery overlay is active; changes will not survive reboot"
+    else
+        log "persistent writable overlays are ready"
+    fi
+    return 0
+}
+
+case "${1:-start}" in
+    start|restart) start_overlay ;;
+    status)
+        mounted_type "$ETC_TARGET" overlay && mounted_type "$ROOT_TARGET" overlay
+        ;;
+    stop) ;;
+    *) echo "usage: $0 start|restart|status|stop" >&2; exit 2 ;;
+esac

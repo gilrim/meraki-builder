@@ -306,24 +306,6 @@ if [ "$FULL_FLASH" -ne 1 ] && [ "$CANDIDATE_ROOT_HASH" = "$CURRENT_ROOT_HASH" ] 
     fw_die "the SquashFS content already matches the installed firmware; use --force to reinstall"
 fi
 
-make_overlay_tree() {
-    tree=$1
-    mkdir -p "$tree/.upper/etc" "$tree/.work/etc" \
-             "$tree/.upper/root" "$tree/.work/root"
-}
-
-build_overlay_image() {
-    root=$1
-    out=$2
-    mkfs.jffs2 --pad="$FWUPDATE_OVERLAY_SIZE" -l -n \
-        -X lzo -x zlib -y 40:lzo -r "$root" -o "$out" >/dev/null || \
-        fw_die "failed to generate JFFS2 image"
-    [ "$(file_size "$out")" -eq "$FWUPDATE_OVERLAY_SIZE" ] || \
-        fw_die "generated JFFS2 image has the wrong size"
-    [ "$(read_hex "$out" 0 2)" = "8519" ] || \
-        fw_die "generated JFFS2 image has an invalid magic value"
-}
-
 case "$OVERLAY_POLICY" in
     preserve)
         ;;
@@ -338,12 +320,12 @@ case "$OVERLAY_POLICY" in
             fw_die "embedded JFFS2 region has an invalid magic value"
         ;;
     reset)
-        make_overlay_tree "$WORK/overlay-root"
+        overlay_tree_prepare "$WORK/overlay-root"
         OVERLAY_IMAGE="$WORK/overlay.region"
-        build_overlay_image "$WORK/overlay-root" "$OVERLAY_IMAGE"
+        build_clean_overlay_image "$WORK/overlay-root" "$OVERLAY_IMAGE"
         ;;
     migrate)
-        make_overlay_tree "$WORK/overlay-root"
+        overlay_tree_prepare "$WORK/overlay-root"
         [ -f "$FWUPDATE_PRESERVE_FILE" ] || fw_die "preserve list not found: $FWUPDATE_PRESERVE_FILE"
         while IFS= read -r src || [ -n "$src" ]; do
             case "$src" in ""|\#*) continue ;; esac
@@ -360,7 +342,7 @@ case "$OVERLAY_POLICY" in
             cp -a "$src" "$dest" || fw_die "failed to preserve $src"
         done < "$FWUPDATE_PRESERVE_FILE"
         OVERLAY_IMAGE="$WORK/overlay.region"
-        build_overlay_image "$WORK/overlay-root" "$OVERLAY_IMAGE"
+        build_clean_overlay_image "$WORK/overlay-root" "$OVERLAY_IMAGE"
         ;;
 esac
 

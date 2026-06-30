@@ -110,6 +110,32 @@ file_size() {
     wc -c < "$1" | awk '{print $1}'
 }
 
+overlay_tree_prepare() {
+    tree=$1
+    [ -n "$tree" ] || fw_die "overlay tree path is empty"
+    mkdir -p "$tree/.upper/etc" "$tree/.work/etc" \
+             "$tree/.upper/root" "$tree/.work/root" || \
+        fw_die "failed to create the seeded overlay directory layout"
+    chmod 0700 "$tree/.upper" "$tree/.work" \
+        "$tree/.work/etc" "$tree/.upper/root" "$tree/.work/root" \
+        2>/dev/null || true
+    chmod 0755 "$tree/.upper/etc" 2>/dev/null || true
+}
+
+build_clean_overlay_image() {
+    tree=$1
+    out=$2
+    overlay_tree_prepare "$tree"
+    need_cmd mkfs.jffs2
+    mkfs.jffs2 --pad="$FWUPDATE_OVERLAY_SIZE" -l -n \
+        -X lzo -x zlib -y 40:lzo -r "$tree" -o "$out" >/dev/null || \
+        fw_die "failed to generate seeded JFFS2 image"
+    [ "$(file_size "$out")" -eq "$FWUPDATE_OVERLAY_SIZE" ] || \
+        fw_die "generated JFFS2 image has the wrong size"
+    [ "$(read_hex "$out" 0 2)" = "8519" ] || \
+        fw_die "generated JFFS2 image has an invalid magic value"
+}
+
 read_magic() {
     file=$1
     offset=$2
@@ -121,7 +147,11 @@ read_hex() {
     file=$1
     offset=$2
     count=$3
-    read_magic "$file" "$offset" "$count" | hexdump -v -e '1/1 "%02x"'
+    if command -v hexdump >/dev/null 2>&1; then
+        read_magic "$file" "$offset" "$count" | hexdump -v -e '1/1 "%02x"'
+    else
+        read_magic "$file" "$offset" "$count" | od -An -tx1 -v | tr -d ' \n'
+    fi
 }
 
 mtd_lookup() {

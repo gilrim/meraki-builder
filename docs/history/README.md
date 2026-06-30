@@ -5,6 +5,7 @@ These documents preserve completed incidents, release snapshots, migrations, ret
 - [2026-06-29 documentation and current-release consolidation](changelog.md)
 - [Historical reference](early-configuration-interface.md)
 - [Fixed-size embedded metadata correction](embedded-manifest-slot-correction.md)
+- [Factory-reset overlay soft-brick correction — 2026-06-30](factory-reset-overlay-soft-brick-2026-06-30.md)
 - [Historical reference](initial-updater-design.md)
 - [Jaguar1 recovery JEDEC `ffffff` correction](jaguar1-spi-chip-select-correction.md)
 - [Legacy build systems](legacy-build-systems.md)

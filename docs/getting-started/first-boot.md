@@ -1,6 +1,6 @@
 # First boot and initial access
 
-On first boot postmerkOS initializes persistent JFFS2 state, detects the switch model and capabilities, starts the forwarding graph, obtains a management address, and launches management services according to policy.
+On first boot postmerkOS verifies the writable JFFS2 overlay layout, initializes persistent state, detects the switch model and capabilities, starts the forwarding graph, obtains a management address, and launches management services according to policy.
 
 ## Initial credentials
 
@@ -25,3 +25,5 @@ DHCP is the default. Configd records lease acquisition and expiry information in
 ## Untested model notice
 
 Recognized but unconfirmed models show a first-access notice. The diagnostic report contains model, port, PoE, management, console, and firmware information without passwords or private keys. Acknowledgement is stored per model and firmware version.
+
+If persistent JFFS2 cannot be mounted, the boot process uses a temporary recovery overlay so authentication and SSH can still initialize. System Information reports that mode and warns that changes will not survive reboot.

@@ -124,6 +124,7 @@ verify-modules:
 
 
 test-hardware:
+	@./buildroot/board/meraki/ms220/tests/test-overlay-init.sh
 	@./buildroot/board/meraki/ms220/tests/test-board-identity.sh
 	@./buildroot/board/meraki/ms220/tests/test-poe-init.sh
 	@./buildroot/board/meraki/ms220/tests/test-configd-supervisor.sh

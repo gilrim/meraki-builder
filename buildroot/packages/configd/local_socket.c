@@ -151,6 +151,9 @@ static void handle_client(int fd) {
   } else if (!strcmp(type, "status.get") && role_has_capability(role, "status.read")) {
     struct json_object *status = get_status();
     send_json(fd, "status", status); json_object_put(status);
+  } else if (!strcmp(type, "hardware.reset-status") && role_has_capability(role, "status.read")) {
+    struct json_object *status = reset_button_status_json();
+    send_json(fd, "reset_button_status", status); json_object_put(status);
   } else if (!strcmp(type, "config.get") && role_has_capability(role, "config.read")) {
     struct json_object *config = load_config_file();
     if (!config) send_error(fd, 404, "configuration unavailable");

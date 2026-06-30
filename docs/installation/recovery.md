@@ -6,9 +6,18 @@ updater changes.
 ## Linux-level recovery
 
 Use the normal updater, backup/restore, or factory-reset functions when Linux
-boots and the management console is available. A configuration reset affects
-JFFS2-backed settings but does not replace meraki-redboot, the kernel, or the
-SquashFS region.
+boots and the management console is available. A configuration reset replaces
+only the JFFS2-backed settings partition with a seeded, verified factory-default
+image; it does not replace meraki-redboot, the kernel, or the SquashFS region.
+The previous JFFS2 image is retained in RAM for automatic rollback until the new
+image verifies.
+
+If System Information reports **persistent overlay recovery mode**, `/etc` and
+`/root` are running from temporary RAM because JFFS2 could not be mounted or
+written. Management remains available, but changes do not survive reboot. Collect
+`/run/postmerkos/overlay.log`, `/run/postmerkos/buttond.log`, and updater status,
+then repair the JFFS2 partition with a validated firmware/configuration operation
+or use UART/SPI recovery.
 
 ## meraki-redboot embedded UART recovery
 

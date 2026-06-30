@@ -56,6 +56,12 @@ the installed release identity with the pending record and reports success,
 interruption, failure, or an indeterminate result rather than silently assuming
 success.
 
+## Factory-reset overlay path
+
+Physical and administrative factory reset use the same static flash engine as firmware updates, but in an overlay-only scope. The caller creates a seeded 5 MiB JFFS2 image containing the overlayfs upper/work directory contract and stages `fwflash` in RAM. It then quiesces all remaining userspace writers, including the configd supervisor, while preserving the reset LED animator; unmounts `/etc`, `/root`, and `/overlay`; and captures a complete raw rollback image. At the final handoff, LED control moves to the static helper. `fwflash --factory-reset` continues the accelerating orange pattern while it erases, programs, reads back, and verifies only the JFFS2 partition. A failed write restores and verifies the previous raw partition image before reboot.
+
+The reset path never uses a blank `flash_erase` result as factory state. A valid filesystem image is required because `/etc` and `/root` depend on JFFS2 upper/work directories during the next boot.
+
 ## Pre-kernel recovery
 
 When Linux cannot run, the source-built loader and RAM recovery payload use a
