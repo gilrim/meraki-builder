@@ -11,7 +11,7 @@ postmerkOS uses Linux accounts and group-derived roles.
 | Reboot | Yes | Yes | No |
 | Change management addressing | Yes | No | No |
 | Firmware update or full restore | Yes | No | No |
-| Manage users, SSH keys, time, telemetry, and services | Yes | No | No |
+| Manage users, SSH keys, system identity, time, telemetry, and services | Yes | No | No |
 | Run the bounded/unrestricted terminal operation | Yes | No | No |
 | Power off or factory reset | Yes | No | No |
 

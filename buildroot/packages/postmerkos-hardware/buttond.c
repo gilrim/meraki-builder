@@ -350,7 +350,7 @@ static int invoke_factory_reset(void) {
                                        FACTORY_RESET_DEFAULT);
   fprintf(stderr,
           "reset button: verified hold completed; requesting factory reset\n");
-  sync();
+  if (!getenv("POSTMERKOS_FACTORY_RESET_SKIP_SYNC")) sync();
   execl(program, program, "--yes", (char *)NULL);
   int error = errno;
   fprintf(stderr, "reset button: unable to execute %s: %s\n", program,

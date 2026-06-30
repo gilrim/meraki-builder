@@ -227,17 +227,21 @@ system_status_menu() {
         heading 'Status'
         cat <<'EOF_STATUS'
 1) System overview
-2) Paged port status
-3) Firmware update history
-4) Current complete configuration
+2) Detailed System Information
+3) Paged port status
+4) Service and monitoring state
+5) Firmware update history
+6) Current complete configuration
 b) Back
 EOF_STATUS
         read_choice 'status> '
         case "$CHOICE" in
             1) heading 'System overview'; "$CTL" summary; pause ;;
-            2) port_status_pager ;;
-            3) heading 'Firmware update history'; fw_update_status 2>/dev/null || cat /config/postmerkos/update-history/last.json 2>/dev/null || echo 'No firmware update history is available.'; pause ;;
-            4) heading 'Persistent switch configuration'; "$CTL" config; pause ;;
+            2) heading 'Detailed System Information'; "$CTL" system-info; pause ;;
+            3) port_status_pager ;;
+            4) heading 'Service and monitoring state'; "$CTL" services-summary; echo; "$CTL" get telemetry 2>/dev/null || true; pause ;;
+            5) heading 'Firmware update history'; fw_update_status 2>/dev/null || cat /config/postmerkos/update-history/last.json 2>/dev/null || echo 'No firmware update history is available.'; pause ;;
+            6) heading 'Persistent switch configuration'; "$CTL" config; pause ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac
@@ -603,6 +607,22 @@ EOF_GLOBAL
     done
 }
 
+port_clone_menu() {
+    local source targets fields
+    heading 'Clone port configuration'
+    printf 'Source port: '; read -r source
+    valid_port "$source" || { echo 'Invalid source port.'; pause; return; }
+    printf 'Target ports as comma-separated numbers: '; read -r targets
+    cat <<'EOF_CLONE'
+Available categories: administrative,name,phy,storm_control,vlan,stp,poe
+Leave blank to clone every supported category.
+EOF_CLONE
+    printf 'Categories as comma-separated names [all]: '; read -r fields
+    fields=${fields:-administrative,name,phy,storm_control,vlan,stp,poe}
+    "$CTL" ports-clone "$source" "$targets" "$fields"
+    pause
+}
+
 port_configuration_menu() {
     while :; do
         heading 'Port Configuration'
@@ -611,6 +631,7 @@ port_configuration_menu() {
         cat <<'EOF_PC'
 3) Global switch and management settings
 4) All-port summary
+5) Clone port configuration
 b) Back
 EOF_PC
         read_choice 'ports> '
@@ -619,6 +640,7 @@ EOF_PC
             2) sfp_menu ;;
             3) if can network.write; then global_config_menu; else echo 'Management/global configuration requires administrator access.'; pause; fi ;;
             4) heading 'All-port summary'; show_range 1 "$TOTAL_PORTS"; pause ;;
+            5) if can switching.write; then port_clone_menu; else echo 'Port cloning requires operator access.'; pause; fi ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac
@@ -731,6 +753,27 @@ select_artifact_contract() {
     esac
 }
 
+firmware_repository_menu() {
+    local value
+    while :; do
+        heading 'Firmware repositories'
+        cat <<'EOF_REPO'
+1) Show repository policy
+2) Replace repository policy from JSON
+3) Check a repository URL
+b) Back
+EOF_REPO
+        read_choice 'repositories> '
+        case "$CHOICE" in
+            1) "$CTL" firmware-repositories; pause ;;
+            2) printf 'Complete repository policy JSON: '; IFS= read -r value; "$CTL" firmware-repositories-set "$value"; pause ;;
+            3) printf 'Repository URL: '; IFS= read -r value; "$CTL" firmware-repository-check "$value"; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
 firmware_menu() {
     local file hash overlay server remote port url user password accept_arg force_arg scope contract scope_args contract_args
     while :; do
@@ -743,6 +786,7 @@ firmware_menu() {
 5) Download and install by SFTP
 6) Receive and install an image over UART
 7) Verify a local image without flashing
+8) Firmware repository configuration
 b) Back
 EOF_FW
         read_choice 'firmware> '
@@ -821,6 +865,7 @@ EOF_FW
                 force_arg=$(select_force_mode)
                 fw_update_uart --overlay "$overlay" $scope_args $force_arg
                 pause ;;
+            8) firmware_repository_menu ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac
@@ -887,6 +932,27 @@ list_users() {
     done </etc/passwd
 }
 
+ssh_key_management_menu() {
+    local label key
+    while :; do
+        heading 'SSH public keys'
+        cat <<'EOF_KEYS'
+1) List keys and fingerprints
+2) Add public key
+3) Remove public key
+b) Back
+EOF_KEYS
+        read_choice 'ssh-keys> '
+        case "$CHOICE" in
+            1) "$CTL" ssh-keys; pause ;;
+            2) printf 'Label: '; IFS= read -r label; printf 'Complete public key: '; IFS= read -r key; "$CTL" ssh-key-add "$label" "$key"; pause ;;
+            3) echo 'Copy the exact public-key record from the list.'; printf 'Public key to remove: '; IFS= read -r key; "$CTL" ssh-key-remove "$key"; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
 user_management_menu() {
     local user password role
     while :; do
@@ -897,6 +963,7 @@ user_management_menu() {
 3) Create account
 4) Change account role
 5) Delete a non-root account
+6) Manage SSH public keys
 b) Back
 EOF_USER
         read_choice 'users> '
@@ -925,6 +992,7 @@ EOF_USER
                 elif valid_username "$user" && confirm_word DELETE "Type DELETE to remove $user: "; then "$CTL" user-delete "$user"
                 else echo 'Deletion cancelled.'; fi
                 pause ;;
+            6) ssh_key_management_menu ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac
@@ -999,55 +1067,129 @@ EOF_SSH
     done
 }
 
-time_configuration_menu() {
-    local value server preset epoch
+system_identity_menu() {
+    local value
     while :; do
-        heading 'Time, NTP and DST'
-        "$CTL" time 2>/dev/null || true
-        cat <<'EOF_TIME'
+        heading 'System Identity & Discovery'
+        "$CTL" system-identity 2>/dev/null || true
+        cat <<'EOF_IDENTITY'
 
-1) Set standard UTC offset
-2) Select daylight-saving rule
-3) Set NTP server list
-4) Toggle NTP synchronization
-5) Set current date/time from Unix epoch
-6) Request immediate chrony synchronization
+1) Set hostname
+2) Restore default hostname (postmerkos)
+3) Generate unique hostname from base MAC
+4) mDNS service and startup policy
 b) Back
-EOF_TIME
-        read_choice 'time> '
+EOF_IDENTITY
+        read_choice 'identity> '
         case "$CHOICE" in
-            1) printf 'Standard UTC offset in minutes (-720 to 840): '; read -r value; if is_number "${value#-}" && [ "$value" -ge -720 ] && [ "$value" -le 840 ]; then "$CTL" time-set-field standard_offset_minutes "$value"; else echo 'Invalid offset.'; fi; pause ;;
-            2)
-                printf '1) Disabled\n2) North America\n3) European Union\nSelection: '; read -r preset
-                case "$preset" in
-                    1) "$CTL" time-set-field dst.enabled false ;;
-                    2) "$CTL" time-set '{"standard_offset_minutes":-240,"dst":{"enabled":true,"offset_minutes":-180,"start":{"month":3,"week":2,"weekday":0,"hour":2,"minute":0},"end":{"month":11,"week":1,"weekday":0,"hour":2,"minute":0}},"ntp_enabled":true,"servers":["pool.ntp.org"]}' ;;
-                    3) "$CTL" time-set '{"standard_offset_minutes":60,"dst":{"enabled":true,"offset_minutes":120,"start":{"month":3,"week":5,"weekday":0,"hour":2,"minute":0},"end":{"month":10,"week":5,"weekday":0,"hour":3,"minute":0}},"ntp_enabled":true,"servers":["pool.ntp.org"]}' ;;
-                    *) echo 'Cancelled.' ;;
-                esac
+            1) printf 'Hostname label (without .local): '; IFS= read -r value; "$CTL" hostname-set "$value"; pause ;;
+            2) "$CTL" hostname-set postmerkos; pause ;;
+            3)
+                value=$("$CTL" status 2>/dev/null | sed -n 's/.*"base_mac"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 | tr -d ':')
+                [ -n "$value" ] && "$CTL" hostname-set "m$value" || echo 'Base MAC is unavailable.'
                 pause ;;
-            3) printf 'NTP servers as JSON array (example ["pool.ntp.org"]): '; read -r server; "$CTL" time-set-field servers "$server"; pause ;;
-            4) current=$("$CTL" time-get ntp_enabled 2>/dev/null || echo true); [ "$current" = true ] && value=false || value=true; "$CTL" time-set-field ntp_enabled "$value"; pause ;;
-            5) printf 'Unix epoch value: '; read -r epoch; if is_number "$epoch"; then "$CTL" time-set-clock "$epoch"; else echo 'Invalid epoch.'; fi; pause ;;
-            6) "$CTL" time-sync; pause ;;
+            4) service_action_menu mdns mDNS ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac
     done
 }
 
+telemetry_menu() {
+    local value
+    while :; do
+        heading 'SNMP and Prometheus'
+        printf 'SNMP enabled: %-5s  Prometheus enabled: %-5s  Prometheus port: %s\n\n' \
+            "$(cfg_get telemetry.snmp.enabled 2>/dev/null || echo false)" \
+            "$(cfg_get telemetry.prometheus.enabled 2>/dev/null || echo false)" \
+            "$(cfg_get telemetry.prometheus.port 2>/dev/null || echo 9100)"
+        cat <<'EOF_TELEMETRY'
+1) Toggle SNMP
+2) Set SNMP community
+3) Set SNMP location
+4) Set SNMP contact
+5) Toggle Prometheus
+6) Set Prometheus port
+7) Toggle SNMP management-only binding
+8) Toggle Prometheus management-only binding
+b) Back
+EOF_TELEMETRY
+        read_choice 'monitoring> '
+        case "$CHOICE" in
+            1) toggle_path telemetry.snmp.enabled; pause ;;
+            2) printf 'SNMP community: '; IFS= read -r value; cfg_set_string telemetry.snmp.community "$value"; pause ;;
+            3) printf 'Location: '; IFS= read -r value; cfg_set_string telemetry.snmp.location "$value"; pause ;;
+            4) printf 'Contact: '; IFS= read -r value; cfg_set_string telemetry.snmp.contact "$value"; pause ;;
+            5) toggle_path telemetry.prometheus.enabled; pause ;;
+            6) printf 'Prometheus TCP port: '; read -r value; if is_number "$value" && [ "$value" -ge 1 ] && [ "$value" -le 65535 ]; then cfg_set telemetry.prometheus.port "$value"; else echo 'Invalid port.'; fi; pause ;;
+            7) toggle_path telemetry.snmp.management_only; pause ;;
+            8) toggle_path telemetry.prometheus.management_only; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+time_configuration_menu() {
+    local value server preset epoch current
+    while :; do
+        heading 'Time, NTP and DST'
+        "$CTL" time 2>/dev/null || true
+        cat <<'EOF_TIME'
+
+1) Select common timezone
+2) Set exact local date/time
+3) Set standard UTC offset
+4) Select custom daylight-saving rule
+5) Set NTP server list
+6) Toggle NTP synchronization
+7) Set current date/time from Unix epoch
+8) Request immediate chrony synchronization
+b) Back
+EOF_TIME
+        read_choice 'time> '
+        case "$CHOICE" in
+            1) "$CTL" timezones; printf '
+Timezone ID: '; IFS= read -r value; "$CTL" timezone-set "$value"; pause ;;
+            2) printf 'Local time (HH:MM:SS - DD:MM:YYYY): '; IFS= read -r value; "$CTL" time-set-local "$value"; pause ;;
+            3) printf 'Standard UTC offset in minutes (-720 to 840): '; read -r value; if is_number "${value#-}" && [ "$value" -ge -720 ] && [ "$value" -le 840 ]; then "$CTL" time-set-field standard_offset_minutes "$value"; else echo 'Invalid offset.'; fi; pause ;;
+            4)
+                printf '1) Disabled
+2) North America
+3) European Union
+Selection: '; read -r preset
+                case "$preset" in
+                    1) "$CTL" time-set-field dst.enabled false ;;
+                    2) "$CTL" time-set '{"timezone":"custom","standard_offset_minutes":-240,"dst":{"enabled":true,"offset_minutes":-180,"start":{"month":3,"week":2,"weekday":0,"hour":2,"minute":0},"end":{"month":11,"week":1,"weekday":0,"hour":2,"minute":0}},"ntp_enabled":true,"servers":["pool.ntp.org"]}' ;;
+                    3) "$CTL" time-set '{"timezone":"custom","standard_offset_minutes":60,"dst":{"enabled":true,"offset_minutes":120,"start":{"month":3,"week":5,"weekday":0,"hour":2,"minute":0},"end":{"month":10,"week":5,"weekday":0,"hour":3,"minute":0}},"ntp_enabled":true,"servers":["pool.ntp.org"]}' ;;
+                    *) echo 'Cancelled.' ;;
+                esac
+                pause ;;
+            5) printf 'NTP servers as JSON array (example ["pool.ntp.org"]): '; read -r server; "$CTL" time-set-field servers "$server"; pause ;;
+            6) current=$("$CTL" time-get ntp_enabled 2>/dev/null || echo true); [ "$current" = true ] && value=false || value=true; "$CTL" time-set-field ntp_enabled "$value"; pause ;;
+            7) printf 'Unix epoch value: '; read -r epoch; if is_number "$epoch"; then "$CTL" time-set-clock "$epoch"; else echo 'Invalid epoch.'; fi; pause ;;
+            8) "$CTL" time-sync; pause ;;
+            b|B|0|'') return ;;
+            *) echo 'Unknown option.'; sleep 1 ;;
+        esac
+    done
+}
+
+
 service_management_menu() {
     while :; do
-        heading 'Service Management'
+        heading 'Services, Time & Monitoring'
         "$CTL" services-summary 2>/dev/null || echo 'Service status is unavailable.'
         cat <<'EOF_SERVICE'
 
 1) SSH configuration
 2) Web-interface service
 3) Chrony service
-4) Time, NTP and DST configuration
-5) Apply saved service policy
-6) Show management service logs
+4) System identity and mDNS discovery
+5) Time, NTP and DST configuration
+6) SNMP and Prometheus monitoring
+7) Apply saved service policy
+8) Show management service logs
 b) Back
 EOF_SERVICE
         read_choice 'services> '
@@ -1055,9 +1197,11 @@ EOF_SERVICE
             1) ssh_configuration_menu ;;
             2) service_action_menu web 'Web interface' ;;
             3) service_action_menu chrony Chrony ;;
-            4) time_configuration_menu ;;
-            5) "$CTL" services-apply; pause ;;
-            6) heading 'Management service logs'; for file in /run/postmerkos/configd.log /run/postmerkos/websocket.log /run/postmerkos/buttond.log /run/postmerkos/serial-session.log /run/postmerkos/ledctl.log /tmp/uhttpd.log /var/log/messages; do [ -f "$file" ] && { echo "--- $file ---"; tail -n 60 "$file"; }; done; pause ;;
+            4) system_identity_menu ;;
+            5) time_configuration_menu ;;
+            6) telemetry_menu ;;
+            7) "$CTL" services-apply; pause ;;
+            8) heading 'Management service logs'; for file in /run/postmerkos/configd.log /run/postmerkos/websocket.log /run/postmerkos/buttond.log /run/postmerkos/serial-session.log /run/postmerkos/ledctl.log /tmp/uhttpd.log /var/log/messages; do [ -f "$file" ] && { echo "--- $file ---"; tail -n 60 "$file"; }; done; pause ;;
             b|B|0|'') return ;;
             *) echo 'Unknown option.'; sleep 1 ;;
         esac
@@ -1180,13 +1324,13 @@ main_menu() {
         echo
         menu5= menu6= menu7= menu8= menu3= menu4=
         can users.manage && menu5='5) User Management'
-        can services.manage && menu6='6) Service Management'
+        can services.manage && menu6='6) Services, Time & Monitoring'
         can system.reboot && menu7='7) Power Control'
         can terminal.exec && menu8='8) Shell'
         can firmware.update && menu3='3) Firmware Update'
         can backup.create && menu4='4) Backup & Restore'
         printf '%-34s %s\n' '1) Status' "$menu5"
-        printf '%-34s %s\n' '2) Port Configuration' "$menu6"
+        printf '%-34s %s\n' '2) Ports & Switching' "$menu6"
         printf '%-34s %s\n' "$menu3" "$menu7"
         printf '%-34s %s\n' "$menu4" "$menu8"
         echo '0) Log out'

@@ -98,6 +98,17 @@ static int active_offset(struct json_object *policy, time_t now, bool *dst_activ
   return active ? daylight : standard;
 }
 
+
+struct json_object *timezones_json(void) {
+  const char *path=env_or_default("CONFIGD_TIMEZONES_FILE","/usr/share/postmerkos/timezones.json");
+  struct json_object *zones=json_object_from_file(path);
+  if(!zones || !json_object_is_type(zones,json_type_array)){
+    if(zones)json_object_put(zones);
+    zones=json_object_new_array();
+  }
+  return zones;
+}
+
 struct json_object *time_policy_load(void) {
   struct json_object *p=json_object_from_file(env_or_default("CONFIGD_TIME_POLICY",TIME_POLICY_PATH));
   if(!p) p=json_object_from_file(env_or_default("CONFIGD_TIME_POLICY_DEFAULT",TIME_POLICY_DEFAULT));

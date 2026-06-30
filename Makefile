@@ -126,6 +126,7 @@ verify-modules:
 test-hardware:
 	@./buildroot/board/meraki/ms220/tests/test-overlay-init.sh
 	@./buildroot/board/meraki/ms220/tests/test-board-identity.sh
+	@./buildroot/board/meraki/ms220/tests/test-system-identity-init.sh
 	@./buildroot/board/meraki/ms220/tests/test-poe-init.sh
 	@./buildroot/board/meraki/ms220/tests/test-configd-supervisor.sh
 	@./buildroot/board/meraki/ms220/tests/test-configd-init.sh
@@ -137,6 +138,7 @@ test-docs:
 
 test-ui-contract:
 	@./scripts/tests/test-ui-configd-contract.py "$${UI_DIR:-../postmerkos-ui}"
+	@python3 ./scripts/tests/test-management-feature-parity.py "$${UI_DIR:-../postmerkos-ui}"
 
 test-ui-build:
 	@test -f "$${UI_DIR:-../postmerkos-ui}/package-lock.json" || { echo "UI_DIR does not contain postmerkos-ui" >&2; exit 1; }

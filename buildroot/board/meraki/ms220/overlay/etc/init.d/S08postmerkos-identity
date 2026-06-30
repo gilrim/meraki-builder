@@ -1,0 +1,57 @@
+#!/bin/sh
+POLICY=${POSTMERKOS_SYSTEM_POLICY:-/config/postmerkos/system.json}
+DEFAULT=${POSTMERKOS_SYSTEM_DEFAULT:-/usr/share/postmerkos/defaults/system.json}
+HOSTNAME_FILE=${POSTMERKOS_HOSTNAME_FILE:-/etc/hostname}
+AVAHI_CONF=${POSTMERKOS_AVAHI_CONF:-/etc/avahi/avahi-daemon.conf}
+RUN_DIR=${POSTMERKOS_RUN_DIR:-/run/postmerkos}
+PATH=${POSTMERKOS_PATH:-$PATH}
+export PATH
+
+read_hostname() {
+    file=$1
+    [ -r "$file" ] || return 1
+    sed -n 's/.*"hostname"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9-]*\)".*/\1/p' "$file" | head -n 1 | tr 'A-Z' 'a-z'
+}
+valid_hostname() {
+    value=$1
+    [ -n "$value" ] || return 1
+    [ ${#value} -le 63 ] || return 1
+    case "$value" in
+        -*|*-|localhost|local|*[!a-z0-9-]*) return 1 ;;
+    esac
+    return 0
+}
+
+case "${1:-start}" in
+  start|restart)
+    hostname=$(read_hostname "$POLICY" 2>/dev/null || true)
+    valid_hostname "$hostname" || hostname=$(read_hostname "$DEFAULT" 2>/dev/null || true)
+    valid_hostname "$hostname" || hostname=postmerkos
+    hostname "$hostname" 2>/dev/null || sysctl -qw "kernel.hostname=$hostname" 2>/dev/null || true
+    printf '%s\n' "$hostname" >"$HOSTNAME_FILE" 2>/dev/null || true
+    mkdir -p "$(dirname "$AVAHI_CONF")"
+    cat >"$AVAHI_CONF" <<EOF_AVAHI
+[server]
+host-name=$hostname
+domain-name=local
+use-ipv4=yes
+use-ipv6=no
+allow-interfaces=linux_mgmt
+enable-dbus=no
+
+[wide-area]
+enable-wide-area=no
+
+[publish]
+publish-addresses=yes
+publish-hinfo=no
+publish-workstation=no
+publish-domain=no
+EOF_AVAHI
+    mkdir -p "$RUN_DIR"
+    printf '%s\n' "$hostname" >"$RUN_DIR/effective-hostname"
+    ;;
+  stop) ;;
+  *) echo "usage: $0 {start|stop|restart}" >&2; exit 2 ;;
+esac
+exit 0

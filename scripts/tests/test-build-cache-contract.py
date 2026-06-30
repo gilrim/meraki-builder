@@ -6,6 +6,8 @@ root = Path(__file__).resolve().parents[2]
 build_all = (root / "scripts/build-all.sh").read_text()
 build_rootfs = (root / "scripts/build-rootfs.sh").read_text()
 validate = (root / "scripts/validate-image.sh").read_text()
+prepare = (root / "scripts/prepare-buildroot.sh").read_text()
+buildroot_config = (root / "buildroot/board/meraki/ms220/buildroot-config").read_text()
 init = (root / "buildroot/board/meraki/ms220/overlay/etc/init.d/S15configd").read_text()
 marker = root / "buildroot/features/web-overlay/etc/postmerkos/features/web-ui"
 configd_dir = root / "buildroot/packages/configd"
@@ -46,4 +48,24 @@ for flag in (
 ):
     assert flag in dry_run, f"configd compile command lost {flag}:\n{dry_run}"
 
-print('Buildroot WebSocket/cache contract tests passed')
+
+for token in (
+    "BR2_PACKAGE_AVAHI=y",
+    "BR2_PACKAGE_AVAHI_DAEMON=y",
+    "# BR2_PACKAGE_AVAHI_AUTOIPD is not set",
+    "# BR2_PACKAGE_AVAHI_DEFAULT_SERVICES is not set",
+    "# BR2_PACKAGE_DBUS is not set",
+):
+    assert token in buildroot_config, token
+for token in (
+    "Buildroot did not retain Avahi",
+    "Buildroot did not retain the Avahi daemon",
+    "Buildroot did not retain Avahi's libdaemon dependency",
+    "Buildroot did not retain Avahi's Expat dependency",
+    "Avahi auto-IP must remain disabled",
+    "Avahi default service advertisements must remain disabled",
+    "D-Bus must remain disabled",
+):
+    assert token in prepare, token
+
+print('Buildroot WebSocket/cache and compact mDNS contract tests passed')

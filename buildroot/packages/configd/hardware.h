@@ -20,6 +20,9 @@ struct hardware_info {
   unsigned int poe_port_count;
   unsigned int poe_controller_count;
   unsigned int switch_instances;
+  unsigned int uplink_max_speed_mbps;
+  char uplink_media[16];
+  char uplink_label[16];
   bool poe_supported;
   bool poe_available;
   enum compatibility_state compatibility;

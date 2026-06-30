@@ -228,7 +228,7 @@ PY_STATUS
   wait "$policy_pid" 2>/dev/null || true
 done
 cat > "$TMP/security.json" <<'EOF'
-{"reset_button":{"enabled":true,"hold_seconds":3,"action":"factory-reset"}}
+{"reset_button":{"enabled":true,"hold_seconds":10,"action":"factory-reset"}}
 EOF
 cat > "$TMP/bin/ledctl" <<EOF
 #!/bin/sh
@@ -251,6 +251,7 @@ POSTMERKOS_LED_STATE="$TMP/run/led-state" \
 POSTMERKOS_LEDCTL="$TMP/bin/ledctl" \
 POSTMERKOS_FACTORY_RESET="$TMP/bin/factory-reset" \
 POSTMERKOS_FWUPDATE_LOCK="$TMP/fwupdate.lock" \
+POSTMERKOS_FACTORY_RESET_SKIP_SYNC=1 \
   "$TMP/bin/postmerkos-buttond" >"$TMP/buttond.log" 2>&1 &
 BUTTON_PID=$!
 sleep 3.4
@@ -262,7 +263,7 @@ assert p['state'] == 'waiting-release'
 assert p['gpio'] == 13 and p['active_low'] is True
 assert p['pressed'] is True and p['armed'] is False
 PY
-# Release long enough to arm, then hold continuously through the 3-second policy.
+# Release long enough to arm. The host test uses a long threshold so scheduler stalls cannot turn the partial-press check into a destructive hold.
 write_mmio 0x00002000
 sleep 0.9
 python3 - "$TMP/run/button-status.json" <<'PY'
@@ -291,10 +292,10 @@ assert p['pressed'] is False and p['countdown_active'] is False
 assert p['last_event'] == 'released'
 PY
 grep -q '^release reset$' "$TMP/led-calls"
-# Now hold continuously through the 3-second policy.
+# Now hold continuously through the 10-second host-test policy.
 write_mmio 0x00000000
 i=0
-while [ "$i" -lt 50 ] && [ ! -e "$TMP/factory-reset-called" ]; do sleep 0.1; i=$((i+1)); done
+while [ "$i" -lt 120 ] && [ ! -e "$TMP/factory-reset-called" ]; do sleep 0.1; i=$((i+1)); done
 [ -e "$TMP/factory-reset-called" ]
 wait "$BUTTON_PID" || true
 BUTTON_PID=

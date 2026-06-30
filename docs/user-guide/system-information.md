@@ -10,7 +10,8 @@ When available, the inventory includes:
 - chassis serial number;
 - product number;
 - base MAC address;
-- hostname.
+- configured and effective hostname;
+- requested `.local` advertised name, responder-verification state, mDNS binding state, and DHCP-registration capability.
 
 Exact identity comes from the immutable boot-generated board-information record rather than editable configuration.
 
@@ -50,7 +51,7 @@ Filesystem free space is live status. It is not an estimate of how much data a f
 
 ## Hardware and service health
 
-Where the platform exposes them, System Information also includes temperatures, management-service readiness, network state, reset-button state/countdown, chassis LED ownership and backend, hardware capability evidence, and exact-model compatibility information.
+Where the platform exposes them, System Information also includes temperatures, management-service readiness, network state, reset-button state/countdown, chassis LED ownership and backend, persistent-overlay recovery mode, hardware capability evidence, and exact-model compatibility information.
 
 ## Privacy and diagnostics
 

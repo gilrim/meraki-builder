@@ -6,6 +6,7 @@
 
 struct json_object *time_policy_load(void);
 struct json_object *time_status_json(void);
+struct json_object *timezones_json(void);
 int time_policy_save(struct json_object *policy, char *error, size_t error_size);
 int time_policy_apply(char *error, size_t error_size);
 int time_set_epoch(time_t epoch, char *error, size_t error_size);

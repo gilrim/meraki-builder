@@ -94,8 +94,9 @@ static int validate_policy(struct json_object *policy, char *error, size_t error
   struct json_object *ssh = member(policy, "ssh");
   struct json_object *web = member(policy, "web");
   struct json_object *chrony = member(policy, "chrony");
+  struct json_object *mdns = member(policy, "mdns");
   if (!valid_service(ssh, true) || !valid_service(web, false) ||
-      !valid_service(chrony, false)) {
+      !valid_service(chrony, false) || !valid_service(mdns, false)) {
     set_error(error, error_size, "service policy contains invalid fields"); return -EINVAL;
   }
   return 0;
@@ -112,8 +113,8 @@ struct json_object *service_policy_load(void) {
     json_object_object_add(ssh, "password_auth", json_object_new_boolean(true));
     json_object_object_add(ssh, "port", json_object_new_int(22));
     json_object_object_add(policy, "ssh", ssh);
-    const char *names[] = {"web", "chrony"};
-    for (size_t i = 0; i < 2; i++) {
+    const char *names[] = {"web", "chrony", "mdns"};
+    for (size_t i = 0; i < 3; i++) {
       struct json_object *entry = json_object_new_object();
       json_object_object_add(entry, "enabled", json_object_new_boolean(true));
       json_object_object_add(entry, "autostart", json_object_new_boolean(true));
@@ -129,6 +130,7 @@ static const char *service_pattern(const char *service) {
   if (!strcmp(service, "ssh")) return "dropbear";
   if (!strcmp(service, "web")) return "uhttpd";
   if (!strcmp(service, "chrony")) return "chrony";
+  if (!strcmp(service, "mdns")) return "avahi";
   if (!strcmp(service, "snmp")) return "snmpd";   /* matches S16snmpd init script */
   return NULL;
 }
@@ -164,6 +166,7 @@ static const char *service_process_name(const char *service) {
   if (!strcmp(service, "ssh")) return "dropbear";
   if (!strcmp(service, "web")) return "uhttpd";
   if (!strcmp(service, "chrony")) return "chronyd";
+  if (!strcmp(service, "mdns")) return "avahi-daemon";
   if (!strcmp(service, "snmp")) return "mini-snmpd";
   return NULL;
 }
@@ -191,8 +194,23 @@ int service_action(const char *service, const char *action, char *error, size_t 
   char path[256];
   int rc = find_init_script(pattern, path, sizeof(path));
   if (rc != 0) { set_error(error, error_size, "service init script is not installed"); return rc; }
-  rc = run_script(path, action);
+  const char *script_action = action;
+  /* Buildroot's Avahi SysV script implements reload rather than restart. */
+  if (!strcmp(service, "mdns") && !strcmp(action, "restart"))
+    script_action = running ? "reload" : "start";
+  rc = run_script(path, script_action);
   if (rc != 0) set_error(error, error_size, "service action failed");
+  return rc;
+}
+
+int service_reconfigure(const char *service, char *error, size_t error_size) {
+  struct json_object *policy = service_policy_load();
+  if (!policy) { set_error(error, error_size, "service policy unavailable"); return -ENOENT; }
+  struct json_object *entry = member(policy, service);
+  bool desired = bool_member(entry, "enabled", true) &&
+                 bool_member(entry, "autostart", true);
+  int rc = desired ? service_action(service, "restart", error, error_size) : 0;
+  json_object_put(policy);
   return rc;
 }
 
@@ -235,8 +253,8 @@ static int service_policy_apply_object(struct json_object *policy,
   struct json_object *ssh = member(policy, "ssh");
   int rc = write_dropbear_defaults(ssh);
   if (rc == 0) rc = time_policy_apply(error, error_size);
-  const char *names[] = {"ssh", "web", "chrony"};
-  for (size_t i = 0; i < 3; i++) {
+  const char *names[] = {"ssh", "web", "chrony", "mdns"};
+  for (size_t i = 0; i < 4; i++) {
     struct json_object *entry = member(policy, names[i]);
     bool desired = bool_member(entry, "enabled", true) &&
                    bool_member(entry, "autostart", true);
@@ -296,9 +314,9 @@ int service_policy_save(struct json_object *policy, char *error, size_t error_si
 struct json_object *service_status_json(void) {
   struct json_object *policy = service_policy_load();
   struct json_object *root = json_object_new_object();
-  const char *names[] = {"ssh", "web", "chrony"};
-  const char *processes[] = {"dropbear", "uhttpd", "chronyd"};
-  for (size_t i = 0; i < 3; i++) {
+  const char *names[] = {"ssh", "web", "chrony", "mdns"};
+  const char *processes[] = {"dropbear", "uhttpd", "chronyd", "avahi-daemon"};
+  for (size_t i = 0; i < 4; i++) {
     struct json_object *entry = member(policy, names[i]);
     struct json_object *status = json_object_new_object();
     bool desired = bool_member(entry, "enabled", true) &&

@@ -1,0 +1,101 @@
+{
+  "schema": 1,
+  "features": {
+    "system.identity": {
+      "class": "switch_config",
+      "capability": "network.write",
+      "web": true,
+      "pmc": true,
+      "web_markers": ["system_identity_set"],
+      "pmc_markers": ["hostname-set", "System Identity & Discovery"]
+    },
+    "service.mdns": {
+      "class": "switch_config",
+      "capability": "services.manage",
+      "web": true,
+      "pmc": true,
+      "web_markers": ["mdns"],
+      "pmc_markers": ["service_action_menu mdns"]
+    },
+    "time.timezone_catalogue": {
+      "class": "switch_config",
+      "capability": "services.manage",
+      "web": true,
+      "pmc": true,
+      "web_markers": ["timezones_get"],
+      "pmc_markers": ["timezone-set"]
+    },
+    "time.manual_local": {
+      "class": "switch_config",
+      "capability": "services.manage",
+      "web": true,
+      "pmc": true,
+      "web_markers": ["time_set_clock"],
+      "pmc_markers": ["time-set-local"]
+    },
+    "telemetry.snmp": {
+      "class": "switch_config",
+      "capability": "services.manage",
+      "web": true,
+      "pmc": true,
+      "web_markers": ["telemetry.snmp"],
+      "pmc_markers": ["SNMP and Prometheus"]
+    },
+    "telemetry.prometheus": {
+      "class": "switch_config",
+      "capability": "services.manage",
+      "web": true,
+      "pmc": true,
+      "web_markers": ["telemetry.prometheus"],
+      "pmc_markers": ["Prometheus TCP port"]
+    },
+    "access.ssh_keys": {
+      "class": "switch_config",
+      "capability": "users.manage",
+      "web": true,
+      "pmc": true,
+      "web_markers": ["ssh_key_add", "ssh_key_remove"],
+      "pmc_markers": ["ssh-key-add", "ssh-key-remove"]
+    },
+    "ports.clone": {
+      "class": "switch_config",
+      "capability": "switching.write",
+      "web": true,
+      "pmc": true,
+      "web_markers": ["ports_clone"],
+      "pmc_markers": ["ports-clone"]
+    },
+    "firmware.repositories": {
+      "class": "switch_config",
+      "capability": "firmware.update",
+      "web": true,
+      "pmc": true,
+      "web_markers": ["firmware_repo_set", "firmware_repo_check"],
+      "pmc_markers": ["firmware-repositories-set", "firmware-repository-check"]
+    },
+    "display.front_all_ports": {
+      "class": "client_local",
+      "web": true,
+      "pmc": false,
+      "web_markers": ["pmos.frontTable"]
+    },
+    "display.port_names": {
+      "class": "client_local",
+      "web": true,
+      "pmc": false,
+      "web_markers": ["pmos.portNamesExpanded"]
+    },
+    "display.responsive_mobile": {
+      "class": "client_local",
+      "web": true,
+      "pmc": false,
+      "web_markers": ["MobilePortEditor", "useResponsiveMode"]
+    },
+    "login.remember_session": {
+      "class": "client_local",
+      "web": true,
+      "pmc": false,
+      "web_markers": ["pmos.rememberLogin"]
+    }
+  }
+}

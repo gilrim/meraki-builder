@@ -14,6 +14,7 @@
 #include "session.h"
 #include "status.h"
 #include "system_ops.h"
+#include "system_identity.h"
 #include "service_ops.h"
 #include "telemetry.h"
 #include "time_ops.h"
@@ -1488,6 +1489,23 @@ static int handle_request(struct lws *wsi, struct per_session_data *session,
     if (!require_capability(wsi, session, request_id, "status.read")) return 0;
     char error[256]={0};if(compatibility_acknowledge(error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error);return 0;}
     struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Compatibility notice dismissed for this firmware"));queue_response(wsi,session,"ack",ack,request_id);json_object_put(ack);refresh_status_cache(true);return 0;
+  }
+  if (!strcmp(type, "system_identity_get")) {
+    if (!require_capability(wsi, session, request_id, "status.read")) return 0;
+    struct json_object *data=system_identity_status_json();
+    struct json_object *policy=system_identity_policy_load();
+    json_object_object_add(data,"policy",policy);
+    queue_response(wsi,session,"system_identity",data,request_id);json_object_put(data);return 0;
+  }
+  if (!strcmp(type, "system_identity_set")) {
+    if (!require_capability(wsi, session, request_id, "network.write")) return 0;
+    struct json_object *data=request_data_object(message);char error[256]={0};
+    if(system_identity_save(data,error,sizeof(error))!=0){queue_bad_request(wsi,session,request_id,error[0]?error:"system identity update failed");return 0;}
+    struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("System identity updated"));queue_response(wsi,session,"ack",ack,request_id);json_object_put(ack);refresh_status_cache(true);return 0;
+  }
+  if (!strcmp(type, "timezones_get")) {
+    if (!require_capability(wsi, session, request_id, "status.read")) return 0;
+    struct json_object *data=timezones_json();queue_response(wsi,session,"timezones",data,request_id);json_object_put(data);return 0;
   }
   if (!strcmp(type, "services_get")) {
     if (!require_capability(wsi, session, request_id, "status.read")) return 0;

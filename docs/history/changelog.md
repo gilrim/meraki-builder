@@ -1,3 +1,11 @@
+# 2026-06-30 responsive interface, PMC parity, and local discovery
+
+- Added phone-specific accordion port editing, six-port groups, atomic SFP pairs, outlined/labelled banks, bounded All Ports cloning, collapsed port names, and an eight-card responsive header.
+- Rebuilt login as a bounded accessible card with remembered-session preference and structured connection status.
+- Added default `postmerkos.local`, validated persistent hostnames, management-only mDNS, canonical timezones, and exact uplink metadata.
+- Added PMC parity for system information, cloning, SSH keys, firmware repositories, identity/mDNS, timezones/manual time, and telemetry.
+- Added a machine-readable management feature manifest and cross-interface parity test.
+
 # 2026-06-29 OpenVTSS v0.8 evidence synchronization
 
 - Added the hardware-proven representative MS42P copper bank boundaries and all four SFP logical/chip-local mappings to current architecture and compatibility documentation.

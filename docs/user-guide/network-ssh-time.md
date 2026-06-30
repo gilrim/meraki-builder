@@ -1,5 +1,9 @@
 # Network, SSH, and time
 
+## System identity and local discovery
+
+Hostname and management-only mDNS behavior are documented in [System identity and local discovery](system-identity-and-discovery.md). The default name is `postmerkos.local`; ordinary DHCP/local-DNS registration is not currently a verified capability.
+
 ## Management IPv4
 
 The management interface supports DHCP with fallback addressing or static IPv4. Configd records DHCP acquisition, duration, renewal, rebind, server, address, gateway, and calculated expiry in RAM.

@@ -201,6 +201,13 @@ else
 fi
 grep -q '^BR2_PACKAGE_POSTMERKOS_CONSOLE=y$' "$CONFIG" || die "Buildroot did not retain POSTMERKOS_CONSOLE"
 grep -q '^BR2_PACKAGE_POSTMERKOS_HARDWARE=y$' "$CONFIG" || die "Buildroot did not retain POSTMERKOS_HARDWARE"
+grep -q '^BR2_PACKAGE_AVAHI=y$' "$CONFIG" || die "Buildroot did not retain Avahi"
+grep -q '^BR2_PACKAGE_AVAHI_DAEMON=y$' "$CONFIG" || die "Buildroot did not retain the Avahi daemon"
+grep -q '^BR2_PACKAGE_LIBDAEMON=y$' "$CONFIG" || die "Buildroot did not retain Avahi's libdaemon dependency"
+grep -q '^BR2_PACKAGE_EXPAT=y$' "$CONFIG" || die "Buildroot did not retain Avahi's Expat dependency"
+! grep -q '^BR2_PACKAGE_AVAHI_AUTOIPD=y$' "$CONFIG" || die "Avahi auto-IP must remain disabled"
+! grep -q '^BR2_PACKAGE_AVAHI_DEFAULT_SERVICES=y$' "$CONFIG" || die "Avahi default service advertisements must remain disabled"
+! grep -q '^BR2_PACKAGE_DBUS=y$' "$CONFIG" || die "D-Bus must remain disabled for the compact management-only mDNS build"
 grep -q '^BR2_PACKAGE_JSON_C=y$' "$CONFIG" || die "Buildroot did not retain JSON-C"
 grep -q '^BR2_PACKAGE_LIBCURL=y$' "$CONFIG" || die "Buildroot did not retain libcurl for HTTP(S)/SFTP firmware transport"
 grep -q '^BR2_PACKAGE_MBEDTLS=y$' "$CONFIG" || die "Buildroot did not retain mbed TLS for verified HTTPS"

@@ -14,28 +14,31 @@ struct hardware_record {
   unsigned int uplinks;
   unsigned int poe_ports;
   unsigned int switch_instances;
+  unsigned int uplink_max_speed_mbps;
+  const char *uplink_media;
+  const char *uplink_label;
   enum compatibility_state compatibility;
 };
 
 static const struct hardware_record records[] = {
-  {"MS220-8", "vcore3-luton", 10, 8, 2, 0, 1, COMPATIBILITY_UNTESTED},
-  {"MS220-8P", "vcore3-luton", 10, 8, 2, 8, 1, COMPATIBILITY_UNTESTED},
-  {"MS220-24", "vcore3-luton", 26, 24, 2, 0, 1, COMPATIBILITY_UNTESTED},
-  {"MS220-24P", "vcore3-luton", 26, 24, 2, 24, 1, COMPATIBILITY_UNTESTED},
-  {"MS220-48", "vcore3-jaguar-dual", 52, 48, 4, 0, 2, COMPATIBILITY_UNTESTED},
-  {"MS220-48LP", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, COMPATIBILITY_UNTESTED},
-  {"MS220-48FP", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, COMPATIBILITY_UNTESTED},
-  {"MS220-48P", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, COMPATIBILITY_UNTESTED},
-  {"MS22", "vcore3-luton", 26, 24, 2, 0, 1, COMPATIBILITY_UNTESTED},
-  {"MS22P", "vcore3-luton", 26, 24, 2, 24, 1, COMPATIBILITY_UNTESTED},
-  {"MS42", "vcore3-jaguar-dual", 52, 48, 4, 0, 2, COMPATIBILITY_UNTESTED},
-  {"MS42P", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, COMPATIBILITY_UNTESTED},
-  {"MS320-24", "vcore3-jaguar", 28, 24, 4, 0, 1, COMPATIBILITY_UNTESTED},
-  {"MS320-24P", "vcore3-jaguar", 28, 24, 4, 24, 1, COMPATIBILITY_UNTESTED},
-  {"MS320-48", "vcore3-jaguar-dual", 52, 48, 4, 0, 2, COMPATIBILITY_UNTESTED},
-  {"MS320-48LP", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, COMPATIBILITY_UNTESTED},
-  {"MS320-48FP", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, COMPATIBILITY_UNTESTED},
-  {"MS320-48P", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, COMPATIBILITY_UNTESTED},
+  {"MS220-8", "vcore3-luton", 10, 8, 2, 0, 1, 1000, "sfp", "SFP", COMPATIBILITY_UNTESTED},
+  {"MS220-8P", "vcore3-luton", 10, 8, 2, 8, 1, 1000, "sfp", "SFP", COMPATIBILITY_UNTESTED},
+  {"MS220-24", "vcore3-luton", 26, 24, 2, 0, 1, 1000, "sfp", "SFP", COMPATIBILITY_UNTESTED},
+  {"MS220-24P", "vcore3-luton", 26, 24, 2, 24, 1, 1000, "sfp", "SFP", COMPATIBILITY_UNTESTED},
+  {"MS220-48", "vcore3-jaguar-dual", 52, 48, 4, 0, 2, 1000, "sfp", "SFP", COMPATIBILITY_UNTESTED},
+  {"MS220-48LP", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, 1000, "sfp", "SFP", COMPATIBILITY_UNTESTED},
+  {"MS220-48FP", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, 1000, "sfp", "SFP", COMPATIBILITY_UNTESTED},
+  {"MS220-48P", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, 1000, "sfp", "SFP", COMPATIBILITY_UNTESTED},
+  {"MS22", "vcore3-luton", 26, 24, 2, 0, 1, 1000, "sfp", "SFP", COMPATIBILITY_UNTESTED},
+  {"MS22P", "vcore3-luton", 26, 24, 2, 24, 1, 1000, "sfp", "SFP", COMPATIBILITY_UNTESTED},
+  {"MS42", "vcore3-jaguar-dual", 52, 48, 4, 0, 2, 10000, "sfp-plus", "SFP+", COMPATIBILITY_UNTESTED},
+  {"MS42P", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, 10000, "sfp-plus", "SFP+", COMPATIBILITY_UNTESTED},
+  {"MS320-24", "vcore3-jaguar", 28, 24, 4, 0, 1, 10000, "sfp-plus", "SFP+", COMPATIBILITY_UNTESTED},
+  {"MS320-24P", "vcore3-jaguar", 28, 24, 4, 24, 1, 10000, "sfp-plus", "SFP+", COMPATIBILITY_UNTESTED},
+  {"MS320-48", "vcore3-jaguar-dual", 52, 48, 4, 0, 2, 10000, "sfp-plus", "SFP+", COMPATIBILITY_UNTESTED},
+  {"MS320-48LP", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, 10000, "sfp-plus", "SFP+", COMPATIBILITY_UNTESTED},
+  {"MS320-48FP", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, 10000, "sfp-plus", "SFP+", COMPATIBILITY_UNTESTED},
+  {"MS320-48P", "vcore3-jaguar-dual", 52, 48, 4, 48, 2, 10000, "sfp-plus", "SFP+", COMPATIBILITY_UNTESTED},
 };
 
 static const char *env_or_default(const char *name, const char *fallback) {
@@ -117,9 +120,14 @@ int hardware_init(struct hardware_info *info, struct pd690xx_cfg *pd690xx) {
     info->uplink_port_count = record->uplinks;
     info->poe_port_count = record->poe_ports;
     info->switch_instances = record->switch_instances;
+    info->uplink_max_speed_mbps = record->uplink_max_speed_mbps;
+    snprintf(info->uplink_media, sizeof(info->uplink_media), "%s", record->uplink_media);
+    snprintf(info->uplink_label, sizeof(info->uplink_label), "%s", record->uplink_label);
     info->compatibility = record->compatibility;
   } else {
     snprintf(info->family, sizeof(info->family), "unknown");
+    snprintf(info->uplink_media, sizeof(info->uplink_media), "unknown");
+    snprintf(info->uplink_label, sizeof(info->uplink_label), "UPLINK");
     info->compatibility = COMPATIBILITY_UNTESTED;
     info->switch_instances = 1;
   }
@@ -168,6 +176,12 @@ struct json_object *hardware_capabilities_json(const struct hardware_info *info)
   json_object_object_add(caps, "port_count", json_object_new_int(info ? (int)info->port_count : 0));
   json_object_object_add(caps, "copper_ports", json_object_new_int(info ? (int)info->copper_port_count : 0));
   json_object_object_add(caps, "uplink_ports", json_object_new_int(info ? (int)info->uplink_port_count : 0));
+  struct json_object *uplink = json_object_new_object();
+  json_object_object_add(uplink, "media", json_object_new_string(info ? info->uplink_media : "unknown"));
+  json_object_object_add(uplink, "label", json_object_new_string(info ? info->uplink_label : "UPLINK"));
+  json_object_object_add(uplink, "max_speed_mbps", json_object_new_int(info ? (int)info->uplink_max_speed_mbps : 0));
+  json_object_object_add(uplink, "count", json_object_new_int(info ? (int)info->uplink_port_count : 0));
+  json_object_object_add(caps, "uplink", uplink);
   json_object_object_add(caps, "switch_instances", json_object_new_int(info ? (int)info->switch_instances : 0));
   json_object_object_add(poe, "supported", json_object_new_boolean(info && info->poe_supported));
   json_object_object_add(poe, "available", json_object_new_boolean(info && info->poe_available));

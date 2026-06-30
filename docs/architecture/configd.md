@@ -33,3 +33,9 @@ Known models use immutable `/run/postmerkos/boardinfo`; editable files and stale
 `S15configd` starts configd through a bounded supervisor. Readiness requires the Unix socket, a valid root local-session request, an actual WebSocket upgrade in web images, `configd-ws` selection, and a protocol-2 `hello` response. Exit details are recorded in `/run/postmerkos/configd.exit`, daemon output in `/run/postmerkos/configd.log`, and WebSocket events in `/run/postmerkos/websocket.log`.
 
 Use `postmerkosctl management-health` for the complete readiness probe. Boot network initialization emits concise serial PASS/WARN/FAIL lines and retains the full result at `/run/postmerkos/network-bootstrap.json`.
+
+## Identity and discovery transaction
+
+System identity is stored separately from switch forwarding configuration because it changes Linux hostname and discovery service state. Configd validates and normalizes the candidate, applies `/etc/hostname` and the management-only Avahi configuration, reconfigures mDNS when policy requires it, then persists atomically. Failure restores the prior hostname/configuration and reconfigures the responder back to the previous state.
+
+The no-D-Bus responder configuration keeps image/runtime cost lower but cannot query Avahi's internally suffixed conflict name, so status distinguishes the requested advertised name from responder-verified state.

@@ -1,10 +1,15 @@
 # Service management
 
-Persistent service policy is stored in `/config/postmerkos/services.json`.
+Persistent service policy is stored in `/config/postmerkos/services.json`. Administrators can view observed state, enable/disable, set autostart, and start/stop/reconfigure supported management services.
 
-Administrators can view status, start, stop, restart, configure, enable at boot, disable at boot, and read recent RAM logs for management services such as SSH, the optional web frontend, and chrony.
+Managed services are:
 
-Critical forwarding, network, configd-core, and Click initialization services cannot be permanently disabled through normal management interfaces.
+- **SSH** — Dropbear enablement, startup, port, and password/key policy;
+- **Web** — optional static web frontend;
+- **Chrony** — NTP synchronization, additionally gated by time policy;
+- **mDNS** — management-interface-only `.local` host discovery through Avahi;
+- **SNMP/Prometheus** — configured through validated telemetry policy rather than the generic service file.
 
+Buildroot's Avahi init script provides `reload` rather than `restart`; configd maps the generic reconfigure operation to reload when running and start when stopped. A disabled mDNS policy is not started by hostname changes.
 
-Configd is supervised as a critical management service. Its readiness check performs a real local-session request and WebSocket protocol-2 `hello`, not merely a TCP-listen test. Diagnostics are available with `postmerkosctl management-health` and through the serial `status` and `logs` commands.
+Critical forwarding, management networking, configd core, and Click initialization cannot be permanently disabled through normal management interfaces. Configd readiness performs a real local-session request and WebSocket protocol-2 `hello`, not merely a TCP-listen test. Use `postmerkosctl management-health` and the PMC Status/Logs views for diagnostics.

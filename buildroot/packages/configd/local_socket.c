@@ -20,6 +20,8 @@
 #include "json_util.h"
 #include "socket_io.h"
 #include "ssh_keys.h"
+#include "system_ops.h"
+#include "system_identity.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -254,6 +256,27 @@ static void handle_client(int fd) {
   } else if (!strcmp(type, "ssh.keys.remove")) {
     struct json_object *data=request_data(request);const char *key=object_string(data,"key");
     if(!role_has_capability(role,"users.manage"))send_error(fd,403,"managing SSH keys requires administrator access");else{char error[256]={0};if(ssh_keys_remove(key,error,sizeof(error))!=0)send_error(fd,400,error);else{struct json_object *keys=ssh_keys_list();send_json(fd,"ssh_keys",keys);json_object_put(keys);}}
+  } else if (!strcmp(type, "system.identity.get") && role_has_capability(role, "status.read")) {
+    struct json_object *status=system_identity_status_json();struct json_object *policy=system_identity_policy_load();json_object_object_add(status,"policy",policy);send_json(fd,"system_identity",status);json_object_put(status);
+  } else if (!strcmp(type, "system.identity.set")) {
+    struct json_object *data=request_data(request);char error[256]={0};
+    if(!role_has_capability(role,"network.write"))send_error(fd,403,"system identity changes require administrator access");
+    else if(!data || system_identity_save(data,error,sizeof(error))!=0)send_error(fd,400,error[0]?error:"system identity update failed");
+    else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("System identity updated"));send_json(fd,"ack",ack);json_object_put(ack);}
+  } else if (!strcmp(type, "timezones.get") && role_has_capability(role, "status.read")) {
+    struct json_object *zones=timezones_json();send_json(fd,"timezones",zones);json_object_put(zones);
+  } else if (!strcmp(type, "firmware.repositories.get") && role_has_capability(role, "firmware.history.read")) {
+    struct json_object *repos=firmware_repositories_json();send_json(fd,"firmware_repositories",repos);json_object_put(repos);
+  } else if (!strcmp(type, "firmware.repositories.set")) {
+    struct json_object *data=request_data(request);char error[256]={0};
+    if(!role_has_capability(role,"firmware.update"))send_error(fd,403,"firmware repository changes require administrator access");
+    else if(!data || firmware_repositories_save(data,error,sizeof(error))!=0)send_error(fd,400,error[0]?error:"repository policy update failed");
+    else{struct json_object *ack=json_object_new_object();json_object_object_add(ack,"message",json_object_new_string("Firmware repositories updated"));send_json(fd,"ack",ack);json_object_put(ack);}
+  } else if (!strcmp(type, "firmware.repository.check")) {
+    struct json_object *data=request_data(request);const char *source=object_string(data,"source");
+    if(!role_has_capability(role,"firmware.history.read"))send_error(fd,403,"repository checks require firmware history access");
+    else if(!source || !*source)send_error(fd,400,"source is required");
+    else{struct json_object *result=firmware_repository_check(source);send_json(fd,"firmware_repository_check",result);json_object_put(result);}
   } else if (!strcmp(type, "services.get") && role_has_capability(role, "status.read")) {
     struct json_object *status = service_status_json();
     send_json(fd, "services", status); json_object_put(status);

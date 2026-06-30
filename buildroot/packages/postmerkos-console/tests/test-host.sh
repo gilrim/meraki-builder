@@ -83,13 +83,25 @@ grep -q 'Read-only access' "$TMP/viewer.out"
 ! grep -q '3) Firmware Update' "$TMP/viewer.out"
 ! grep -q '8) Shell' "$TMP/viewer.out"
 
-# Service Management starts with a formatted table and does not dump JSON.
+# Services, Time & Monitoring starts with a formatted table and does not dump JSON.
 printf '6
 b
 0
 ' | POSTMERKOSCTL="$TMP/postmerkosctl" "$CONSOLE" menu >"$TMP/services.out"
 grep -q 'SERVICE       STATE' "$TMP/services.out"
 ! grep -q '^{}$' "$TMP/services.out"
+grep -q 'System identity and mDNS discovery' "$TMP/services.out"
+grep -q 'SNMP and Prometheus monitoring' "$TMP/services.out"
+printf '2
+5
+1
+2,3
+administrative,vlan
+
+b
+0
+' | POSTMERKOSCTL="$TMP/postmerkosctl" "$CONSOLE" menu >"$TMP/clone.out"
+grep -q -- 'ports-clone 1 2,3 administrative,vlan' "$TMP/calls"
 # Operator receives backup/reboot but not administrator-only entries.
 printf '0
 ' | POSTMERKOS_TEST_ROLE=operator POSTMERKOSCTL="$TMP/postmerkosctl" "$CONSOLE" menu >"$TMP/operator.out"
@@ -97,7 +109,7 @@ grep -q '4) Backup & Restore' "$TMP/operator.out"
 grep -q '7) Power Control' "$TMP/operator.out"
 ! grep -q '3) Firmware Update' "$TMP/operator.out"
 ! grep -q '5) User Management' "$TMP/operator.out"
-! grep -q '6) Service Management' "$TMP/operator.out"
+! grep -q '6) Services, Time & Monitoring' "$TMP/operator.out"
 ! grep -q '8) Shell' "$TMP/operator.out"
 # Scriptable shell entry is denied to a viewer as well as hidden from the menu.
 if POSTMERKOS_TEST_ROLE=viewer POSTMERKOSCTL="$TMP/postmerkosctl" "$CONSOLE" shell >"$TMP/viewer-shell.out" 2>&1; then

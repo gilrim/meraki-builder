@@ -134,6 +134,8 @@ Local values use `HH:MM:SS - DD:MM:YYYY`, are interpreted through the saved stan
 | `ssh_key_list`, `ssh_key_add`, `ssh_key_remove` | Manage validated public keys transactionally | `users.manage` |
 | `services_get` | Read service policy and observed state | `status.read` |
 | `services_set`, `services_action` | Configure or operate managed services | `services.manage` |
+| `system_identity_get`, `timezones_get` | Read identity/discovery status or canonical timezone catalogue | `status.read` |
+| `system_identity_set` | Validate/apply/persist hostname and reconfigure mDNS | `network.write` |
 | `time_get` | Read time/NTP/DST status and policy | `status.read` |
 | `time_set`, `time_sync`, `time_set_clock` | Configure policy, request synchronization, or set the clock | `services.manage` |
 | `terminal_start`, `terminal_exec` | Start/use the bounded command session | `terminal.exec` |
@@ -188,3 +190,7 @@ postmerkosctl session --shell
 ## Runtime health probe
 
 `postmerkosctl management-health` validates the local process and Unix socket, performs a role-aware local `session` request, opens a WebSocket on TCP 4001, requires the `configd-ws` subprotocol, and sends a protocol `hello`. This is the readiness contract used by `S15configd`.
+
+## Management feature parity
+
+The release file `/usr/share/postmerkos/management-features.json` distinguishes switch-level configuration from browser-local presentation. Release tests require every tracked `switch_config` feature to declare a server capability and both browser and PMC markers.

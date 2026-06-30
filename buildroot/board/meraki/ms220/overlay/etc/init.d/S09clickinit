@@ -115,7 +115,8 @@ start() {
     printf '%s\n' "$(mac_to_internal_ipv4 "$mac")" > /tmp/MERAKI_IP
     ipv6=$(mac_to_eui64_linklocal_shell "$mac")
     printf '%s\n' "$ipv6" > /tmp/MERAKI_IP6
-    hostname=$(printf 'm%s' "$mac" | tr -d ':')
+    hostname=$(cat /run/postmerkos/effective-hostname 2>/dev/null || hostname 2>/dev/null || true)
+    [ -n "$hostname" ] || hostname=postmerkos
     sysctl -qw "kernel.hostname=$hostname" 2>/dev/null || true
     log "using MAC address $mac"
 

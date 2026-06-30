@@ -1,0 +1,2909 @@
+[
+  {
+    "label": "UTC and Atlantic",
+    "zones": [
+      {
+        "id": "Etc/UTC",
+        "label": "UTC — Coordinated Universal Time",
+        "standard_offset_minutes": 0,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 60,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Atlantic/Azores",
+        "label": "Azores",
+        "standard_offset_minutes": -60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 0,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 0,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 1,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Atlantic/Cape_Verde",
+        "label": "Cape Verde",
+        "standard_offset_minutes": -60,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 0,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Atlantic/Reykjavik",
+        "label": "Iceland",
+        "standard_offset_minutes": 0,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 60,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Atlantic/Canary",
+        "label": "Canary Islands",
+        "standard_offset_minutes": 0,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 60,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 1,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "label": "Canada and United States",
+    "zones": [
+      {
+        "id": "Pacific/Honolulu",
+        "label": "Hawaii",
+        "standard_offset_minutes": -600,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -540,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Anchorage",
+        "label": "Alaska",
+        "standard_offset_minutes": -540,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -480,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Los_Angeles",
+        "label": "Pacific — Los Angeles / Seattle",
+        "standard_offset_minutes": -480,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -420,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Vancouver",
+        "label": "Pacific — Vancouver",
+        "standard_offset_minutes": -480,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -420,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Whitehorse",
+        "label": "Yukon",
+        "standard_offset_minutes": -420,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -360,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Denver",
+        "label": "Mountain — Denver",
+        "standard_offset_minutes": -420,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -360,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Edmonton",
+        "label": "Mountain — Edmonton",
+        "standard_offset_minutes": -420,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -360,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Phoenix",
+        "label": "Arizona",
+        "standard_offset_minutes": -420,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -360,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Chicago",
+        "label": "Central — Chicago",
+        "standard_offset_minutes": -360,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -300,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Winnipeg",
+        "label": "Central — Winnipeg",
+        "standard_offset_minutes": -360,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -300,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Regina",
+        "label": "Saskatchewan",
+        "standard_offset_minutes": -360,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -300,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/New_York",
+        "label": "Eastern — New York",
+        "standard_offset_minutes": -300,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Toronto",
+        "label": "Eastern — Toronto",
+        "standard_offset_minutes": -300,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Iqaluit",
+        "label": "Eastern — Iqaluit",
+        "standard_offset_minutes": -300,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Halifax",
+        "label": "Atlantic — Halifax",
+        "standard_offset_minutes": -240,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Moncton",
+        "label": "Atlantic — Moncton",
+        "standard_offset_minutes": -240,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Goose_Bay",
+        "label": "Atlantic — Goose Bay",
+        "standard_offset_minutes": -240,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/St_Johns",
+        "label": "Newfoundland — St. John’s",
+        "standard_offset_minutes": -210,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -150,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "label": "Mexico, Central America, and Caribbean",
+    "zones": [
+      {
+        "id": "America/Tijuana",
+        "label": "Tijuana",
+        "standard_offset_minutes": -480,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -420,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Mexico_City",
+        "label": "Mexico City",
+        "standard_offset_minutes": -360,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -300,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Guatemala",
+        "label": "Guatemala",
+        "standard_offset_minutes": -360,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -300,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Costa_Rica",
+        "label": "Costa Rica",
+        "standard_offset_minutes": -360,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -300,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Panama",
+        "label": "Panama",
+        "standard_offset_minutes": -300,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Havana",
+        "label": "Cuba",
+        "standard_offset_minutes": -300,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": -240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Jamaica",
+        "label": "Jamaica",
+        "standard_offset_minutes": -300,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Puerto_Rico",
+        "label": "Puerto Rico",
+        "standard_offset_minutes": -240,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Santo_Domingo",
+        "label": "Dominican Republic",
+        "standard_offset_minutes": -240,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "label": "South America",
+    "zones": [
+      {
+        "id": "America/Bogota",
+        "label": "Bogotá",
+        "standard_offset_minutes": -300,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Lima",
+        "label": "Lima",
+        "standard_offset_minutes": -300,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Guayaquil",
+        "label": "Ecuador",
+        "standard_offset_minutes": -300,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Caracas",
+        "label": "Caracas",
+        "standard_offset_minutes": -240,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/La_Paz",
+        "label": "La Paz",
+        "standard_offset_minutes": -240,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Guyana",
+        "label": "Guyana",
+        "standard_offset_minutes": -240,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Manaus",
+        "label": "Manaus",
+        "standard_offset_minutes": -240,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Sao_Paulo",
+        "label": "São Paulo / Brasília",
+        "standard_offset_minutes": -180,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -120,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Argentina/Buenos_Aires",
+        "label": "Buenos Aires",
+        "standard_offset_minutes": -180,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -120,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Montevideo",
+        "label": "Montevideo",
+        "standard_offset_minutes": -180,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -120,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "America/Santiago",
+        "label": "Santiago",
+        "standard_offset_minutes": -240,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "label": "Western and Central Europe",
+    "zones": [
+      {
+        "id": "Europe/London",
+        "label": "London",
+        "standard_offset_minutes": 0,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 60,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 1,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Dublin",
+        "label": "Dublin",
+        "standard_offset_minutes": 0,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 60,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 1,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Lisbon",
+        "label": "Lisbon",
+        "standard_offset_minutes": 0,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 60,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 1,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Paris",
+        "label": "Paris",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Berlin",
+        "label": "Berlin",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Madrid",
+        "label": "Madrid",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Rome",
+        "label": "Rome",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Amsterdam",
+        "label": "Amsterdam",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Brussels",
+        "label": "Brussels",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Zurich",
+        "label": "Zurich",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Vienna",
+        "label": "Vienna",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Prague",
+        "label": "Prague",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Warsaw",
+        "label": "Warsaw",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Stockholm",
+        "label": "Stockholm",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Oslo",
+        "label": "Oslo",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Copenhagen",
+        "label": "Copenhagen",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "label": "Eastern Europe",
+    "zones": [
+      {
+        "id": "Europe/Athens",
+        "label": "Athens",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 4,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Helsinki",
+        "label": "Helsinki",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 4,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Bucharest",
+        "label": "Bucharest",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 4,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Sofia",
+        "label": "Sofia",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 4,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Kyiv",
+        "label": "Kyiv",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 4,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Riga",
+        "label": "Riga",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 4,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Tallinn",
+        "label": "Tallinn",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 4,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Vilnius",
+        "label": "Vilnius",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 5,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          },
+          "end": {
+            "month": 10,
+            "week": 5,
+            "weekday": 0,
+            "hour": 4,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Istanbul",
+        "label": "Istanbul",
+        "standard_offset_minutes": 180,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Europe/Moscow",
+        "label": "Moscow",
+        "standard_offset_minutes": 180,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "label": "Africa",
+    "zones": [
+      {
+        "id": "Africa/Accra",
+        "label": "Accra",
+        "standard_offset_minutes": 0,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 60,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Africa/Casablanca",
+        "label": "Casablanca",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Africa/Algiers",
+        "label": "Algiers",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Africa/Lagos",
+        "label": "Lagos",
+        "standard_offset_minutes": 60,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 120,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Africa/Cairo",
+        "label": "Cairo",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Africa/Johannesburg",
+        "label": "Johannesburg",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Africa/Maputo",
+        "label": "Maputo",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Africa/Harare",
+        "label": "Harare",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Africa/Nairobi",
+        "label": "Nairobi",
+        "standard_offset_minutes": 180,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Africa/Addis_Ababa",
+        "label": "Addis Ababa",
+        "standard_offset_minutes": 180,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "label": "Middle East",
+    "zones": [
+      {
+        "id": "Asia/Jerusalem",
+        "label": "Jerusalem",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Beirut",
+        "label": "Beirut",
+        "standard_offset_minutes": 120,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 180,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Amman",
+        "label": "Amman",
+        "standard_offset_minutes": 180,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Baghdad",
+        "label": "Baghdad",
+        "standard_offset_minutes": 180,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Riyadh",
+        "label": "Riyadh",
+        "standard_offset_minutes": 180,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 240,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Tehran",
+        "label": "Tehran",
+        "standard_offset_minutes": 210,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 270,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Dubai",
+        "label": "Dubai / Abu Dhabi",
+        "standard_offset_minutes": 240,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 300,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Muscat",
+        "label": "Muscat",
+        "standard_offset_minutes": 240,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 300,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "label": "South and Central Asia",
+    "zones": [
+      {
+        "id": "Asia/Kabul",
+        "label": "Kabul",
+        "standard_offset_minutes": 270,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 330,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Karachi",
+        "label": "Karachi",
+        "standard_offset_minutes": 300,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 360,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Tashkent",
+        "label": "Tashkent",
+        "standard_offset_minutes": 300,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 360,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Kolkata",
+        "label": "India — Kolkata / Delhi / Mumbai",
+        "standard_offset_minutes": 330,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 390,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Colombo",
+        "label": "Colombo",
+        "standard_offset_minutes": 330,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 390,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Kathmandu",
+        "label": "Kathmandu",
+        "standard_offset_minutes": 345,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 405,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Dhaka",
+        "label": "Dhaka",
+        "standard_offset_minutes": 360,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 420,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Almaty",
+        "label": "Almaty",
+        "standard_offset_minutes": 300,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 360,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "label": "East and Southeast Asia",
+    "zones": [
+      {
+        "id": "Asia/Yangon",
+        "label": "Yangon",
+        "standard_offset_minutes": 390,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 450,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Bangkok",
+        "label": "Bangkok",
+        "standard_offset_minutes": 420,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 480,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Ho_Chi_Minh",
+        "label": "Ho Chi Minh City",
+        "standard_offset_minutes": 420,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 480,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Jakarta",
+        "label": "Jakarta",
+        "standard_offset_minutes": 420,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 480,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Singapore",
+        "label": "Singapore",
+        "standard_offset_minutes": 480,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 540,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Kuala_Lumpur",
+        "label": "Kuala Lumpur",
+        "standard_offset_minutes": 480,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 540,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Manila",
+        "label": "Manila",
+        "standard_offset_minutes": 480,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 540,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Hong_Kong",
+        "label": "Hong Kong",
+        "standard_offset_minutes": 480,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 540,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Shanghai",
+        "label": "China — Shanghai / Beijing",
+        "standard_offset_minutes": 480,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 540,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Taipei",
+        "label": "Taipei",
+        "standard_offset_minutes": 480,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 540,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Tokyo",
+        "label": "Tokyo",
+        "standard_offset_minutes": 540,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 600,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Asia/Seoul",
+        "label": "Seoul",
+        "standard_offset_minutes": 540,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 600,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "label": "Australia and Pacific",
+    "zones": [
+      {
+        "id": "Australia/Perth",
+        "label": "Perth",
+        "standard_offset_minutes": 480,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 540,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Australia/Eucla",
+        "label": "Eucla",
+        "standard_offset_minutes": 525,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 585,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Australia/Darwin",
+        "label": "Darwin",
+        "standard_offset_minutes": 570,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 630,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Australia/Adelaide",
+        "label": "Adelaide",
+        "standard_offset_minutes": 570,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 630,
+          "start": {
+            "month": 10,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 4,
+            "week": 1,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Australia/Brisbane",
+        "label": "Brisbane",
+        "standard_offset_minutes": 600,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 660,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Australia/Sydney",
+        "label": "Sydney",
+        "standard_offset_minutes": 600,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 660,
+          "start": {
+            "month": 10,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 4,
+            "week": 1,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Australia/Melbourne",
+        "label": "Melbourne",
+        "standard_offset_minutes": 600,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 660,
+          "start": {
+            "month": 10,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 4,
+            "week": 1,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Australia/Hobart",
+        "label": "Hobart",
+        "standard_offset_minutes": 600,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 660,
+          "start": {
+            "month": 10,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 4,
+            "week": 1,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Australia/Lord_Howe",
+        "label": "Lord Howe Island",
+        "standard_offset_minutes": 630,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 660,
+          "start": {
+            "month": 10,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 4,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Pacific/Guam",
+        "label": "Guam",
+        "standard_offset_minutes": 600,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 660,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Pacific/Port_Moresby",
+        "label": "Port Moresby",
+        "standard_offset_minutes": 600,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 660,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Pacific/Noumea",
+        "label": "Nouméa",
+        "standard_offset_minutes": 660,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 720,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Pacific/Fiji",
+        "label": "Fiji",
+        "standard_offset_minutes": 720,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 780,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Pacific/Auckland",
+        "label": "Auckland",
+        "standard_offset_minutes": 720,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 780,
+          "start": {
+            "month": 9,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 4,
+            "week": 1,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Pacific/Chatham",
+        "label": "Chatham Islands",
+        "standard_offset_minutes": 765,
+        "dst": {
+          "enabled": true,
+          "offset_minutes": 825,
+          "start": {
+            "month": 9,
+            "week": 5,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 4,
+            "week": 1,
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Pacific/Tahiti",
+        "label": "Tahiti",
+        "standard_offset_minutes": -600,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": -540,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      },
+      {
+        "id": "Pacific/Kiritimati",
+        "label": "Kiritimati",
+        "standard_offset_minutes": 840,
+        "dst": {
+          "enabled": false,
+          "offset_minutes": 900,
+          "start": {
+            "month": 3,
+            "week": 2,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          },
+          "end": {
+            "month": 11,
+            "week": 1,
+            "weekday": 0,
+            "hour": 2,
+            "minute": 0
+          }
+        }
+      }
+    ]
+  }
+]

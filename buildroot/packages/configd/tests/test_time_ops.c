@@ -15,5 +15,8 @@ int main(void) {
   error[0]='\0'; assert(time_set_local("02:30:00 - 08:03:2026",error,sizeof(error))!=0);
   error[0]='\0'; assert(time_set_local("2026-01-15 12:34:56",error,sizeof(error))!=0);
   error[0]='\0'; assert(time_set_local("12:34:56 - 31:02:2026",error,sizeof(error))!=0);
-  unlink(temp); puts("time operation tests passed"); return 0;
+  char zones[]="/tmp/configd-zones-XXXXXX"; int zfd=mkstemp(zones); assert(zfd>=0);
+  FILE *zf=fdopen(zfd,"w"); assert(zf); fputs("[{\"label\":\"Test\",\"zones\":[{\"id\":\"Etc/UTC\"}]}]\n",zf); assert(fclose(zf)==0);
+  setenv("CONFIGD_TIMEZONES_FILE",zones,1); struct json_object *catalogue=timezones_json(); assert(catalogue); assert(json_object_array_length(catalogue)==1); json_object_put(catalogue);
+  unlink(zones); unlink(temp); puts("time operation tests passed"); return 0;
 }

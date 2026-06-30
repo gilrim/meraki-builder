@@ -303,9 +303,9 @@ static void print_session_shell(struct json_object *identity) {
 static void print_service_summary(struct json_object *data) {
   puts("SERVICE       STATE       ENABLED     AUTOSTART");
   puts("------------- ----------- ----------- -----------");
-  const char *names[] = {"ssh", "web", "chrony"};
-  const char *labels[] = {"SSH", "Web UI", "Chrony"};
-  for (size_t i = 0; i < 3; i++) {
+  const char *names[] = {"ssh", "web", "chrony", "mdns"};
+  const char *labels[] = {"SSH", "Web UI", "Chrony", "mDNS"};
+  for (size_t i = 0; i < 4; i++) {
     struct json_object *service = member(data, names[i]);
     printf("%-13s %-11s %-11s %-11s\n", labels[i],
            bool_member(service, "running", false) ? "running" : "stopped",
@@ -399,6 +399,79 @@ static void print_port(struct json_object *snapshot, unsigned int port) {
   else puts("  PoE:               not supported");
 }
 
+static struct json_object *csv_integer_array(const char *text) {
+  struct json_object *array = json_object_new_array();
+  char *copy = strdup(text ? text : "");
+  if (!copy) return array;
+  char *save = NULL;
+  for (char *token = strtok_r(copy, ",", &save); token; token = strtok_r(NULL, ",", &save)) {
+    while (*token == ' ' || *token == '\t') token++;
+    char *end = NULL; long value = strtol(token, &end, 10);
+    while (end && (*end == ' ' || *end == '\t')) end++;
+    if (end && !*end && value > 0) json_object_array_add(array, json_object_new_int((int)value));
+  }
+  free(copy); return array;
+}
+
+static struct json_object *csv_string_array(const char *text) {
+  struct json_object *array = json_object_new_array();
+  char *copy = strdup(text ? text : "");
+  if (!copy) return array;
+  char *save = NULL;
+  for (char *token = strtok_r(copy, ",", &save); token; token = strtok_r(NULL, ",", &save)) {
+    while (*token == ' ' || *token == '\t') token++;
+    char *end = token + strlen(token);
+    while (end > token && (end[-1] == ' ' || end[-1] == '\t')) *--end = '\0';
+    if (*token) json_object_array_add(array, json_object_new_string(token));
+  }
+  free(copy); return array;
+}
+
+static void print_timezones(struct json_object *catalogue) {
+  if (!catalogue || !json_object_is_type(catalogue, json_type_array)) return;
+  for (size_t i = 0; i < json_object_array_length(catalogue); i++) {
+    struct json_object *group = json_object_array_get_idx(catalogue, i);
+    printf("\n%s\n", string_member(group, "label", "Timezones"));
+    struct json_object *zones = member(group, "zones");
+    for (size_t j = 0; zones && j < json_object_array_length(zones); j++) {
+      struct json_object *zone = json_object_array_get_idx(zones, j);
+      printf("  %-36s %s\n", string_member(zone, "id", ""),
+             string_member(zone, "label", ""));
+    }
+  }
+}
+
+static struct json_object *timezone_policy_by_id(struct json_object *catalogue,
+                                                   const char *wanted) {
+  if (!catalogue || !json_object_is_type(catalogue, json_type_array) || !wanted) return NULL;
+  for (size_t i = 0; i < json_object_array_length(catalogue); i++) {
+    struct json_object *group = json_object_array_get_idx(catalogue, i);
+    struct json_object *zones = member(group, "zones");
+    if (!zones || !json_object_is_type(zones, json_type_array)) continue;
+    for (size_t j = 0; j < json_object_array_length(zones); j++) {
+      struct json_object *zone = json_object_array_get_idx(zones, j);
+      if (zone && !strcmp(string_member(zone, "id", ""), wanted)) {
+        struct json_object *policy = json_object_new_object();
+        json_object_object_add(policy, "timezone", json_object_new_string(wanted));
+        struct json_object *offset = member(zone, "standard_offset_minutes");
+        struct json_object *dst = member(zone, "dst");
+        if (offset) json_object_object_add(policy, "standard_offset_minutes", json_object_get(offset));
+        if (dst) json_object_object_add(policy, "dst", json_object_get(dst));
+        return policy;
+      }
+    }
+  }
+  return NULL;
+}
+
+static int print_request_data(const char *type, struct json_object *data) {
+  struct json_object *reply = request(type, data);
+  struct json_object *result = reply_data(reply);
+  if (!result) { if (reply) json_object_put(reply); return 1; }
+  puts(json_object_to_json_string_ext(result, JSON_C_TO_STRING_PRETTY));
+  json_object_put(reply); return 0;
+}
+
 static void usage(FILE *stream) {
   fputs("usage: postmerkosctl COMMAND [arguments]\n"
         "  session [--json|--shell] | role | has CAPABILITY\n"
@@ -408,10 +481,14 @@ static void usage(FILE *stream) {
         "  config | backup FILE | validate FILE | restore FILE | reboot\n"
         "  compatibility-needed | compatibility-report | compatibility-ack\n"
         "  users | user-create USER PASSWORD ROLE | user-role USER ROLE | user-delete USER\n"
+        "  ssh-keys | ssh-key-add LABEL KEY | ssh-key-remove KEY\n"
+        "  ports-clone SOURCE TARGETS_CSV FIELDS_CSV\n"
         "  services | services-summary | services-set JSON | services-apply | service NAME ACTION\n"
         "  service-get PATH | service-set PATH VALUE\n"
-        "  time | time-set JSON | time-get PATH | time-set-field PATH VALUE\n"
-        "  time-sync | time-set-clock EPOCH\n", stream);
+        "  system-info | system-identity | hostname-set NAME\n"
+        "  time | timezones | timezone-set ID | time-set JSON | time-get PATH | time-set-field PATH VALUE\n"
+        "  time-sync | time-set-clock EPOCH | time-set-local 'HH:MM:SS - DD:MM:YYYY'\n"
+        "  firmware-repositories | firmware-repositories-set JSON | firmware-repository-check URL\n", stream);
 }
 
 static int write_config_file(const char *path, struct json_object *config) {
@@ -590,6 +667,61 @@ int main(int argc, char **argv) {
     puts(json_object_to_json_string_ext(result, JSON_C_TO_STRING_PRETTY));
     json_object_put(reply); return 0;
   }
+  if (!strcmp(command, "ssh-keys") || !strcmp(command, "ssh-key-add") ||
+      !strcmp(command, "ssh-key-remove")) {
+    struct json_object *data = NULL; const char *type = "ssh.keys.get";
+    if (!strcmp(command, "ssh-key-add")) {
+      if (argc != 4) { usage(stderr); return 2; }
+      data = json_object_new_object();
+      json_object_object_add(data, "label", json_object_new_string(argv[2]));
+      json_object_object_add(data, "key", json_object_new_string(argv[3]));
+      type = "ssh.keys.add";
+    } else if (!strcmp(command, "ssh-key-remove")) {
+      if (argc != 3) { usage(stderr); return 2; }
+      data = json_object_new_object();
+      json_object_object_add(data, "key", json_object_new_string(argv[2]));
+      type = "ssh.keys.remove";
+    } else if (argc != 2) { usage(stderr); return 2; }
+    int rc = print_request_data(type, data); if (data) json_object_put(data); return rc;
+  }
+  if (!strcmp(command, "ports-clone")) {
+    if (argc != 5) { usage(stderr); return 2; }
+    char *end = NULL; long source = strtol(argv[2], &end, 10);
+    if (!end || *end || source <= 0) { fprintf(stderr, "postmerkosctl: invalid source port\n"); return 2; }
+    struct json_object *data = json_object_new_object();
+    json_object_object_add(data, "source", json_object_new_int((int)source));
+    json_object_object_add(data, "targets", csv_integer_array(argv[3]));
+    json_object_object_add(data, "fields", csv_string_array(argv[4]));
+    int rc = print_request_data("ports.clone", data); json_object_put(data); return rc;
+  }
+  if (!strcmp(command, "system-info") || !strcmp(command, "system-identity"))
+    return print_request_data(!strcmp(command, "system-info") ? "status.get" : "system.identity.get", NULL);
+  if (!strcmp(command, "hostname-set")) {
+    if (argc != 3) { usage(stderr); return 2; }
+    struct json_object *current_reply = request("system.identity.get", NULL);
+    struct json_object *current = reply_data(current_reply);
+    struct json_object *policy = current ? member(current, "policy") : NULL;
+    struct json_object *data = policy ? json_object_get(policy) : json_object_new_object();
+    json_object_object_add(data, "hostname", json_object_new_string(argv[2]));
+    struct json_object *reply = request("system.identity.set", data); json_object_put(data);
+    if (current_reply) json_object_put(current_reply);
+    struct json_object *result = reply_data(reply);
+    if (!result) { if (reply) json_object_put(reply); return 1; }
+    puts(string_member(result, "message", "System identity updated")); json_object_put(reply); return 0;
+  }
+  if (!strcmp(command, "firmware-repositories"))
+    return print_request_data("firmware.repositories.get", NULL);
+  if (!strcmp(command, "firmware-repositories-set")) {
+    if (argc != 3) { usage(stderr); return 2; }
+    struct json_object *data = json_tokener_parse(argv[2]);
+    if (!data || !json_object_is_type(data, json_type_object)) { if (data) json_object_put(data); fprintf(stderr, "postmerkosctl: invalid repository JSON\n"); return 2; }
+    int rc = print_request_data("firmware.repositories.set", data); json_object_put(data); return rc;
+  }
+  if (!strcmp(command, "firmware-repository-check")) {
+    if (argc != 3) { usage(stderr); return 2; }
+    struct json_object *data = json_object_new_object(); json_object_object_add(data, "source", json_object_new_string(argv[2]));
+    int rc = print_request_data("firmware.repository.check", data); json_object_put(data); return rc;
+  }
   if (!strcmp(command, "services") || !strcmp(command, "services-summary") ||
       !strcmp(command, "time")) {
     bool service_command = strcmp(command, "time") != 0;
@@ -632,8 +764,41 @@ int main(int argc, char **argv) {
     json_object_object_add(data,"service",json_object_new_string(argv[2]));json_object_object_add(data,"action",json_object_new_string(argv[3]));
     struct json_object *reply=request("services.action",data);json_object_put(data);struct json_object *result=reply_data(reply);if(!result){if(reply)json_object_put(reply);return 1;}puts(string_member(result,"message","Service action completed"));json_object_put(reply);return 0;
   }
+  if (!strcmp(command, "timezones")) {
+    struct json_object *reply = request("timezones.get", NULL);
+    struct json_object *data = reply_data(reply);
+    if (!data) { if (reply) json_object_put(reply); return 1; }
+    print_timezones(data); json_object_put(reply); return 0;
+  }
+  if (!strcmp(command, "timezone-set")) {
+    if (argc != 3) { usage(stderr); return 2; }
+    struct json_object *zones_reply = request("timezones.get", NULL);
+    struct json_object *zones = reply_data(zones_reply);
+    struct json_object *policy = timezone_policy_by_id(zones, argv[2]);
+    if (!policy) { if (zones_reply) json_object_put(zones_reply); fprintf(stderr, "postmerkosctl: unknown timezone\n"); return 2; }
+    struct json_object *time_reply = request("time.get", NULL);
+    struct json_object *time_data = reply_data(time_reply);
+    struct json_object *current = time_data ? member(time_data, "policy") : NULL;
+    if (current) {
+      struct json_object *value = member(current, "ntp_enabled"); if (value) json_object_object_add(policy, "ntp_enabled", json_object_get(value));
+      value = member(current, "servers"); if (value) json_object_object_add(policy, "servers", json_object_get(value));
+    }
+    struct json_object *reply = request("time.set", policy); json_object_put(policy);
+    if (zones_reply) json_object_put(zones_reply);
+    if (time_reply) json_object_put(time_reply);
+    struct json_object *result = reply_data(reply); if (!result) { if (reply) json_object_put(reply); return 1; }
+    puts(string_member(result, "message", "Time policy saved")); json_object_put(reply); return 0;
+  }
   if (!strcmp(command, "time-sync")) {
     struct json_object *reply=request("time.sync",NULL);struct json_object *result=reply_data(reply);if(!result){if(reply)json_object_put(reply);return 1;}puts(string_member(result,"message","Time synchronization requested"));json_object_put(reply);return 0;
+  }
+  if (!strcmp(command, "time-set-local")) {
+    if (argc != 3) { usage(stderr); return 2; }
+    struct json_object *data = json_object_new_object();
+    json_object_object_add(data, "local", json_object_new_string(argv[2]));
+    struct json_object *reply = request("time.set_clock", data); json_object_put(data);
+    struct json_object *result = reply_data(reply); if (!result) { if (reply) json_object_put(reply); return 1; }
+    puts(string_member(result, "message", "System clock updated")); json_object_put(reply); return 0;
   }
   if (!strcmp(command, "time-set-clock")) {
     if (argc != 3) { usage(stderr); return 2; }

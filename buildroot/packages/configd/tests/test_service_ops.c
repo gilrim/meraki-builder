@@ -31,18 +31,20 @@ int main(void) {
   char root[] = "/tmp/configd-service-test-XXXXXX";
   assert(mkdtemp(root));
   char init[PATH_MAX], proc[PATH_MAX], process[PATH_MAX];
-  char comm[PATH_MAX], script[PATH_MAX], log[PATH_MAX];
+  char comm[PATH_MAX], script[PATH_MAX], mdns_script[PATH_MAX], log[PATH_MAX];
   snprintf(init, sizeof(init), "%s/init", root);
   snprintf(proc, sizeof(proc), "%s/proc", root);
   snprintf(process, sizeof(process), "%s/proc/100", root);
   snprintf(comm, sizeof(comm), "%s/proc/100/comm", root);
   snprintf(script, sizeof(script), "%s/init/S50chrony", root);
+  snprintf(mdns_script, sizeof(mdns_script), "%s/init/S50avahi-daemon", root);
   snprintf(log, sizeof(log), "%s/actions", root);
   assert(mkdir(init, 0700) == 0);
   assert(mkdir(proc, 0700) == 0);
   assert(mkdir(process, 0700) == 0);
   write_file(comm, "chronyd\n", 0600);
   write_file(script, "#!/bin/sh\nprintf '%s\\n' \"$1\" >>\"$SERVICE_ACTION_LOG\"\n", 0700);
+  write_file(mdns_script, "#!/bin/sh\nprintf 'mdns:%s\\n' \"$1\" >>\"$SERVICE_ACTION_LOG\"\n", 0700);
   assert(setenv("POSTMERKOS_INIT_DIR", init, 1) == 0);
   assert(setenv("POSTMERKOS_PROC_DIR", proc, 1) == 0);
   assert(setenv("SERVICE_ACTION_LOG", log, 1) == 0);
@@ -66,6 +68,19 @@ int main(void) {
   assert(file && fgets(action, sizeof(action), file));
   fclose(file);
   assert(strcmp(action, "start\n") == 0);
+
+  /* A stopped Avahi daemon maps restart to start. */
+  assert(service_action("mdns", "restart", error, sizeof(error)) == 0);
+  file = fopen(log, "r"); assert(file);
+  char last[32] = {0}; while (fgets(last, sizeof(last), file)) { }
+  fclose(file); assert(strcmp(last, "mdns:start\n") == 0);
+
+  /* A running Avahi daemon maps restart to the reload action supported by Buildroot. */
+  assert(mkdir(process, 0700) == 0);
+  write_file(comm, "avahi-daemon\n", 0600);
+  assert(service_action("mdns", "restart", error, sizeof(error)) == 0);
+  file = fopen(log, "r"); assert(file); last[0] = '\0'; while (fgets(last, sizeof(last), file)) { }
+  fclose(file); assert(strcmp(last, "mdns:reload\n") == 0);
 
   puts("configd idempotent service action tests passed");
   return 0;

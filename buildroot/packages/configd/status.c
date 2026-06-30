@@ -6,6 +6,7 @@
 #include "service_ops.h"
 #include "time_ops.h"
 #include "system_info.h"
+#include "system_identity.h"
 #include "compatibility.h"
 
 #include <libpostmerkos.h>
@@ -116,6 +117,12 @@ static void add_port_status(struct json_object *root,
     bool poe_supported = hardware_port_supports_poe(&hardware, port);
     json_object_object_add(capabilities, "poe",
                            json_object_new_boolean(poe_supported));
+    bool uplink = hardware.uplink_port_count > 0 &&
+                  port > hardware.copper_port_count;
+    json_object_object_add(capabilities, "media",
+        json_object_new_string(uplink ? hardware.uplink_media : "copper"));
+    json_object_object_add(capabilities, "max_speed_mbps",
+        json_object_new_int(uplink ? (int)hardware.uplink_max_speed_mbps : 1000));
     json_object_object_add(port_status, "capabilities", capabilities);
 
     if (poe_supported) {
@@ -234,6 +241,7 @@ struct json_object *get_status(void) {
   json_object_object_add(root, "compatibility_notice", compatibility_notice_json());
   json_object_object_add(root, "network", network_manager_status_json());
   json_object_object_add(root, "system", system_info_json());
+  json_object_object_add(root, "identity", system_identity_status_json());
   struct json_object *security = json_object_new_object();
   const char *default_marker = getenv("POSTMERKOS_DEFAULT_PASSWORD_MARKER");
   if (!default_marker || !*default_marker)

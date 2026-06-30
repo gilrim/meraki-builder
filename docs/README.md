@@ -17,6 +17,7 @@ This index is the authoritative navigation map for the current repository revisi
 - [System Information inventory](user-guide/system-information.md)
 - [Ports, VLANs, STP, and PoE](user-guide/ports-and-poe.md)
 - [Management network, SSH, and time](user-guide/network-ssh-time.md)
+- [System identity and local discovery](user-guide/system-identity-and-discovery.md)
 - [Accounts, roles, sessions, and SSH keys](user-guide/accounts-roles.md)
 - [Backup and restore](user-guide/backup-restore.md)
 - [Firmware updates](user-guide/firmware-updates.md)
