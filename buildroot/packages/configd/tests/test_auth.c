@@ -36,6 +36,14 @@ int main(int argc, char **argv) {
   }
   assert(auth_verify_user("root", "wrong", error, sizeof(error)) != 0);
   assert(auth_verify_user("nobody", "anything", error, sizeof(error)) != 0);
+
+  /* auth_password_matches: deterministic default-password detection */
+  assert(auth_password_matches("root", "root-password"));
+  assert(!auth_password_matches("root", "wrong"));
+  assert(!auth_password_matches("root", ""));
+  assert(auth_password_matches("bob", "operator-password"));
+  assert(!auth_password_matches("nobody", "anything")); /* locked (!) hash */
+  assert(!auth_password_matches("ghost", "anything"));  /* no such account */
   puts("authentication and role repeatability tests passed");
   return 0;
 }
