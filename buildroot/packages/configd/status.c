@@ -244,16 +244,10 @@ struct json_object *get_status(void) {
   json_object_object_add(root, "system", system_info_json());
   json_object_object_add(root, "identity", system_identity_status_json());
   struct json_object *security = json_object_new_object();
-  /* Deterministic default-password check: is root's password still the factory
-     default (the device serial)? Hash the serial against root's stored crypt
-     entry instead of trusting a marker file, so the warning clears no matter how
-     the password was changed (configd, passwd, or the console). */
-  char serial[256] = {0};
-  bool default_password = false;
-  if (system_info_serial(serial, sizeof(serial)) == 0 && serial[0])
-    default_password = auth_password_matches("root", serial);
+  /* Deterministic default-password check (root password still == device serial),
+     shared with the lightweight security.default-password RPC. */
   json_object_object_add(security, "default_password_active",
-                         json_object_new_boolean(default_password));
+                         json_object_new_boolean(auth_default_password_active()));
   const char *overlay_recovery = getenv("POSTMERKOS_OVERLAY_RECOVERY_MARKER");
   if (!overlay_recovery || !*overlay_recovery)
     overlay_recovery = "/run/postmerkos/overlay-recovery-mode";

@@ -1,5 +1,6 @@
 #include "auth.h"
 #include "roles.h"
+#include "system_info.h"
 
 #include <crypt.h>
 #include <errno.h>
@@ -161,6 +162,12 @@ bool auth_password_matches(const char *username, const char *candidate) {
   if (!hash[0] || hash[0] == '!' || hash[0] == '*') return false;
   char *calculated = crypt(candidate, hash);
   return calculated && constant_time_equal(calculated, hash);
+}
+
+bool auth_default_password_active(void) {
+  char serial[256] = {0};
+  if (system_info_serial(serial, sizeof(serial)) != 0 || !serial[0]) return false;
+  return auth_password_matches("root", serial);
 }
 
 int auth_verify_user(const char *username, const char *password,
